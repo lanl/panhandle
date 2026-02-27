@@ -1,0 +1,58 @@
+[package]
+name = "panhandle"
+version = "1.0.8"
+edition = "2024"
+homepage = "https://github.com/lanl/panhandle"
+license = "MIT"
+description = "Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior, as well as the ability to monitor specific shells (bash, zsh, and fmsh) on a linux host. Several optional filters enable an administrator to selectively apply criterion to examine desired user behavior. These include UID filtering as well as filtering for the use of specific executables. Specified events are logged for further reporting and/or analysis. Logging options include file or terminal output for selected events."
+
+[dependencies]
+panhandle-common = { path = "../panhandle-common", features = ["user"] }
+aya.workspace = true
+aya-log = { workspace = true }
+env_logger = { workspace = true }
+libc = { workspace = true }
+log.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
+simplelog = { version = "0.12.2", features = [ "paris", "local-offset"] }
+bytes = "1.10.1"
+clap = { version = "4.5.36", features = ["derive"] }
+hostname = "0.4.1"
+sysinfo = "0.37.2"
+file-matcher = "0.7.0"
+reqwest = { version = "0.13.1", features = ["json"] }
+chrono = "0.4.41"
+serde_json = "1.0.140"
+syslog = "7.0.0"
+url = "2.5.7"
+port_check = "0.3.0"
+config = "0.15.19"
+serde = "1.0.228"
+uzers = "0.12.2"
+serde_yaml = "0.9.34"
+
+[build-dependencies]
+aya-build = { workspace = true }
+
+[[bin]]
+name = "panhandle"
+path = "src/main.rs"
+
+[package.metadata.generate-rpm]
+author = "Skip McGee"
+assets = [
+    { source = "target/release/panhandle", dest = "/usr/sbin/panhandle", mode = "700" },
+    { source = "../../files/panhandle.service", dest = "/usr/lib/systemd/system/panhandle.service", mode = "644" },
+    { source = "../../files/panhandle.man", dest = "/usr/share/man/man1/panhandle.1", mode = "644" },
+    { source = "../../files/logrotate-panhandle", dest = "/etc/logrotate.d/panhandle", mode = "644" },
+    { source = "../../files/config.yaml", dest = "/opt/panhandle/panhandle.yaml", mode = "600" },
+    { source = "../LICENSE", dest = "/usr/share/doc/panhandle/LICENSE", mode = "644" },
+    { source = "../README.md", dest = "/usr/share/doc/panhandle/README.md", mode = "644" },
+    { source = "../CHANGELOG.md", dest = "/usr/share/doc/panhandle/CHANGELOG.md", mode = "644" },
+    { source = "../CONTRIBUTORS.md", dest = "/usr/share/doc/panhandle/CONTRIBUTORS.md", mode = "644" },
+    { source = "../panhandle-sbom.spdx", dest = "/usr/share/doc/panhandle/SBOM.spdx", mode = "600" },
+]
+description = "Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior, as well as the ability to monitor specific shells (bash, zsh, and fmsh) on a linux host. Several optional filters enable an administrator to selectively apply criterion to examine desired user behavior. These include UID filtering as well as filtering for the use of specific executables. Specified events are logged for further reporting and/or analysis. Logging options include file, http, or terminal output for selected events."
+summary = "The objective of the panhandle project is to provide monitoring and reporting of interactive user activity on a linux node, with as little impact to host resources as possible. The panhandle rpm provides a systemd service file and a binary written in Rust, using the aya library to create eBPF bytecode."
+release = "0"
+pre_install_script = "../../scripts/pre-install-rpm.sh"

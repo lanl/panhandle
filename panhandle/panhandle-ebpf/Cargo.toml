@@ -1,0 +1,18 @@
+[package]
+name = "panhandle-ebpf"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+panhandle-common = { path = "../panhandle-common" }
+
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "panhandle"
+path = "src/main.rs"

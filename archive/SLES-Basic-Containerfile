@@ -1,0 +1,17 @@
+FROM registry.suse.com/suse/sle15:15.5
+WORKDIR /root/
+
+COPY . /root/
+RUN zypper install -y gcc gcc7 libopenssl-3-devel
+RUN ldd --version
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+RUN /root/.cargo/bin/rustup toolchain install stable
+RUN /root/.cargo/bin/rustup toolchain install nightly --component rust-src
+RUN /root/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
+RUN cd panhandle/panhandle && /root/.cargo/bin/cargo build --bin panhandle --release --all-features 
+RUN cd panhandle/panhandle && strip -s ../target/release/panhandle
+RUN cd panhandle && /root/.cargo/bin/cargo generate-rpm --arch aarch64 --package panhandle --output /root/
+
+CMD ["/bin/bash"]
+# this can be run in podman desktop with an arm arch since we do not have an arm gitlab worker
+# extract from the host with a `podman cp <your running container hash>:/root/panhandle-*.aarch64.rpm .

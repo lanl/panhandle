@@ -1,0 +1,4 @@
+[target.'cfg(test)']
+
+[target."cfg(all())"]
+runner = "sudo -E"

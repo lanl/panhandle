@@ -1,0 +1,11 @@
+// invalid JSON file used for testing
+{
+  "shells": true,
+  "syscall_execve": true,
+  "exclude_min_uid": 0,
+  "json": true,
+  "output": [
+    { "file": "/var/log/panhandle/panhandle.log" },
+     "syslog": "hpcsyslog.lanl.gov:514/tcp" } // typo: missing {
+  ]
+}

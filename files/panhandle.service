@@ -1,0 +1,18 @@
+# panhandle is a LANL HPC-developed binary designed for monitoring user input
+# see `man panhandle` or `panhandle --help` for more information
+# this service file is distributed by the panhandle rpm
+[Unit]
+Description=Run the panhandle binary via systemd
+Documentation=https://github.com/lanl/panhandle
+Requires=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+TimeoutSec=5
+ExecStart=/usr/sbin/panhandle --config /opt/panhandle/panhandle.yaml
+StandardOutput=append:/var/log/panhandle/panhandle.log
+StandardError=append:/var/log/panhandle/panhandle_error.log
+
+[Install]
+WantedBy=multi-user.target

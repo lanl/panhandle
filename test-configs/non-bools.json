@@ -1,0 +1,11 @@
+{
+    "verbose": true,
+    "exclude_min_uid": 0,
+    "exclude_max_uid": 23,
+    "executables": ["/path1/user1","/path2/something/files","/path3/somewhere"],
+    "include_uid": ["uid1"],
+    "output": [
+        { "syslog": "hpcsyslog.lanl.gov:514/tcp" }
+    ]
+
+}

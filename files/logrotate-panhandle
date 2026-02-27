@@ -1,0 +1,11 @@
+/var/log/panhandle/*.log {
+    daily
+    missingok
+    notifempty
+    size 200M
+    rotate 3
+    compress
+    postrotate
+        /usr/bin/systemctl -q is-active panhandle.service && /usr/bin/systemctl restart panhandle.service 2> /dev/null || true
+    endscript
+}

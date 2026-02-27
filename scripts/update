@@ -1,0 +1,8 @@
+#!/bin/bash
+rustup self update
+rustup update
+cargo clean
+cargo update --verbose
+cargo fmt --all
+cargo deny check
+cargo sbom > ../panhandle-sbom.spdx

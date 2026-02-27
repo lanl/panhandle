@@ -1,0 +1,9 @@
+#!/bin/bash
+rustup default stable
+rustup toolchain add nightly
+rustup component add rust-src --toolchain nightly
+cargo install cargo-generate
+cargo install bpf-linker
+cargo install bindgen-cli
+cargo install cargo-deny
+cargo install cargo-sbom

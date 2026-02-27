@@ -1,0 +1,9 @@
+bash: true
+debug: true
+fmsh: true
+syscall_execve: true
+json: true
+verbose: true
+zsh: true
+quiet: true
+shells: true

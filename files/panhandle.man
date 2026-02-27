@@ -1,0 +1,91 @@
+.TH PANHANDLE 1 "5 May 2025"
+.SH NAME
+panhandle - User activity monitoring
+.SH SYNOPSIS
+\fBpanhandle\fP [ \fIOPTIONS\fP ]
+.SH DESCRIPTION
+\fBpanhandle\fP provides the ability to monitor execve syscalls to identify specific interesting user behavior, 
+as well as the ability to monitor specific shells (bash, zsh, and fmsh) on a linux host. Several optional filters 
+enable an administrator to selectively apply criterion to examine  desired user behavior. These include 
+UID filtering as well as filtering for the use of specific executables. Specified events are logged for 
+further reporting and/or analysis.
+.SS Options
+.TP
+\fB-b, --bash\fP
+Monitor events from the bash shell using the readline function.
+.TP
+\fB-c, --config\fP
+Pass arguments from a config file in YAML or JSON, the default config file is located at \fI/opt/panhandle/panhandle.yaml\fP. Arguments provided in the config file will overwrite arguments provided over the command line.
+.TP
+\fB-d, --debug\fP
+Invalidates json option and returns output to help identify why the program might not pick up on desired events.
+.TP
+\fB-e, --executables\fI <EXECUTABLES>\fR
+Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 10.
+.TP
+\fB--exclude-min-uid\fI <EXCLUDE_MIN_UID>\fR
+Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 1.
+.TP
+\fB--exclude-max-uid\fI <EXCLUDE_MAX_UID>\fR
+Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. Defaults to 999.
+.TP
+\fB--file\fI <FILE>\fR
+Specify the absolute path to the desired log file.
+.TP
+\fB-f, --fmsh\fP
+Monitor events from the fmsh shell using the readline function. This also returns events from the bash shell as fmsh is a derivative of bash.
+.TP
+\fB-h, --help\fP
+Print help
+.TP
+\fBoutput\fP
+Subcommand to specify the type of output desired, see the --syslog, --http, or --file options.
+.TP
+\fB--http\fP
+Output events to the specified HTTP endpoint.
+.TP
+\fB-q, --quiet\fP
+Omit logging stdout to the terminal.
+.TP
+\fB--syslog\fP
+Output events to syslog.
+.nf
+To send locally: --syslog unix or --syslog /dev/log or --syslog
+To send remotely: --syslog <hostname>:<port>/tcp or /udp
+Remote example: --syslog hpcsyslog.lanl.gov:514/tcp
+.fi
+.TP
+\fB--include-uid\fI <UID(s)>\fR
+Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10.
+.TP
+\fB-j, --json\fP
+Output events as valid json strings separated by newlines.
+.TP
+\fB-s, --syscall-execve\fP
+Monitor events from the execve syscall. This is the program default if no other arguments are selected.
+.TP
+\fB--shells\fP
+Output execve syscall events only from the shells: bash, tcsh, zsh and fmsh. This does not effect the output of the bash or zsh options.
+.TP
+\fB-v, --verbose\fP
+Verbose output
+.TP
+\fB-V, --Version\fP
+Print version
+.TP
+\fB-z, --zsh\fP
+Monitor events from the zsh shell using the zlentry function.
+.SH FILES
+.TP
+\fC/usr/sbin/panhandle\fR
+The panhandle executable
+.TP
+\fC/usr/lib/systemd/system/panhandle.service\fR
+The systemd service file
+.TP
+\fC/var/log/panhandle/panhandle.log\fR
+The panhandle log directory and log file(s)
+.SH "SEE ALSO"
+bash(1), zsh(1)
+.SH BUGS
+Please contact Skip McGee (dmcgee@lanl.gov) with any bugs or concerns.

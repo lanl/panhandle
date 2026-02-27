@@ -62,10 +62,11 @@ jobs:
           source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
           cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.target }}
+          ls -al
 
       - name: Upload Build Artifacts
-        uses: [actions/upload-artifact@v4](https://github.com)
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.package }}-${{ matrix.target }}
-          path: |
-            ${{ matrix.package }}/target/${{ matrix.target }}/generate-rpm/*.rpm
+          # Path where cargo-generate-rpm creates the .rpm file
+          path: ${{ matrix.package }}/target/${{ matrix.target }}/generate-rpm/*.rpm

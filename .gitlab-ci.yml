@@ -1,8 +1,8 @@
 variables:
   YOUR_APP_NAME: "panhandle"
   YOUR_APP_COMMAND: "panhandle"
-  YOUR_GIT_REPO: "lisdi-git.lanl.gov:hpc-cyber/panhandle.git"
-  VERSION: "1.0.8"
+  YOUR_GIT_REPO: "https://github.com/lanl/panhandle.git"
+  VERSION: "1.0.9"
   RELEASE: "0"
 
 stages:

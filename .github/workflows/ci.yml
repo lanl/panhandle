@@ -51,8 +51,7 @@ jobs:
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
           rustup target add ${{ matrix.target }}
-          cargo install cargo-binstall
-          cargo-binstall -y cargo-generate-rpm bpf-linker
+          cargo install cargo-generate-rpm bpf-linker
 
       - name: Build and Strip Binary
         run: |

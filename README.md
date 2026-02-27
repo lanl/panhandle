@@ -15,9 +15,10 @@ This project is written in [Rust](https://www.rust-lang.org/) and uses the [Aya]
 The RPMs in the build artifacts provide:
 
 1. The panhandle binary `/usr/sbin/panhandle`
-2. The default systemd service to run panhandle: `/usr/lib/systemd/system/panhandle.service`
-3. The man page at `/usr/share/man/man1/panhandle.1`
-4. Logrotate configuration file: `/etc/logrotate.d/panhandle`
+2. The configuration file: `/opt/panhandle/panhandle.yaml`
+3. The default systemd service to run panhandle: `/usr/lib/systemd/system/panhandle.service`
+4. The man page at `/usr/share/man/man1/panhandle.1`
+5. Logrotate configuration file: `/etc/logrotate.d/panhandle`
 
 ## Configuration & Implementation
 
@@ -28,8 +29,3 @@ The RPMs in the build artifacts provide:
 ## Releasability
 
 `O5058 panhandle has been acknowledged by the NNSA for open-source release.`
-
-## Additional Resources
-
-1) an [Ansible role](https://cm.hpc.lanl.gov/hpcansible/roles/-/blob/master/panhandle/README.md) for installing and managing `panhandle` options at scale.
-2) a [Splunk App](https://lisdi-git.lanl.gov/hpc-cyber/splunk-app-panhandle/-/blob/main/README.md) for displaying and searching `panhandle` data.

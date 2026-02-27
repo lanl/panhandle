@@ -37,9 +37,6 @@ jobs:
         run: |
           # Install basic build tools and cross-compiler for aarch64
           dnf install -y gcc openssl-devel openssl pkgconf-pkg-config binutils
-          #if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-          #  dnf install -y gcc-aarch64-linux-gnu
-          #fi
 
       - name: Install Rust
         run: |
@@ -56,11 +53,6 @@ jobs:
       - name: Build and Strip Binary
         run: |
           source "$HOME/.cargo/env"
-          # Linker configuration for cross-compiling inside the container
-          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-          fi
-          
           cd ${{ matrix.package }}
           cargo build --target ${{ matrix.target }} --bin ${{ matrix.package }} --release --all-features
           strip target/${{ matrix.target }}/release/${{ matrix.package }}

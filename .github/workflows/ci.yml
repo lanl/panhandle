@@ -76,14 +76,16 @@ jobs:
     needs: cross-build
     if: startsWith(github.ref, 'refs/tags/v') # Only run if a tag was pushed
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required by softprops/action-gh-release to create the release
     steps:
       - name: Download all artifacts
-        uses: [actions/download-artifact@v4](https://github.com)
+        uses: actions/download-artifact@v4
         with:
-          path: artifacts # Downloads all matrix artifacts into this folder
-    
+          path: artifacts
+
       - name: Release
-        uses: [softprops/action-gh-release@v2](https://github.com)
+        uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/* # Recursively finds the binary and RPMs
+          files: artifacts/**/*
           generate_release_notes: true

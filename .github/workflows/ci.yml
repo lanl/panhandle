@@ -71,7 +71,7 @@ jobs:
           # Path where cargo-generate-rpm creates the .rpm file
           path: ${{ matrix.package }}/target/${{ matrix.target }}/generate-rpm/*.rpm
 
- release:
+  release:
     name: Create Release
     needs: cross-build
     if: startsWith(github.ref, 'refs/tags/v') # Only run if a tag was pushed
@@ -81,7 +81,7 @@ jobs:
         uses: [actions/download-artifact@v4](https://github.com)
         with:
           path: artifacts # Downloads all matrix artifacts into this folder
-
+    
       - name: Release
         uses: [softprops/action-gh-release@v2](https://github.com)
         with:

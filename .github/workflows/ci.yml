@@ -60,7 +60,7 @@ jobs:
         run: |
           source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          export CARGO_TARGET_DIR="./target/${{ matrix.architecture }}-unknown-linux-gnu"
+          export CARGO_TARGET_DIR="$PWD/target/${{ matrix.architecture }}-unknown-linux-gnu"
           cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
           ls -al
           ls -al target

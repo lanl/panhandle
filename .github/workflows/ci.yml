@@ -29,6 +29,12 @@ jobs:
           - os_image: 'almalinux:8'
             arch: 'aarch64'
             runs_on: 'ubuntu-latest-arm'
+          - os_image: 'almalinux:9'
+            arch: 'x86_64'
+            runs_on: 'ubuntu-latest'
+          - os_image: 'registry.suse.com/suse/sle15:15.5'
+            arch: 'x86_64'
+            runs_on: 'ubuntu-latest'
         architecture: ['x86_64'] #['x86_64', 'aarch64']
         package: ["panhandle"]
 
@@ -50,9 +56,11 @@ jobs:
       - name: Get package version
         id: get_version
         run: |
-          # Extract the version using standard commands
           VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
+          RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
           echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "PACKAGE_RELEASE=$RELEASE" >> $GITHUB_ENV
+          echo "$PACKAGE_VERSION-$PACKAGE_RELEASE"
         shell: bash
 
       - name: Install Rust
@@ -79,5 +87,5 @@ jobs:
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}.${{ matrix.architecture }}.rpm
+          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.architecture }}.rpm
           path: rpmbuild/

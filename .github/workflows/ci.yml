@@ -34,15 +34,9 @@ jobs:
             if [ "${{ matrix.architecture }}" = "x86_64" ]; then
               dnf install -y gcc openssl-devel pkgconf-pkg-config binutils
             fi
-            if [ "${{ matrix.architecture }}" = "aarch64" ]; then
-              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu openssl-devel pkgconf-pkg-config 
-            fi
           elif command -v zypper &> /dev/null; then
             if [ "${{ matrix.architecture }}" = "x86_64" ]; then
               zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
-            fi
-            if [ "${{ matrix.architecture }}" = "aarch64" ]; then
-              zypper install -y cross-aarch64-gcc11 binutils-aarch64-linux-gnu gcc gcc7 libopenssl-3-devel pkg-config
             fi
           fi
 
@@ -55,13 +49,13 @@ jobs:
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
           rustup target add ${{ matrix.architecture }}-unknown-linux-gnu
-          cargo install cargo-generate-rpm bpf-linker
+          cargo install cross cargo-generate-rpm bpf-linker
 
-      - name: Build and Strip Binary
+      - name: Build and Strip Binary with Cross
         run: |
           source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
+          cross build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
           strip target/${{ matrix.architecture }}-unknown-linux-gnu/release/${{ matrix.package }}
 
       - name: Generate RPM

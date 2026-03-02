@@ -20,18 +20,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os_name: 'almalinux-8'
-            image: 'almalinux:8'
-          - os_name: 'almalinux-9'
-            image: 'almalinux:9'
-          - os_name: 'sles-15'
-            image: 'registry.suse.com/suse/sle15:15.5'
-        package: ["panhandle"]
+        os_image: [ 'almalinux:8', 'almalinux:9', 'registry.suse.com/suse/sle15:15.5' ]
         architecture: ['x86_64', 'aarch64']
+        package: ["panhandle"]
 
     container:
-      image: ${{ matrix.image }}
+      image: ${{ matrix.os_image }}
 
     steps:
       - name: Install Base Tools (Container)
@@ -55,14 +49,14 @@ jobs:
 
       - name: Build and Strip Binary
         run: |
-          . "$HOME/.cargo/env"
+          source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
           cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
           strip target/${{ matrix.architecture }}-unknown-linux-gnu/release/${{ matrix.package }}
 
       - name: Generate RPM
         run: |
-          . "$HOME/.cargo/env"
+          source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
           # Fixed: target now matches the architecture matrix
           cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}
@@ -70,5 +64,5 @@ jobs:
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}-${{ matrix.os_name }}-${{ matrix.architecture }}
+          name: ${{ matrix.package }}-${{ matrix.os_image }}-${{ matrix.architecture }}
           path: ${{ matrix.package }}/target/*/generate-rpm/*.rpm

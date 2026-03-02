@@ -24,7 +24,6 @@ jobs:
     strategy:
       matrix:
         os: [ 'almalinux:8', 'almalinux:9', 'sle15:15.5' ]
-        target: ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu']
         package: ["panhandle"]
         architecture: ['x86_64', 'aarch64']
     runs-on: ${{ matrix.os }}
@@ -51,26 +50,45 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
-          rustup target add ${{ matrix.target }}
           cargo install cargo-generate-rpm bpf-linker
 
-      - name: Build and Strip Binary
+      - name: Build and Strip Binary x86_64-unknown-linux-gnu
+        if: matrix.architecture == 'x86_64'
         run: |
           source "$HOME/.cargo/env"
+          rustup target add x86_64-unknown-linux-gnu
           cd ${{ matrix.package }}
-          cargo build --target ${{ matrix.target }} --bin ${{ matrix.package }} --release --all-features
-          strip target/${{ matrix.target }}/release/${{ matrix.package }}
+          cargo build --target x86_64-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
+          strip target/x86_64-unknown-linux-gnu/release/${{ matrix.package }}
 
-      - name: Generate RPM
+      - name: Build and Strip Binary aarch64-unknown-linux-gnu
+        if: matrix.architecture == 'aarch64'
+        run: |
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-unknown-linux-gnu
+          cd ${{ matrix.package }}
+          cargo build --target aarch64-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
+          strip target/aarch64-unknown-linux-gnu/release/${{ matrix.package }}
+
+      - name: Generate RPM for x86_64-unknown-linux-gnu'
+        if: matrix.architecture == 'x86_64'
         run: |
           source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}
+          cargo generate-rpm --package ${{ matrix.package }} --target x86_64
+          ls -al
+          
+      - name: Generate RPM for aarch64-unknown-linux-gnu
+        if: matrix.architecture == 'aarch64'
+        run: |
+          source "$HOME/.cargo/env"
+          cd ${{ matrix.package }}
+          cargo generate-rpm --package ${{ matrix.package }} --target x86_64
           ls -al
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}-${{ matrix.target }}
+          name: ${{ matrix.package }}-*
           # Path where cargo-generate-rpm creates the .rpm file
-          path: ${{ matrix.package }}/target/${{ matrix.target }}/generate-rpm/*.rpm
+          path: ${{ matrix.package }}/target/*/generate-rpm/*.rpm

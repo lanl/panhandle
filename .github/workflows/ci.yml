@@ -31,9 +31,9 @@ jobs:
       - name: Install Base Tools (Container)
         run: |
           if command -v dnf &> /dev/null; then
-            dnf install -y gcc openssl-devel pkgconf-pkg-config binutils curl git
+            dnf install -y gcc openssl-devel pkgconf-pkg-config binutils
           elif command -v zypper &> /dev/null; then
-            zypper install -y gcc gcc7 libopenssl-3-devel pkg-config curl git
+            zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
           fi
 
       - uses: actions/checkout@v4

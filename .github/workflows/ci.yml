@@ -67,7 +67,8 @@ jobs:
           ls -al $CARGO_TARGET_DIR
           ls -al $CARGO_TARGET_DIR/release
           ls -al $CARGO_TARGET_DIR/${{ matrix.architecture }}-unknown-linux-gnu
-          strip -s $CARGO_TARGET_DIR/release/panhandle
+          ls -al $CARGO_TARGET_DIR/${{ matrix.architecture }}-unknown-linux-gnu/release
+          strip -s $CARGO_TARGET_DIR/${{ matrix.architecture }}-unknown-linux-gnu/release/panhandle
           cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }} --output ../rpmbuild/
 
       - name: Upload Build Artifacts

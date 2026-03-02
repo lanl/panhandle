@@ -60,8 +60,8 @@ jobs:
           RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/release = //; s/"//g')
           echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
           echo "PACKAGE_RELEASE=$RELEASE" >> $GITHUB_ENV
-          echo "$PACKAGE_VERSION-$PACKAGE_RELEASE"
-        shell: bash
+          #echo "$PACKAGE_VERSION-$PACKAGE_RELEASE"
+        #shell: bash
 
       - name: Install Rust
         run: |

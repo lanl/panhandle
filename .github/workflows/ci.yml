@@ -13,82 +13,62 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions: {}
-
 jobs:
   cross-build:
-    #runs-on: ubuntu-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    container:
-      image: almalinux:8
     strategy:
+      fail-fast: false
       matrix:
-        os: [ 'almalinux:8', 'almalinux:9', 'sle15:15.5' ]
+        include:
+          - os_name: 'almalinux-8'
+            image: 'almalinux:8'
+          - os_name: 'almalinux-9'
+            image: 'almalinux:9'
+          - os_name: 'sles-15'
+            image: 'registry.suse.com/suse/sle15:15.5'
         package: ["panhandle"]
         architecture: ['x86_64', 'aarch64']
-    runs-on: ${{ matrix.os }}
+
+    container:
+      image: ${{ matrix.image }}
+
     steps:
+      - name: Install Base Tools (Container)
+        run: |
+          if command -v dnf &> /dev/null; then
+            dnf install -y gcc openssl-devel pkgconf-pkg-config binutils curl git
+          elif command -v zypper &> /dev/null; then
+            zypper install -y gcc gcc7 libopenssl-3-devel pkg-config curl git
+          fi
+
       - uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          architecture: ${{ matrix.architecture }}
-
-      - name: Install System Dependencies for SLES Builds
-        if: runner.os == 'sle*'
-        run: |
-          zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
-
-      - name: Install System Dependencies for Alma Builds
-        if: runner.os == 'almalinux:*'
-        run: |
-          dnf install -y gcc openssl-devel openssl pkgconf-pkg-config binutils
 
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          source "$HOME/.cargo/env"
+          . "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
+          rustup target add ${{ matrix.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm bpf-linker
 
-      - name: Build and Strip Binary x86_64-unknown-linux-gnu
-        if: matrix.architecture == 'x86_64'
+      - name: Build and Strip Binary
         run: |
-          source "$HOME/.cargo/env"
-          rustup target add x86_64-unknown-linux-gnu
+          . "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          cargo build --target x86_64-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
-          strip target/x86_64-unknown-linux-gnu/release/${{ matrix.package }}
+          cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
+          strip target/${{ matrix.architecture }}-unknown-linux-gnu/release/${{ matrix.package }}
 
-      - name: Build and Strip Binary aarch64-unknown-linux-gnu
-        if: matrix.architecture == 'aarch64'
+      - name: Generate RPM
         run: |
-          source "$HOME/.cargo/env"
-          rustup target add aarch64-unknown-linux-gnu
+          . "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          cargo build --target aarch64-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
-          strip target/aarch64-unknown-linux-gnu/release/${{ matrix.package }}
-
-      - name: Generate RPM for x86_64-unknown-linux-gnu'
-        if: matrix.architecture == 'x86_64'
-        run: |
-          source "$HOME/.cargo/env"
-          cd ${{ matrix.package }}
-          cargo generate-rpm --package ${{ matrix.package }} --target x86_64
-          ls -al
-          
-      - name: Generate RPM for aarch64-unknown-linux-gnu
-        if: matrix.architecture == 'aarch64'
-        run: |
-          source "$HOME/.cargo/env"
-          cd ${{ matrix.package }}
-          cargo generate-rpm --package ${{ matrix.package }} --target x86_64
-          ls -al
+          # Fixed: target now matches the architecture matrix
+          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}-*
-          # Path where cargo-generate-rpm creates the .rpm file
+          name: ${{ matrix.package }}-${{ matrix.os_name }}-${{ matrix.architecture }}
           path: ${{ matrix.package }}/target/*/generate-rpm/*.rpm

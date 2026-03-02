@@ -65,7 +65,7 @@ jobs:
           echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
           echo "PACKAGE_RELEASE=$RELEASE" >> $GITHUB_ENV
           #echo "$PACKAGE_VERSION-$PACKAGE_RELEASE"
-        #shell: bash
+        shell: bash
 
       - name: Install Rust
         run: |

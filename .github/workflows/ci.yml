@@ -26,7 +26,7 @@ jobs:
         os: [ 'almalinux:8', 'almalinux:9', 'sle15:15.5' ]
         target: ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu']
         package: ["panhandle"]
-        architecture: ['x64', 'arm64']
+        architecture: ['x86_64', 'aarch64']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
         run: |
           source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.target }}
+          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}
           ls -al
 
       - name: Upload Build Artifacts

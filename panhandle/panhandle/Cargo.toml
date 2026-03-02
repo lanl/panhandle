@@ -18,7 +18,7 @@ simplelog = { version = "0.12.2", features = [ "paris", "local-offset"] }
 bytes = "1.10.1"
 clap = { version = "4.5.36", features = ["derive"] }
 hostname = "0.4.1"
-sysinfo = "0.37.2"
+sysinfo = "0.38.3"
 file-matcher = "0.7.0"
 reqwest = { version = "0.13.1", features = ["json"] }
 chrono = "0.4.41"

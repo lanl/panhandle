@@ -51,7 +51,7 @@ jobs:
               zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Get package version
         id: get_version
@@ -84,7 +84,7 @@ jobs:
           cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}-unknown-linux-gnu --output ../rpmbuild/
 
       - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.architecture }}.rpm
           path: rpmbuild/

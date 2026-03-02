@@ -57,7 +57,7 @@ jobs:
         id: get_version
         run: |
           VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
-          RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
+          RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/release = //; s/"//g')
           echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
           echo "PACKAGE_RELEASE=$RELEASE" >> $GITHUB_ENV
           echo "$PACKAGE_VERSION-$PACKAGE_RELEASE"

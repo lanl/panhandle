@@ -39,13 +39,10 @@ jobs:
       - name: Install Base Tools (Container)
         run: |
           if command -v dnf &> /dev/null; then
-            if [ "${{ matrix.architecture }}" = "x86_64" ]; then
               dnf install -y gcc openssl-devel pkgconf-pkg-config binutils
-            fi
-          elif command -v zypper &> /dev/null; then
-            if [ "${{ matrix.architecture }}" = "x86_64" ]; then
+          fi
+          if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
-            fi
           fi
 
       - uses: actions/checkout@v4

@@ -47,9 +47,13 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Get version from Cargo.toml
-        id: get-version
-        uses: bakery/actions-cargo-get-version@v1
+      - name: Get package version
+        id: get_version
+        run: |
+          # Extract the version using standard commands
+          VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
+          echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
+        shell: bash
 
       - name: Install Rust
         run: |
@@ -75,5 +79,5 @@ jobs:
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}-${{ steps.get-version.outputs.version }}.${{ matrix.architecture }}.rpm
+          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}.${{ matrix.architecture }}.rpm
           path: rpmbuild/

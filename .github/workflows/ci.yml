@@ -71,6 +71,7 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo '/root/.cargo/bin' >> $GITHUB_PATH
+          echo '/github/home/.cargo/bin' >> $GITHUB_PATH
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
           rustup target add ${{ matrix.architecture }}-unknown-linux-gnu
@@ -78,7 +79,7 @@ jobs:
 
       - name: Build Binary & Generate RPM
         run: |
-          source "/root/.cargo/env"
+          source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
           export CARGO_TARGET_DIR="./target/${{ matrix.architecture }}-unknown-linux-gnu"
           cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features

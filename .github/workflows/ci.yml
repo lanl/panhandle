@@ -56,21 +56,17 @@ jobs:
           rustup target add ${{ matrix.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm bpf-linker
 
-      - name: Build and Strip Binary with Cross
+      - name: Build Binary & Generate RPM
         run: |
           source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
+          export CARGO_TARGET_DIR="./target/${{ matrix.architecture }}-unknown-linux-gnu"
           cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
-          strip target/${{ matrix.architecture }}-unknown-linux-gnu/release/${{ matrix.package }}
-
-      - name: Generate RPM
-        run: |
-          source "$HOME/.cargo/env"
-          cd ${{ matrix.package }}
-          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}
+          strip -s $CARGO_TARGET_DIR/release/panhandle
+          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }} --output ../rpmbuild/
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}-${{ matrix.os_image }}-${{ matrix.architecture }}
-          path: ${{ matrix.package }}/target/*/generate-rpm/*.rpm
+          name: ${{ matrix.package }}-*
+          path: rpmbuild/

@@ -39,10 +39,10 @@ jobs:
       - name: Install Base Tools (Container)
         run: |
           if command -v dnf &> /dev/null; then
-              dnf install -y gcc openssl-devel pkgconf-pkg-config binutils podman
+              dnf install -y gcc openssl-devel pkgconf-pkg-config binutils
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7 libopenssl-3-devel pkg-config podman
+              zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
           fi
 
       - uses: actions/checkout@v4
@@ -54,13 +54,13 @@ jobs:
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
           rustup target add ${{ matrix.architecture }}-unknown-linux-gnu
-          cargo install cross cargo-generate-rpm bpf-linker
+          cargo install cargo-generate-rpm bpf-linker
 
       - name: Build and Strip Binary with Cross
         run: |
           source "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          cross build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
+          cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
           strip target/${{ matrix.architecture }}-unknown-linux-gnu/release/${{ matrix.package }}
 
       - name: Generate RPM

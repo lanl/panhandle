@@ -19,18 +19,19 @@ permissions: {}
 
 jobs:
   cross-build:
-    runs-on: ubuntu-latest
+    #runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
       image: almalinux:8
     strategy:
       matrix:
+        os: [ 'almalinux:8', 'almalinux:9' ]
         target: [x86_64-unknown-linux-gnu]
         package: ["panhandle"]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Bootstrap Container
         run: dnf install -y nodejs tar gzip
-
       - uses: actions/checkout@v4
 
       - name: Install System Dependencies
@@ -70,22 +71,3 @@ jobs:
           name: ${{ matrix.package }}-${{ matrix.target }}
           # Path where cargo-generate-rpm creates the .rpm file
           path: ${{ matrix.package }}/target/${{ matrix.target }}/generate-rpm/*.rpm
-
-  release:
-    name: Create Release
-    needs: cross-build
-    if: startsWith(github.ref, 'refs/tags/v') # Only run if a tag was pushed
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # Required by softprops/action-gh-release to create the release
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**/*
-          generate_release_notes: true

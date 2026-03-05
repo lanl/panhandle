@@ -11,7 +11,7 @@ env:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   cross-build:
@@ -19,8 +19,6 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      #matrix:
-      #  os_image: [ 'almalinux:8', 'almalinux:9', 'registry.suse.com/suse/sle15:15.5' ]
       matrix:
         config:
           - os_image: 'almalinux:8'
@@ -29,15 +27,16 @@ jobs:
           #- os_image: 'almalinux:8'
           #  shortname: 'el8'
           #  runs_on: 'ubuntu-latest-arm'
+          #  architecture: 'aarch64'
           - os_image: 'almalinux:9'
             shortname: 'el9'
             runs_on: 'ubuntu-latest'
           - os_image: 'almalinux:10'
             shortname: 'el10'
             runs_on: 'ubuntu-latest'
-          #- os_image: 'registry.suse.com/suse/sle15:15.5'
-          #  shortname: 'sles'
-          #  runs_on: 'ubuntu-latest'
+          - os_image: 'registry.suse.com/suse/sle15:15.5'
+            shortname: 'sles'
+            runs_on: 'ubuntu-latest'
         architecture: ['x86_64'] #['x86_64', 'aarch64']
         package: ["panhandle"]
 

@@ -24,20 +24,36 @@ jobs:
           - os_image: 'almalinux:8'
             shortname: 'el8'
             runs_on: 'ubuntu-latest'
-          #- os_image: 'almalinux:8'
-          #  shortname: 'el8'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+            architecture: 'x86_64'
+          - os_image: 'almalinux:8'
+            shortname: 'el8'
+            runs_on: 'ubuntu-latest-arm'
+            architecture: 'aarch64'
           - os_image: 'almalinux:9'
             shortname: 'el9'
             runs_on: 'ubuntu-latest'
+            architecture: 'x86_64'
+          #- os_image: 'almalinux:9'
+          #  shortname: 'el9'
+          #  runs_on: 'ubuntu-latest-arm'
+          #  architecture: 'aarch64'
           - os_image: 'almalinux:10'
             shortname: 'el10'
             runs_on: 'ubuntu-latest'
-          - os_image: 'registry.suse.com/suse/sle15:15.5'
-            shortname: 'sles'
-            runs_on: 'ubuntu-latest'
-        architecture: ['x86_64'] #['x86_64', 'aarch64']
+            architecture: 'x86_64'
+          #- os_image: 'almalinux:10'
+          #  shortname: 'el10'
+          #  runs_on: 'ubuntu-latest-arm'
+          #  architecture: 'aarch64'
+          #- os_image: 'registry.suse.com/suse/sle15:15.5'
+          #  shortname: 'sle15'
+          #  runs_on: 'ubuntu-latest'
+          #  architecture: 'x86_64'
+          #- os_image: 'registry.suse.com/suse/sle15:15.5'
+          #  shortname: 'sle15'
+          #  runs_on: 'ubuntu-latest-arm'
+          #  architecture: 'aarch64'
+        #architecture: ['x86_64'] #['x86_64', 'aarch64']
         package: ["panhandle"]
 
     container:
@@ -72,7 +88,7 @@ jobs:
           echo '/github/home/.cargo/bin' >> $GITHUB_PATH
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
-          rustup target add ${{ matrix.architecture }}-unknown-linux-gnu
+          rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm bpf-linker
 
       - name: Build Binary & Generate RPM
@@ -80,15 +96,15 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          export CARGO_TARGET_DIR="./target/${{ matrix.architecture }}-unknown-linux-gnu"
-          cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
+          export CARGO_TARGET_DIR="./target/${{ matrix.config.architecture }}-unknown-linux-gnu"
+          cargo build --target ${{ matrix.config.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
           echo $CARGO_TARGET_DIR
-          ls -al $CARGO_TARGET_DIR/${{ matrix.architecture }}-unknown-linux-gnu/release/panhandle
-          strip -s $CARGO_TARGET_DIR/${{ matrix.architecture }}-unknown-linux-gnu/release/panhandle
-          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
+          ls -al $CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
+          strip -s $CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
+          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.config.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.config.shortname }}.${{ matrix.architecture }}.rpm
+          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.config.shortname }}.${{ matrix.config.architecture }}.rpm
           path: rpmbuild/${{ matrix.config.shortname }}

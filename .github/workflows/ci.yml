@@ -63,10 +63,10 @@ jobs:
       - name: Install Base Tools (Container Environment)
         run: |
           if command -v dnf &> /dev/null; then
-              dnf install -y openssl-devel pkgconf-pkg-config bash
+              dnf install -y openssl-devel pkgconf-pkg-config bash openssl
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y libopenssl-3-devel pkg-config bash
+              zypper install -y libopenssl-3-devel openssl pkg-config bash
           fi
 
       - name: Install aarch64 packages (Container Environment))
@@ -74,10 +74,10 @@ jobs:
         run: |
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libgcc cross-gcc-common llvm-devel llvm-toolset
+              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libgcc cross-gcc-common llvm-devel llvm-toolset glibc-devel
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc-aarch64-linux-gnu cross-gcc-common
+              zypper install -y gcc-aarch64-linux-gnu cross-gcc-common llvm-dev libclang-21-dev llvm-toolset glibc-dev
           fi
 
       - name: Install x86_64 packages (Container Environment))

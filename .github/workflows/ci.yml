@@ -74,7 +74,7 @@ jobs:
         run: |
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libgcc cross-gcc-common llvm-devel libclang-devel
+              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libgcc cross-gcc-common llvm-devel llvm-toolset
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc-aarch64-linux-gnu cross-gcc-common

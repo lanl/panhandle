@@ -33,18 +33,18 @@ jobs:
             shortname: 'el9'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
-          #- os_image: 'almalinux:9'
-          #  shortname: 'el9'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+          - os_image: 'almalinux:9'
+            shortname: 'el9'
+            runs_on: 'ubuntu-latest-arm'
+            architecture: 'aarch64'
           - os_image: 'almalinux:10'
             shortname: 'el10'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
-          #- os_image: 'almalinux:10'
-          #  shortname: 'el10'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+          - os_image: 'almalinux:10'
+            shortname: 'el10'
+            runs_on: 'ubuntu-latest-arm'
+            architecture: 'aarch64'
           #- os_image: 'registry.suse.com/suse/sle15:15.5'
           #  shortname: 'sle15'
           #  runs_on: 'ubuntu-latest'
@@ -60,13 +60,23 @@ jobs:
       image: ${{ matrix.config.os_image }}
 
     steps:
-      - name: Install Base Tools (Container)
+      - name: Install Base Tools (Container Environment)
         run: |
           if command -v dnf &> /dev/null; then
               dnf install -y gcc openssl-devel pkgconf-pkg-config binutils bash
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7 libopenssl-3-devel pkg-config bash
+          fi
+
+      - name: Install ARM64 Cross-Compiler (Container Environment))
+        if: matrix.config.architecture == 'aarch64'
+        run: |
+          if command -v dnf &> /dev/null; then
+              dnf install -y gcc-aarch64-linux-gnu
+          fi
+          if command -v zypper &> /dev/null; then
+              zypper install -y gcc-aarch64-linux-gnu
           fi
 
       - uses: actions/checkout@v6

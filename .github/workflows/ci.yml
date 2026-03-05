@@ -79,7 +79,7 @@ jobs:
 
       - name: Build Binary & Generate RPM
         run: |
-          source "$HOME/.cargo/env"
+          . "$HOME/.cargo/env"
           cd ${{ matrix.package }}
           export CARGO_TARGET_DIR="./target/${{ matrix.architecture }}-unknown-linux-gnu"
           cargo build --target ${{ matrix.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features

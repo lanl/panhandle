@@ -22,7 +22,7 @@ jobs:
       #matrix:
       #  os_image: [ 'almalinux:8', 'almalinux:9', 'registry.suse.com/suse/sle15:15.5' ]
       matrix:
-        include:
+        config:
           - os_image: 'almalinux:8'
             arch: 'x86_64'
             shortname: 'el8'
@@ -43,7 +43,7 @@ jobs:
         package: ["panhandle"]
 
     container:
-      image: ${{ matrix.os_image }}
+      image: ${{ matrix.config.os_image }}
 
     steps:
       - name: Install Base Tools (Container)
@@ -74,7 +74,7 @@ jobs:
           echo '/github/home/.cargo/bin' >> $GITHUB_PATH
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
-          rustup target add ${{ matrix.architecture }}-unknown-linux-gnu
+          rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm bpf-linker
 
       - name: Build Binary & Generate RPM
@@ -87,10 +87,10 @@ jobs:
           echo $CARGO_TARGET_DIR
           ls -al $CARGO_TARGET_DIR/${{ matrix.architecture }}-unknown-linux-gnu/release/panhandle
           strip -s $CARGO_TARGET_DIR/${{ matrix.architecture }}-unknown-linux-gnu/release/panhandle
-          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.shortname }}/
+          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.shortname }}.${{ matrix.architecture }}.rpm
-          path: rpmbuild/${{ matrix.shortname }}
+          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.config.shortname }}.${{ matrix.architecture }}.rpm
+          path: rpmbuild/${{ matrix.config.shortname }}

@@ -74,7 +74,7 @@ jobs:
           echo '/github/home/.cargo/bin' >> $GITHUB_PATH
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
-          rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
+          rustup target add ${{ matrix.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm bpf-linker
 
       - name: Build Binary & Generate RPM

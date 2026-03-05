@@ -78,6 +78,7 @@ jobs:
           cargo install cargo-generate-rpm bpf-linker
 
       - name: Build Binary & Generate RPM
+        shell: bash
         run: |
           . "$HOME/.cargo/env"
           cd ${{ matrix.package }}

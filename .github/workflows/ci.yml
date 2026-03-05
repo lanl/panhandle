@@ -63,21 +63,32 @@ jobs:
       - name: Install Base Tools (Container Environment)
         run: |
           if command -v dnf &> /dev/null; then
-              dnf install -y gcc openssl-devel pkgconf-pkg-config binutils bash
+              dnf install -y openssl-devel pkgconf-pkg-config bash
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7 libopenssl-3-devel pkg-config bash
+              zypper install -y libopenssl-3-devel pkg-config bash
           fi
 
-      - name: Install ARM64 Cross-Compiler (Container Environment))
+      - name: Install aarch64 packages (Container Environment))
         if: matrix.config.architecture == 'aarch64'
         run: |
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libgcc cross-gcc-common
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc-aarch64-linux-gnu
+              zypper install -y gcc-aarch64-linux-gnu cross-gcc-common
+          fi
+
+      - name: Install x86_64 packages (Container Environment))
+        if: matrix.config.architecture == 'x86_64'
+        run: |
+          if command -v dnf &> /dev/null; then
+              dnf install -y epel-release
+              dnf install -y gcc binutils libgcc cross-gcc-common
+          fi
+          if command -v zypper &> /dev/null; then
+              zypper install -y gcc gcc7 binutils cross-gcc-common
           fi
 
       - uses: actions/checkout@v6

@@ -73,7 +73,8 @@ jobs:
         if: matrix.config.architecture == 'aarch64'
         run: |
           if command -v dnf &> /dev/null; then
-              dnf install -y gcc-aarch64-linux-gnu
+              dnf install -y epel-release
+              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc-aarch64-linux-gnu

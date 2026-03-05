@@ -24,19 +24,18 @@ jobs:
       matrix:
         config:
           - os_image: 'almalinux:8'
-            arch: 'x86_64'
             shortname: 'el8'
             runs_on: 'ubuntu-latest'
           #- os_image: 'almalinux:8'
-          #  arch: 'aarch64'
           #  shortname: 'el8'
           #  runs_on: 'ubuntu-latest-arm'
           - os_image: 'almalinux:9'
-            arch: 'x86_64'
             shortname: 'el9'
             runs_on: 'ubuntu-latest'
+          - os_image: 'almalinux:10'
+            shortname: 'el10'
+            runs_on: 'ubuntu-latest'
           #- os_image: 'registry.suse.com/suse/sle15:15.5'
-          #  arch: 'x86_64'
           #  shortname: 'sles'
           #  runs_on: 'ubuntu-latest'
         architecture: ['x86_64'] #['x86_64', 'aarch64']

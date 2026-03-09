@@ -1,13 +1,11 @@
 variables:
   YOUR_APP_NAME: "panhandle"
   YOUR_APP_COMMAND: "panhandle"
-  YOUR_GIT_REPO: "https://github.com/lanl/panhandle.git"
-  VERSION: "1.0.9"
-  RELEASE: "0"
 
 stages:
   - build
   - test
+  - prep
   - build-rpm
 
 build-job:
@@ -85,6 +83,17 @@ deny-test-job:
     - cargo build --config ../.runner-config.toml 
   script:
     - cargo deny check
+
+extract-version:
+  stage: prep
+  script:
+    - export VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
+    - export RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/release = //; s/"//g')
+    - echo "VERSION=$VERSION" > version.env
+    - echo "RELEASE=$RELEASE" >> version.env
+  artifacts:
+    reports:
+      dotenv: version.env 
 
 build-rpm-el8_x86_64:
   stage: build-rpm

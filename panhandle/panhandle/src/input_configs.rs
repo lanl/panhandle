@@ -88,6 +88,16 @@ pub struct RawArgs {
     #[arg(short, long, global = true)]
     #[serde(default)]
     pub zsh: bool,
+
+    /// Receive a report of CPU usage over time.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub cpu: bool,
+
+    /// Specify a list of PIDs to track CPU usage of. Leaving empty defaults to showing global cpu usage.
+    #[arg(global = true)]
+    #[serde(default)]
+    pub pid_list: Option<Vec<u32>>
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -150,10 +160,16 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub shells: bool,
 
+    #[serde(default)]
+    pub cpu: bool,
+
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
     pub include_uid: Option<Vec<String>>,
+
+    pub pid_list: Option<Vec<u32>>
+    
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -199,6 +215,8 @@ impl From<ConfigArgs> for RawArgs {
             exclude_max_uid: cfg.exclude_max_uid,
             executables: cfg.executables,
             include_uid: cfg.include_uid,
+            cpu: cfg.cpu,
+            pid_list: cfg.pid_list,
             // output subcommand
             output,
             config: None,

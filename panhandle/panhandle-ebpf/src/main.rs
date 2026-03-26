@@ -6,10 +6,10 @@
 use core::u8;
 
 use aya_ebpf::{
-    bindings::BPF_F_RDONLY,
+    bindings::{BPF_F_RDONLY, trace_event_raw_sched_switch},
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
-        bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
+        bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes, bpf_ktime_get_ns
     },
     macros::{map, tracepoint},
     maps::{HashMap, PerCpuArray, PerfEventArray},
@@ -32,6 +32,18 @@ static UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4,
 #[map(name = "uid_include_list")]
 static UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
     HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
+
+// per cpu array that holds timestamp when currently running task on this cpu started executing
+#[map(name = "start_times")]
+static START_TIMES: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
+
+// hash map that stores total accumulated CPU time per process ID. 1024 is max amount of processes
+#[map(name = "per_cpu_time")]
+static PID_CPU_TIME: HashMap<u32, u64> = HashMap::with_max_entries(1024, 0);
+
+// keep total busy time per CPU. Summing all CPUs gives the system-wide total CPU time
+#[map(name = "total_cpu_time")]
+static TOTAL_CPU_TIME: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
 
 #[tracepoint]
 pub fn panhandle(ctx: TracePointContext) -> u32 {
@@ -211,6 +223,23 @@ fn check_uid_in_uidarray(uid: &u32, hash_map: &HashMap<u32, [u32; UID_COUNT]>) -
         }
     }
     return false;
+}
+
+pub fn sched_switch(ctx: TracePointContext) -> u32 {
+    match try_sched_switch(ctx) {
+        Ok(ret) => ret,
+        Err(ret) => ret as u32
+    }
+}
+
+fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
+    // SAFETY: the kernel guarantees that the context points to a valid trace_event_raw_sched_switch struct for the sched_switch tracepoint
+    let tp: *const trace_event_raw_sched_switch = unsafe { ctx.as_ptr().cast() };
+    let prev_pid = unsafe { (*tp).prev_pid } as u32;
+    let next_pid = unsafe { (*tp).next_pid } as u32;
+    let cpu = ctx.cpu() as u32;
+
+    Ok((0))
 }
 
 #[panic_handler]

@@ -6,8 +6,6 @@ license = "MIT"
 
 [dependencies]
 panhandle-common = { path = "../panhandle-common" }
-aya-bpf = {version = "0.1", features = ["vmlinux"]}
-
 aya-ebpf = { workspace = true }
 aya-log-ebpf = { workspace = true }
 

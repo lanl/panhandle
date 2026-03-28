@@ -6,17 +6,17 @@
 use core::u8;
 
 use aya_ebpf::{
-    bindings::{BPF_F_RDONLY, trace_event_raw_sched_switch},
-    helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
-        bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes, bpf_ktime_get_ns
-    },
-    macros::{map, tracepoint},
-    maps::{HashMap, PerCpuArray, PerfEventArray},
-    programs::TracePointContext,
+    EbpfContext, bindings::BPF_F_RDONLY, helpers::{
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_boot_ns, bpf_ktime_get_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes, r#gen::bpf_get_smp_processor_id
+    }, 
+    macros::{map, tracepoint}, 
+    maps::{HashMap, PerCpuArray, PerfEventArray}, 
+    programs::TracePointContext
 };
 
 use panhandle_common::*;
+mod vmlinux;
+use vmlinux::trace_event_raw_sched_switch;
 mod fmsh;
 mod readline;
 mod vanilla_execve;
@@ -234,10 +234,23 @@ pub fn sched_switch(ctx: TracePointContext) -> u32 {
 
 fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
     // SAFETY: the kernel guarantees that the context points to a valid trace_event_raw_sched_switch struct for the sched_switch tracepoint
-    let tp: *const trace_event_raw_sched_switch = unsafe { ctx.as_ptr().cast() };
+    // offsets are derived from kernel's tracepoint format at /sys/kernel/debug/tracing/events/sched/sched_switch/format
+    let tp: *const trace_event_raw_sched_switch = ctx.as_ptr().cast();
     let prev_pid = unsafe { (*tp).prev_pid } as u32;
     let next_pid = unsafe { (*tp).next_pid } as u32;
-    let cpu = ctx.cpu() as u32;
+
+    // SAFETY: this is a core BPF function implemented in aya
+    let cpu = unsafe { bpf_get_smp_processor_id() };
+    
+    // get current time
+    // SAFETY: this is a core BPF function implemented in aya
+    let now = unsafe { bpf_ktime_get_ns()};
+
+    // handle the outgoing task
+    let start_time_slot = START_TIMES.get_ptr_mut(0).ok_or(1u32)?;
+    // SAFETY: *start_time_slot must have a value since the previous line would have panicked
+    let prev_start = unsafe { *start_time_slot };
+
 
     Ok((0))
 }

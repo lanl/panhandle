@@ -251,6 +251,24 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
     // SAFETY: *start_time_slot must have a value since the previous line would have panicked
     let prev_start = unsafe { *start_time_slot };
 
+    // if task was running, account its runtime
+    if prev_start != 0 {
+        let delta = now - prev_start;
+
+        if prev_pid != 0 {
+            // update the per PID total
+            match PID_CPU_TIME.get_ptr_mut(&prev_pid) {
+                Some(entry) => unsafe { *entry += delta }, // SAFETY: the entry must contain something since the Some() block triggered
+                None => {
+                    PID_CPU_TIME.insert(&prev_pid, &delta, 0).map_err(|_| 2u32);
+                }
+            }
+
+            let total_slot = TOTAL_CPU_TIME.get_ptr_mut(0).ok_or(3u32)?;
+            unsafe {*total_slot += delta};
+        }
+    }
+
 
     Ok((0))
 }

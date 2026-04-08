@@ -1,8 +1,11 @@
 #![no_std]
 #![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
 #![allow(clippy::comparison_chain)]
 // used code from https://github.com/FlakM/sysrat/blob/main/ebpf/common/src/lib.rs
 use core::fmt::{self, Formatter};
+pub type __kernel_pid_t = ::aya_ebpf::cty::c_int;
+pub type pid_t = __kernel_pid_t;
 
 // put all the desired shared constants here / enables not adding them to the ebpf
 // memory-limited application and also re-use in the userland application.
@@ -35,6 +38,29 @@ pub struct Readline {
     //pub regs: [u64; 31],
     //pub task: *const task_struct,
     //pub fp: [u8; ARG_SIZE],
+}
+
+// this sched switch struct is used for calculating CPU usage
+#[repr(C)]
+#[derive(Debug)]
+pub struct trace_event_raw_sched_switch {
+    pub ent: trace_entry,
+    pub prev_comm: [::aya_ebpf::cty::c_char; 16usize],
+    pub prev_pid: pid_t,
+    pub prev_prio: ::aya_ebpf::cty::c_int,
+    pub prev_state: ::aya_ebpf::cty::c_long,
+    pub next_comm: [::aya_ebpf::cty::c_char; 16usize],
+    pub next_pid: pid_t,
+    pub next_prio: ::aya_ebpf::cty::c_int,
+    //pub __data: __IncompleteArrayField<::aya_ebpf::cty::c_char>,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct trace_entry {
+    pub type_: ::aya_ebpf::cty::c_ushort,
+    pub flags: ::aya_ebpf::cty::c_uchar,
+    pub preempt_count: ::aya_ebpf::cty::c_uchar,
+    pub pid: ::aya_ebpf::cty::c_int,
 }
 
 #[repr(C)]

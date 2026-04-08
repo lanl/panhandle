@@ -6,8 +6,8 @@
 use core::u8;
 
 use aya_ebpf::{
-    EbpfContext, bindings::BPF_F_RDONLY, helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_boot_ns, bpf_ktime_get_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes
+    bindings::BPF_F_RDONLY, helpers::{
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes
     }, 
     macros::{map, tracepoint}, 
     maps::{HashMap, PerCpuArray, PerfEventArray}, 
@@ -15,8 +15,7 @@ use aya_ebpf::{
 };
 
 use panhandle_common::*;
-mod vmlinux;
-use vmlinux::trace_event_raw_sched_switch;
+mod cpu_usage;
 mod fmsh;
 mod readline;
 mod vanilla_execve;
@@ -32,18 +31,6 @@ static UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4,
 #[map(name = "uid_include_list")]
 static UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
     HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
-
-// per cpu array that holds timestamp when currently running task on this cpu started executing
-#[map(name = "start_times")]
-static START_TIMES: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
-
-// hash map that stores total accumulated CPU time per process ID. 1024 is max amount of processes
-#[map(name = "per_cpu_time")]
-static PID_CPU_TIME: HashMap<u32, u64> = HashMap::with_max_entries(1024, 0);
-
-// keep total busy time per CPU. Summing all CPUs gives the system-wide total CPU busy time
-#[map(name = "busy_cpu_time")]
-static BUSY_CPU_TIME: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
 
 #[tracepoint]
 pub fn panhandle(ctx: TracePointContext) -> u32 {
@@ -223,52 +210,6 @@ fn check_uid_in_uidarray(uid: &u32, hash_map: &HashMap<u32, [u32; UID_COUNT]>) -
         }
     }
     return false;
-}
-
-#[tracepoint]
-pub fn sched_switch(ctx: TracePointContext) -> u32 {
-    match try_sched_switch(ctx) {
-        Ok(ret) => ret,
-        Err(ret) => ret as u32
-    }
-}
-
-fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
-    // SAFETY: the kernel guarantees that the context points to a valid trace_event_raw_sched_switch struct for the sched_switch tracepoint
-    let tp: *const trace_event_raw_sched_switch = ctx.as_ptr().cast();
-    let prev_pid = unsafe { (*tp).prev_pid } as u32;
-
-    // get current time
-    // SAFETY: this is a core BPF function implemented in aya
-    let now = unsafe { bpf_ktime_get_ns() };
-
-    // handle the outgoing task
-    let start_time_slot = START_TIMES.get_ptr_mut(0).ok_or(1i64)?;
-    // SAFETY: *start_time_slot must have a value since the previous line would have panicked
-    let prev_start = unsafe { *start_time_slot };
-
-    // if task was running, account its runtime
-    if prev_start != 0 {
-        let delta = now - prev_start;
-
-        if prev_pid != 0 {
-            // update the per PID total
-            match PID_CPU_TIME.get_ptr_mut(&prev_pid) {
-                Some(entry) => unsafe { *entry += delta },
-                None => {
-                    PID_CPU_TIME.insert(&prev_pid, &delta, 0).map_err(|_| 2i64)?;
-                }
-            }
-
-            // update busy CPU time for this CPU
-            let busy_slot = BUSY_CPU_TIME.get_ptr_mut(0).ok_or(3i64)?;
-            unsafe { *busy_slot += delta };
-        }
-    }
-
-    // now the start time for the incoming task is now
-    unsafe { *start_time_slot = now };
-    Ok(0)
 }
 
 #[panic_handler]

@@ -95,7 +95,7 @@ pub struct RawArgs {
     pub cpu: bool,
 
     /// Specify a list of PIDs to track CPU usage of. Leaving empty defaults to showing global cpu usage.
-    #[arg(global = true)]
+    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
     pub pid_list: Option<Vec<u32>>
 }

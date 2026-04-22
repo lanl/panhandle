@@ -97,7 +97,7 @@ pub struct RawArgs {
     /// Specify a list of PIDs to track CPU usage of. Leaving empty defaults to showing global cpu usage.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
-    pub pid_list: Option<Vec<u32>>
+    pub pid_list: Option<Vec<u32>>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -168,8 +168,7 @@ pub struct ConfigArgs {
 
     pub include_uid: Option<Vec<String>>,
 
-    pub pid_list: Option<Vec<u32>>
-    
+    pub pid_list: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]

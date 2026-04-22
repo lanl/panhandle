@@ -3,11 +3,11 @@
 #![allow(static_mut_refs)]
 
 use aya_ebpf::{
-    EbpfContext, 
-    helpers::bpf_ktime_get_ns, 
-    macros::{map, tracepoint}, 
-    maps::{HashMap, PerCpuArray}, 
-    programs::TracePointContext
+    EbpfContext,
+    helpers::bpf_ktime_get_ns,
+    macros::{map, tracepoint},
+    maps::{HashMap, PerCpuArray},
+    programs::TracePointContext,
 };
 use aya_log_ebpf::info;
 
@@ -29,9 +29,7 @@ static BUSY_CPU_TIME: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
 pub fn sched_switch(ctx: TracePointContext) -> u32 {
     match try_sched_switch(ctx) {
         Ok(ret) => ret,
-        Err(ret) => {
-            ret as u32
-        }
+        Err(ret) => ret as u32,
     }
 }
 
@@ -43,7 +41,7 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
     // get current time
     // SAFETY: this is a core BPF function implemented in aya
     let now = unsafe { bpf_ktime_get_ns() };
-    
+
     info!(&ctx, "sched_switch: prev_pid={}, now={}", prev_pid, now);
 
     // handle the outgoing task
@@ -51,10 +49,10 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
         info!(&ctx, "Failed to get start_time_slot");
         1i64
     })?;
-    
+
     // SAFETY: start_time_slot is valid as we just got it from the map
     let prev_start = unsafe { *start_time_slot };
-    
+
     info!(&ctx, "prev_start={}", prev_start);
 
     // if task was running, account its runtime
@@ -70,10 +68,15 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
                     let old_value = unsafe { *entry };
                     unsafe { *entry += delta };
                     let new_value = unsafe { *entry };
-                    info!(&ctx, "Updated PID {} CPU time: {} -> {}", prev_pid, old_value, new_value);
-                },
+                    info!(
+                        &ctx,
+                        "Updated PID {} CPU time: {} -> {}", prev_pid, old_value, new_value
+                    );
+                }
                 None => {
-                    PID_CPU_TIME.insert(&prev_pid, &delta, 0).map_err(|_e| 2i64)?;
+                    PID_CPU_TIME
+                        .insert(&prev_pid, &delta, 0)
+                        .map_err(|_e| 2i64)?;
                     info!(&ctx, "Inserted new PID {} with delta {}", prev_pid, delta);
                 }
             }
@@ -94,6 +97,6 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
     // now the start time for the incoming task is now
     unsafe { *start_time_slot = now };
     info!(&ctx, "Set new start_time to {}", now);
-    
+
     Ok(0)
 }

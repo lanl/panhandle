@@ -6,12 +6,14 @@
 use core::u8;
 
 use aya_ebpf::{
-    bindings::BPF_F_RDONLY, helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes
-    }, 
-    macros::{map, tracepoint}, 
-    maps::{HashMap, PerCpuArray, PerfEventArray}, 
-    programs::TracePointContext
+    bindings::BPF_F_RDONLY,
+    helpers::{
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
+        bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
+    },
+    macros::{map, tracepoint},
+    maps::{HashMap, PerCpuArray, PerfEventArray},
+    programs::TracePointContext,
 };
 
 use panhandle_common::*;

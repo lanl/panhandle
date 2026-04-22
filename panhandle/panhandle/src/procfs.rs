@@ -33,7 +33,7 @@ pub fn get_all_proc_info() {
     Method to check if processes or their children have memory faults greater than a certain threshold.
     Takes the desired threshold as an input parameter.
 */
-pub fn get_major_faults(maj_fault_threshold: u64) {
+pub fn get_major_faults(maj_fault_threshold: u64, use_json: bool) {
     // Get an iterator over all processes in /proc
     if let Ok(procs) = all_processes() {
         for proc_res in procs.flatten() {
@@ -41,10 +41,18 @@ pub fn get_major_faults(maj_fault_threshold: u64) {
             if let Ok(stat) = proc_res.stat()
                 && (stat.majflt > maj_fault_threshold || stat.cmajflt > maj_fault_threshold)
             {
-                info!(
-                    "PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {},",
-                    stat.pid, stat.comm, stat.majflt, stat.cmajflt
-                );
+                if use_json {
+                    info!(
+                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
+                        stat.pid, stat.comm, stat.majflt, stat.cmajflt
+                    );
+                }
+                else {
+                    info!(
+                        "PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {},",
+                        stat.pid, stat.comm, stat.majflt, stat.cmajflt
+                    );
+                }
             }
         }
     }

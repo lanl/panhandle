@@ -91,6 +91,8 @@ The panhandle systemd service file
 .TP
 \fC/var/log/panhandle/panhandle.log\fR
 The panhandle log directory and log file(s)
+\fC/etc/logrotate.d/panhandle\fR
+The panhandle logrotate configuration file
 .SH "SEE ALSO"
 bash(1), zsh(1)
 .SH BUGS

@@ -176,9 +176,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => Arc::new("UNKNOWN_HOST".to_string()),
     };
 
+    // set up the memory fault monitoring
     if let Some(threshold_fault_count) = args.memory_faults {
         //procfs::get_all_proc_info();
-        procfs::get_major_faults(threshold_fault_count);
+        procfs::get_major_faults(threshold_fault_count, args.json);
     }
 
     // set up ebpf memory lock

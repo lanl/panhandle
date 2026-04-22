@@ -192,3 +192,25 @@ impl core::fmt::Display for ExecveEvent {
         Ok(())
     }
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct InetSockSetState {
+    pub common_type: u16,
+    pub common_flags: u8,
+    pub common_preempt_count: u8,
+    pub common_pid: i32,
+    pub common_preempt_lazy_count: u8,
+    _padding: [u8; 7], // Alignment to offset 16
+    pub skaddr: *const core::ffi::c_void,
+    pub oldstate: i32,
+    pub newstate: i32,
+    pub sport: u16,
+    pub dport: u16,
+    pub family: u16,
+    pub protocol: u16,
+    pub saddr: [u8; 4],
+    pub daddr: [u8; 4],
+    pub saddr_v6: [u8; 16],
+    pub daddr_v6: [u8; 16],
+}

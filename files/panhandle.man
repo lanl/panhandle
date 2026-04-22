@@ -35,6 +35,9 @@ Specify the absolute path to the desired log file.
 \fB-f, --fmsh\fP
 Monitor events from the fmsh shell using the readline function. This also returns events from the bash shell as fmsh is a derivative of bash.
 .TP
+\fB-m, --memory-faults <MEMORY_FAULTS>\fP
+Report the processes with memory faults greater than the specified threshold value.
+.TP
 \fB-h, --help\fP
 Print help
 .TP
@@ -77,11 +80,14 @@ Print version
 Monitor events from the zsh shell using the zlentry function.
 .SH FILES
 .TP
+\fC/opt/panhandle/panhandle.yaml\fR
+The panhandle configuration file
+.TP
 \fC/usr/sbin/panhandle\fR
 The panhandle executable
 .TP
 \fC/usr/lib/systemd/system/panhandle.service\fR
-The systemd service file
+The panhandle systemd service file
 .TP
 \fC/var/log/panhandle/panhandle.log\fR
 The panhandle log directory and log file(s)

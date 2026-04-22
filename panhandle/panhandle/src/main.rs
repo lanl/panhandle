@@ -26,6 +26,7 @@ use helpers::*;
 use panhandle_common::*;
 mod input_configs;
 use crate::input_configs::*;
+mod procfs;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -174,6 +175,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Err(_) => Arc::new("UNKNOWN_HOST".to_string()),
     };
+
+    if let Some(threshold_fault_count) = args.memory_faults {
+        //procfs::get_all_proc_info();
+        procfs::get_major_faults(threshold_fault_count);
+    }
 
     // set up ebpf memory lock
     // SAFETY: unsafe call recommended by the Aya library, requires libc which is a dependency of the rpm build already

@@ -30,6 +30,7 @@ config = "0.15.22"
 serde = "1.0.228"
 uzers = "0.12.2"
 serde_yaml = "0.9.34"
+procfs = "0.18.0"
 
 [build-dependencies]
 aya-build = { workspace = true }

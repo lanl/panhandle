@@ -51,6 +51,10 @@ pub struct RawArgs {
     #[serde(default)]
     pub fmsh: bool,
 
+    /// Report the processes with memory faults greater than the specified threshold value.
+    #[arg(short, long, value_parser(clap::value_parser!(u64)), global = true)]
+    pub memory_faults: Option<u64>,
+
     /// Subcommand to specify the type of output desired, see the --syslog, --http, or --file options.
     #[command(subcommand)]
     pub output: Option<OutputCommand>,
@@ -138,6 +142,8 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub fmsh: bool,
 
+    pub memory_faults: Option<u64>,
+
     #[serde(default)]
     pub zsh: bool,
 
@@ -193,6 +199,7 @@ impl From<ConfigArgs> for RawArgs {
             syscall_execve: cfg.syscall_execve,
             bash: cfg.bash,
             fmsh: cfg.fmsh,
+            memory_faults: cfg.memory_faults,
             zsh: cfg.zsh,
             quiet: cfg.quiet,
             exclude_min_uid: cfg.exclude_min_uid,
@@ -233,6 +240,9 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     }
     if cli_args.include_uid.is_some() {
         final_args.include_uid = cli_args.include_uid.clone();
+    }
+    if cli_args.memory_faults.is_some() {
+        final_args.memory_faults = cli_args.memory_faults;
     }
 
     // Merge CLI output into config output, or create it if missing

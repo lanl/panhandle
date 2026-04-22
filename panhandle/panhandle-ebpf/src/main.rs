@@ -19,6 +19,7 @@ use aya_ebpf::{
 use panhandle_common::*;
 mod fmsh;
 mod readline;
+mod socket;
 mod vanilla_execve;
 mod zlentry;
 

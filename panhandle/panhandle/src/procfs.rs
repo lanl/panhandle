@@ -1,5 +1,9 @@
+use std::sync::Arc;
+use reqwest::Client;
+
 use procfs::process::all_processes;
 use simplelog::*;
+use crate::helpers::{send_http_post, send_syslog};
 
 /*
 /*
@@ -31,17 +35,45 @@ pub fn get_all_proc_info() {
 
 /*
     Method to check if processes or their children have memory faults greater than a certain threshold.
-    Takes the desired threshold as an input parameter.
+    Takes the desired threshold (integer, u64) and the desired output formatting (json, boolean) as input parameters.
 */
-pub fn get_major_faults(maj_fault_threshold: u64, use_json: bool) {
+pub async fn get_major_faults(maj_fault_threshold: u64, use_json: &bool, http: &bool, syslog: &bool, hostname: &String, global_url: &Arc<String>, syslog_address: &Arc<String>, client: &Client, debug: &bool) {
     // Get an iterator over all processes in /proc
     if let Ok(procs) = all_processes() {
         for proc_res in procs.flatten() {
             // Read /proc/[pid]/stat for this process
+            // this stat() call is a potential TOCTOU issue
+            // the process may no longer exist at the time that stat() is called on it
+            // therefore we need to prevent / protect from that condition with the `if let Ok()` check
             if let Ok(stat) = proc_res.stat()
                 && (stat.majflt > maj_fault_threshold || stat.cmajflt > maj_fault_threshold)
-            {
-                if use_json {
+            {   
+                let plain_string = format!("PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {},",
+                        stat.pid, stat.comm, stat.majflt, stat.cmajflt
+                    );
+
+                let arc_string = Arc::new(plain_string.clone().to_string());
+                if *http {
+                    let result =
+                        send_http_post(client, global_url, &arc_string, use_json, debug).await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("HTTP POST Failed: {:?}", result);
+                        }
+                    }
+                }
+                if *syslog {
+                    let result =
+                        send_syslog(hostname, &arc_string, syslog_address, use_json, debug).await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("SYSLOG SEND Failed: {:?}", result);
+                        }
+                    }
+                }
+                if *use_json {
                     info!(
                         "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
                         stat.pid, stat.comm, stat.majflt, stat.cmajflt
@@ -49,8 +81,7 @@ pub fn get_major_faults(maj_fault_threshold: u64, use_json: bool) {
                 }
                 else {
                     info!(
-                        "PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {},",
-                        stat.pid, stat.comm, stat.majflt, stat.cmajflt
+                        "{}", plain_string
                     );
                 }
             }

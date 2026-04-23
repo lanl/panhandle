@@ -5,7 +5,7 @@ use port_check::*;
 use std::{fs::canonicalize, sync::Arc};
 use url::Url;
 use reqwest::{Client, Error, Response, header::CONTENT_TYPE};
-use simplelog::{info, debug};
+use simplelog::{debug, error, info};
 use syslog::{Error as SyslogError, Facility, Formatter3164};
 use uzers::get_user_by_uid;
 use bytes::BytesMut;
@@ -92,7 +92,7 @@ pub async fn consume_shell_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("HTTP POST Failed: {:?}", result);
+                            error!("HTTP POST Failed: {:?}", result);
                         }
                     }
                 }
@@ -105,7 +105,7 @@ pub async fn consume_shell_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            debug!("SYSLOG SEND Failed: {:?}", result);
+                            error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
                 }
@@ -132,7 +132,7 @@ pub async fn consume_shell_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("HTTP POST Failed: {:?}", result);
+                            error!("HTTP POST Failed: {:?}", result);
                         }
                     }
                 } else if syslog {
@@ -143,7 +143,7 @@ pub async fn consume_shell_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            debug!("SYSLOG SEND Failed: {:?}", result);
+                            error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
                 } else {
@@ -259,7 +259,7 @@ pub async fn consume_execve_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("HTTP POST Failed: {:?}", result);
+                            error!("HTTP POST Failed: {:?}", result);
                         }
                     }
                 } else if syslog {
@@ -270,7 +270,7 @@ pub async fn consume_execve_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("SYSLOG SEND Failed: {:?}", result);
+                            error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
                 }
@@ -294,7 +294,7 @@ pub async fn consume_execve_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("HTTP POST Failed: {:?}", result);
+                            error!("HTTP POST Failed: {:?}", result);
                         }
                     }
                 } else if syslog {
@@ -305,7 +305,7 @@ pub async fn consume_execve_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("SYSLOG SEND Failed: {:?}", result);
+                            error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
                 } else {
@@ -343,7 +343,7 @@ pub async fn send_syslog(
         match syslog::tcp(formatter, host_and_port.to_string()) {
             Ok(w) => w,
             Err(e) => {
-                info!("Failed to connect to TCP syslog server: {:?}", e);
+                error!("Failed to connect to TCP syslog server: {:?}", e);
                 return Err(e);
             }
         }
@@ -351,7 +351,7 @@ pub async fn send_syslog(
         match syslog::udp(formatter, "0.0.0.0:0", host_and_port.to_string()) {
             Ok(w) => w,
             Err(e) => {
-                info!("Failed to connect to UDP syslog server: {:?}", e);
+                error!("Failed to connect to UDP syslog server: {:?}", e);
                 return Err(e);
             }
         }
@@ -359,7 +359,7 @@ pub async fn send_syslog(
         match syslog::unix(formatter) {
             Ok(w) => w,
             Err(e) => {
-                info!("Failed to connect to local syslog: {:?}", e);
+                error!("Failed to connect to local syslog: {:?}", e);
                 return Err(e);
             }
         }

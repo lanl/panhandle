@@ -179,7 +179,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // set up the memory fault monitoring
     if let Some(threshold_fault_count) = args.memory_faults {
         //procfs::get_all_proc_info();
-        procfs::get_major_faults(threshold_fault_count, args.json);
+        let client = Client::new();
+        procfs::get_major_faults(threshold_fault_count, &args.json, &http_bool, &syslog_bool, &hostname, &global_url, &syslog_address, &client, &args.debug).await;
     }
 
     // set up ebpf memory lock
@@ -190,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // load the built ebpf program
-    // this looks like a falure until the ebpf build runs
+    // this looks like a failure until the ebpf build runs
     let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
         env!("OUT_DIR"),
         "/panhandle"

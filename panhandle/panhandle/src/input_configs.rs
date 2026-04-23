@@ -95,9 +95,13 @@ pub struct RawArgs {
     pub cpu: bool,
 
     /// Specify a list of PIDs to track CPU usage of. Leaving empty defaults to showing global cpu usage.
-    #[arg(global = true)]
+    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
-    pub pid_list: Option<Vec<u32>>
+    pub pid_list: Option<Vec<u32>>,
+
+    /// Polling interval in seconds for monitoring information.
+    #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
+    pub poll: Option<u32>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -168,8 +172,9 @@ pub struct ConfigArgs {
 
     pub include_uid: Option<Vec<String>>,
 
-    pub pid_list: Option<Vec<u32>>
-    
+    pub pid_list: Option<Vec<u32>>,
+
+    pub poll: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -217,6 +222,7 @@ impl From<ConfigArgs> for RawArgs {
             include_uid: cfg.include_uid,
             cpu: cfg.cpu,
             pid_list: cfg.pid_list,
+            poll: cfg.poll,
             // output subcommand
             output,
             config: None,
@@ -251,6 +257,9 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     }
     if cli_args.include_uid.is_some() {
         final_args.include_uid = cli_args.include_uid.clone();
+    }
+    if cli_args.poll.is_some() {
+        final_args.poll = cli_args.poll;
     }
 
     // Merge CLI output into config output, or create it if missing

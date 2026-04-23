@@ -17,6 +17,7 @@ use aya_ebpf::{
 };
 
 use panhandle_common::*;
+mod cpu_usage;
 mod fmsh;
 mod readline;
 mod vanilla_execve;

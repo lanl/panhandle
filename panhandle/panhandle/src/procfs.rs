@@ -62,33 +62,61 @@ pub async fn get_major_faults(
                     "PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {},",
                     stat.pid, stat.comm, stat.majflt, stat.cmajflt
                 );
+                let json_string: String = format!(
+                    "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
+                    stat.pid, stat.comm, stat.majflt, stat.cmajflt
+                );
 
-                let arc_string = Arc::new(plain_string.clone().to_string());
                 if *http {
-                    let result =
-                        send_http_post(client, global_url, &arc_string, use_json, debug).await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("HTTP POST Failed: {:?}", result);
+                    if *use_json {
+                        let arc_string = Arc::new(json_string.clone().to_string());
+                        let result =
+                            send_http_post(client, global_url, &arc_string, use_json, debug).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("HTTP POST Failed: {:?}", result);
+                            }
+                        }
+                    } else {
+                        let arc_string = Arc::new(plain_string.clone().to_string());
+                        let result =
+                            send_http_post(client, global_url, &arc_string, use_json, debug).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("HTTP POST Failed: {:?}", result);
+                            }
                         }
                     }
                 }
                 if *syslog {
-                    let result =
-                        send_syslog(hostname, &arc_string, syslog_address, use_json, debug).await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("SYSLOG SEND Failed: {:?}", result);
+                    if *use_json {
+                        let arc_string = Arc::new(json_string.clone().to_string());
+                        let result =
+                            send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
+                                .await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("SYSLOG SEND Failed: {:?}", result);
+                            }
+                        }
+                    } else {
+                        let arc_string = Arc::new(plain_string.clone().to_string());
+                        let result =
+                            send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
+                                .await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("SYSLOG SEND Failed: {:?}", result);
+                            }
                         }
                     }
                 }
-                if *use_json {
-                    info!(
-                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
-                        stat.pid, stat.comm, stat.majflt, stat.cmajflt
-                    );
+                if *debug {
+                    info!("\\{:#?}\\", json_string);
                 } else {
                     info!("{}", plain_string);
                 }

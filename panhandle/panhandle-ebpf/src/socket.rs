@@ -1,9 +1,5 @@
 use aya_ebpf::{
     EbpfContext,
-    helpers::{
-        bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_boot_ns,
-        bpf_probe_read_user_str_bytes,
-    },
     macros::{map, tracepoint},
     maps::HashMap,
     programs::TracePointContext,

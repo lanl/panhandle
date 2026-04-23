@@ -176,24 +176,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => Arc::new("UNKNOWN_HOST".to_string()),
     };
 
-    // set up the memory fault monitoring
-    if let Some(threshold_fault_count) = args.memory_faults {
-        //procfs::get_all_proc_info();
-        let client = Client::new();
-        procfs::get_major_faults(
-            threshold_fault_count,
-            &args.json,
-            &http_bool,
-            &syslog_bool,
-            &hostname,
-            &global_url,
-            &syslog_address,
-            &client,
-            &args.debug,
-        )
-        .await;
-    }
-
     // set up ebpf memory lock
     // SAFETY: unsafe call recommended by the Aya library, requires libc which is a dependency of the rpm build already
     let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
@@ -234,6 +216,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             UID_COUNT
         );
         process::exit(1);
+    }
+
+    // set up the memory fault monitoring
+    if let Some(threshold_fault_count) = args.memory_faults {
+        //procfs::get_all_proc_info();
+        let client = Client::new();
+        let _ = procfs::get_major_faults(
+            threshold_fault_count,
+            &args.json,
+            &http_bool,
+            &syslog_bool,
+            &hostname,
+            &global_url,
+            &syslog_address,
+            &client,
+            &args.debug,
+        )
+        .await;
     }
 
     // move to if statements for the main program args

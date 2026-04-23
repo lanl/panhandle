@@ -8,7 +8,7 @@ use aya_ebpf::{
     maps::HashMap,
     programs::TracePointContext,
 };
-use aya_log_ebpf::info;
+//use aya_log_ebpf::info;
 use panhandle_common::InetSockSetState;
 
 #[map]
@@ -44,7 +44,7 @@ fn try_inet_sock_set_state(ctx: TracePointContext) -> Result<u32, u32> {
         }
     }
     // Decrement count on close
-    // We check oldstate to ensure we only decrement for tracked active conns
+    // Check oldstate to ensure we only decrement for tracked active connections
     else if data.newstate == TCP_CLOSE {
         if let Some(count) = unsafe { TCP_SOCKET_COUNT.get_ptr_mut(&pid) } {
             unsafe {

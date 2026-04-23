@@ -180,7 +180,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(threshold_fault_count) = args.memory_faults {
         //procfs::get_all_proc_info();
         let client = Client::new();
-        procfs::get_major_faults(threshold_fault_count, &args.json, &http_bool, &syslog_bool, &hostname, &global_url, &syslog_address, &client, &args.debug).await;
+        procfs::get_major_faults(
+            threshold_fault_count,
+            &args.json,
+            &http_bool,
+            &syslog_bool,
+            &hostname,
+            &global_url,
+            &syslog_address,
+            &client,
+            &args.debug,
+        )
+        .await;
     }
 
     // set up ebpf memory lock

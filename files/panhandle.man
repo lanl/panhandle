@@ -70,6 +70,9 @@ Monitor events from the execve syscall. This is the program default if no other 
 \fB--shells\fP
 Output execve syscall events only from the shells: bash, tcsh, zsh and fmsh. This does not effect the output of the bash or zsh options.
 .TP
+\fB--socket\fP
+Report the numbers of sockets per process.
+.TP
 \fB-v, --verbose\fP
 Verbose output
 .TP

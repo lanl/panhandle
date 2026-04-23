@@ -18,6 +18,7 @@ mod tests {
             zsh: true,
             quiet: true,
             shells: true,
+            socket: true,
             ..Default::default()
         };
 

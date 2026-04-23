@@ -1,54 +1,63 @@
 use aya_ebpf::{
-    EbpfContext,
-    macros::{map, tracepoint},
+    macros::map,
     maps::HashMap,
-    programs::TracePointContext,
+    helpers::{bpf_get_current_pid_tgid, bpf_get_current_comm},
 };
+use panhandle_common::SocketStats;
 //use aya_log_ebpf::info;
-use panhandle_common::InetSockSetState;
 
-#[map]
-static mut TCP_SOCKET_COUNT: HashMap<u32, u64> = HashMap::with_max_entries(1024, 0);
+#[map(name = "tcp_socket_count")]
+static mut TCP_SOCKET_COUNT: HashMap<u32, SocketStats> = HashMap::with_max_entries(1024, 0);
 
 const TCP_ESTABLISHED: i32 = 1;
 const TCP_CLOSE: i32 = 7;
 
-#[tracepoint]
-pub fn inet_sock_set_state(ctx: TracePointContext) -> u32 {
-    match try_inet_sock_set_state(ctx) {
-        Ok(ret) => ret,
-        Err(ret) => ret,
-    }
+use aya_ebpf::{macros::btf_tracepoint, programs::BtfTracePointContext};
+
+// Using #[btf_tracepoint] instead of #[tracepoint]
+#[btf_tracepoint(function = "inet_sock_set_state")]
+pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> u32 {
+    let _ = try_inet_sock_set_state(ctx);
+    0
 }
 
-fn try_inet_sock_set_state(ctx: TracePointContext) -> Result<u32, u32> {
-    let data: &InetSockSetState = unsafe {
-        match ctx.read_at(0) {
-            Ok(d) => d,
-            Err(_) => return Err(1),
-        }
-    };
+fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
+    const TCP_ESTABLISHED: i32 = 1;
+    const TCP_CLOSE: i32 = 7;
 
-    let pid = ctx.tgid();
+    let newstate: i32 = unsafe { ctx.arg(2) };
+    let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
-    // Increment count on established
-    if data.newstate == TCP_ESTABLISHED {
-        let count = unsafe { TCP_SOCKET_COUNT.get(&pid).unwrap_or(&0) };
-        let new_count = count + 1;
-        unsafe {
-            let _ = TCP_SOCKET_COUNT.insert(&pid, &new_count, 0);
+    if newstate == TCP_ESTABLISHED {
+        // Get existing stats or create new
+        let mut stats = unsafe { 
+            TCP_SOCKET_COUNT.get(&pid).copied().unwrap_or(SocketStats { 
+                count: 0, 
+                comm: [0; 16] 
+            }) 
+        };
+
+        stats.count += 1;
+        
+        // Update process name (handles new PIDs or re-used PIDs)
+        unsafe { 
+            let _ = bpf_get_current_comm(&mut stats.comm); 
         }
-    }
-    // Decrement count on close
-    // Check oldstate to ensure we only decrement for tracked active connections
-    else if data.newstate == TCP_CLOSE {
-        if let Some(count) = unsafe { TCP_SOCKET_COUNT.get_ptr_mut(&pid) } {
+
+        unsafe { 
+            TCP_SOCKET_COUNT.insert(&pid, &stats, 0).map_err(|_| 1u32)? 
+        };
+    } 
+    else if newstate == TCP_CLOSE {
+        // Look up the record; if it exists, decrement the count
+        if let Some(stats) = unsafe { TCP_SOCKET_COUNT.get_ptr_mut(&pid) } {
             unsafe {
-                if *count > 0 {
-                    *count -= 1;
+                if (*stats).count > 0 {
+                    (*stats).count -= 1;
                 }
-                // Cleanup map if count hits zero to save space
-                if *count == 0 {
+
+                // Remove entry if count hits 0 to keep the map clean
+                if (*stats).count == 0 {
                     let _ = TCP_SOCKET_COUNT.remove(&pid);
                 }
             }

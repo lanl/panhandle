@@ -193,6 +193,13 @@ impl core::fmt::Display for ExecveEvent {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct SocketStats {
+    pub count: u32,
+    pub comm: [u8; 16],
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct InetSockSetState {

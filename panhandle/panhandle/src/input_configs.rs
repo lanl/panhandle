@@ -51,6 +51,11 @@ pub struct RawArgs {
     #[serde(default)]
     pub fmsh: bool,
 
+    /// Report the numbers of sockets per process.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub socket: bool,
+
     /// Report the processes with memory faults greater than the specified threshold value.
     #[arg(short, long, value_parser(clap::value_parser!(u64)), global = true)]
     pub memory_faults: Option<u64>,
@@ -156,6 +161,9 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub shells: bool,
 
+    #[serde(default)]
+    pub socket: bool,
+
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
@@ -196,6 +204,7 @@ impl From<ConfigArgs> for RawArgs {
             debug: cfg.debug,
             json: cfg.json,
             shells: cfg.shells,
+            socket: cfg.socket,
             syscall_execve: cfg.syscall_execve,
             bash: cfg.bash,
             fmsh: cfg.fmsh,
@@ -226,6 +235,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.json = cli_args.json || config_args.json;
     final_args.quiet = cli_args.quiet || config_args.quiet;
     final_args.shells = cli_args.shells || config_args.shells;
+    final_args.socket = cli_args.socket || config_args.socket;
     final_args.syscall_execve = cli_args.syscall_execve || config_args.syscall_execve;
 
     // Override non-bools with CLI args if present

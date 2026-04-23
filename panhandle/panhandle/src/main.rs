@@ -1,6 +1,7 @@
 use aya::{
+    Btf,
     maps::{HashMap, perf::AsyncPerfEventArray},
-    programs::{TracePoint, UProbe},
+    programs::{TracePoint, BtfTracePoint, UProbe},
     util::online_cpus,
 };
 use clap::Parser;
@@ -218,8 +219,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         process::exit(1);
     }
 
+    // move to if statements for the main program args
+    // goal is to try to allow a combination of all of the args
+    // this introduces some code duplication
+    let mut socket_handle: Option<JoinHandle<()>> = None;
+    if args.socket {
+
+        let sleep_interval = 10; // consume the option Jaxen is setting for overall polling frequency here
+
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+        let client = Client::new();
+        let btf = Btf::from_sys_fs()?;
+
+        // Attach to the specific tracepoint category and name
+        let program: &mut BtfTracePoint = ebpf.program_mut("inet_sock_set_state").unwrap().try_into()?;
+        program.load("inet_sock_set_state", &btf)?;
+        program.attach()?;
+
+        let socket_map: HashMap<_, u32, SocketStats> = HashMap::try_from(ebpf.take_map("tcp_socket_count").unwrap())?;
+
+        socket_handle = Some(tokio::task::spawn(async move {
+            loop {
+                    for item in socket_map.iter() {
+                        let (pid, stats) = item;
+                        // Convert [u8; 16] to a readable string
+                        let name = std::str::from_utf8(&stats.comm)
+                            .unwrap_or("Unknown Process Name")
+                            .trim_matches('\0');
+
+                        info!("PID: {}, Name: {}, TCPConnectionCount: {}", pid, name, stats.count);
+                    }
+                    let _ = sleep(Duration::from_secs(sleep_interval)).await;
+                }
+            }
+        ));
+
+
+
+
     // set up the memory fault monitoring
-    let mut handle: Option<JoinHandle<()>> = None;
+    let mut memory_handle: Option<JoinHandle<()>> = None;
     let sleep_interval = 10; // consume the option Jaxen is setting for overall polling frequency here
     if let Some(threshold_fault_count) = args.memory_faults {
 
@@ -230,7 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let host = hostname.clone();
         let syslog = syslog_address.clone();
         let client = Client::new();
-        handle = Some(tokio::task::spawn(async move {
+        memory_handle = Some(tokio::task::spawn(async move {
             loop {
                 let _ = procfs::get_major_faults(
                     threshold_fault_count,
@@ -249,9 +290,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
-    // move to if statements for the main program args
-    // goal is to try to allow a combination of all of the args
-    // this introduces some code duplication
     if args.fmsh {
         // fmsh is a little weird - the best way that i have found to monitor it also includes bash
         // basically, find the libreadline shared library and look for it's teardown method...
@@ -536,7 +574,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     }
-    if args.syscall_execve || (!args.bash && !args.zsh && !args.fmsh) {
+    if args.syscall_execve || (!args.bash && !args.zsh && !args.fmsh && 0==4) {
         // this is the main program functionality
         // the default option if the other shells are not selected
         // load the ebpf program
@@ -618,7 +656,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // await the escape signal - this may need to change based on the method of running the program
     signal::ctrl_c().await?;
     debug!("cleanly exiting program as requested");
-    if let Some(handle_ref) = handle {
+    if let Some(handle_ref) = memory_handle {
+        handle_ref.abort();
+    };
+    if let Some(handle_ref) = socket_handle {
         handle_ref.abort();
     };
     Ok(())

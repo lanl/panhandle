@@ -5,7 +5,7 @@ use aya::{
 };
 use clap::Parser;
 use std::{convert::TryInto, path::PathBuf};
-use tokio::signal;
+use tokio::{signal, task::JoinHandle, time::{sleep, Duration}};
 extern crate simplelog;
 use bytes::BytesMut;
 use file_matcher::FileNamed;
@@ -219,21 +219,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // set up the memory fault monitoring
+    let mut handle: Option<JoinHandle<()>> = None;
+    let sleep_interval = 10; // consume the option Jaxen is setting for overall polling frequency here
     if let Some(threshold_fault_count) = args.memory_faults {
+
+        // example if you want to see all the proc info options, note that there is an example
+        // message for RHEL8 detailed in this method in proc.rs
         //procfs::get_all_proc_info();
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
         let client = Client::new();
-        let _ = procfs::get_major_faults(
-            threshold_fault_count,
-            &args.json,
-            &http_bool,
-            &syslog_bool,
-            &hostname,
-            &global_url,
-            &syslog_address,
-            &client,
-            &args.debug,
-        )
-        .await;
+        handle = Some(tokio::task::spawn(async move {
+            loop {
+                let _ = procfs::get_major_faults(
+                    threshold_fault_count,
+                    &args.json,
+                    &http_bool,
+                    &syslog_bool,
+                    &host,
+                    &url,
+                    &syslog,
+                    &client,
+                    &args.debug,
+                )
+                .await;
+                let _ = sleep(Duration::from_secs(sleep_interval)).await;
+            }
+        }));
     }
 
     // move to if statements for the main program args
@@ -605,6 +618,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // await the escape signal - this may need to change based on the method of running the program
     signal::ctrl_c().await?;
     debug!("cleanly exiting program as requested");
-
+    if let Some(handle_ref) = handle {
+        handle_ref.abort();
+    };
     Ok(())
 }

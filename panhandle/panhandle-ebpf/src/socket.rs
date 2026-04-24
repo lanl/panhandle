@@ -1,7 +1,7 @@
 use aya_ebpf::{
+    helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid},
     macros::map,
     maps::HashMap,
-    helpers::{bpf_get_current_pid_tgid, bpf_get_current_comm},
 };
 use panhandle_common::SocketStats;
 //use aya_log_ebpf::info;
@@ -27,28 +27,23 @@ fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
 
     let newstate: i32 = unsafe { ctx.arg(2) };
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
+    let pcomm: [u8; 16];
 
     if newstate == TCP_ESTABLISHED {
+        // Update process name (handles new PIDs or re-used PIDs)
+        pcomm = bpf_get_current_comm().unwrap();
         // Get existing stats or create new
-        let mut stats = unsafe { 
-            TCP_SOCKET_COUNT.get(&pid).copied().unwrap_or(SocketStats { 
-                count: 0, 
-                comm: [0; 16] 
-            }) 
+        let mut stats = unsafe {
+            TCP_SOCKET_COUNT.get(&pid).copied().unwrap_or(SocketStats {
+                count: 0,
+                comm: pcomm,
+            })
         };
 
         stats.count += 1;
-        
-        // Update process name (handles new PIDs or re-used PIDs)
-        unsafe { 
-            let _ = bpf_get_current_comm(&mut stats.comm); 
-        }
 
-        unsafe { 
-            TCP_SOCKET_COUNT.insert(&pid, &stats, 0).map_err(|_| 1u32)? 
-        };
-    } 
-    else if newstate == TCP_CLOSE {
+        unsafe { TCP_SOCKET_COUNT.insert(&pid, &stats, 0).map_err(|_| 1u32)? };
+    } else if newstate == TCP_CLOSE {
         // Look up the record; if it exists, decrement the count
         if let Some(stats) = unsafe { TCP_SOCKET_COUNT.get_ptr_mut(&pid) } {
             unsafe {

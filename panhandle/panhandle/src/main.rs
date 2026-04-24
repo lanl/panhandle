@@ -1,12 +1,16 @@
 use aya::{
     Btf,
     maps::{HashMap, perf::AsyncPerfEventArray},
-    programs::{TracePoint, BtfTracePoint, UProbe},
+    programs::{BtfTracePoint, TracePoint, UProbe},
     util::online_cpus,
 };
 use clap::Parser;
 use std::{convert::TryInto, path::PathBuf};
-use tokio::{signal, task::JoinHandle, time::{sleep, Duration}};
+use tokio::{
+    signal,
+    task::JoinHandle,
+    time::{Duration, sleep},
+};
 extern crate simplelog;
 use bytes::BytesMut;
 use file_matcher::FileNamed;
@@ -224,7 +228,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // this introduces some code duplication
     let mut socket_handle: Option<JoinHandle<()>> = None;
     if args.socket {
-
         let sleep_interval = 10; // consume the option Jaxen is setting for overall polling frequency here
 
         let url = global_url.clone();
@@ -234,36 +237,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let btf = Btf::from_sys_fs()?;
 
         // Attach to the specific tracepoint category and name
-        let program: &mut BtfTracePoint = ebpf.program_mut("inet_sock_set_state").unwrap().try_into()?;
+        let program: &mut BtfTracePoint = ebpf
+            .program_mut("inet_sock_set_state")
+            .unwrap()
+            .try_into()?;
         program.load("inet_sock_set_state", &btf)?;
         program.attach()?;
 
-        let socket_map: HashMap<_, u32, SocketStats> = HashMap::try_from(ebpf.take_map("tcp_socket_count").unwrap())?;
+        let socket_map: HashMap<_, u32, SocketStats> =
+            HashMap::try_from(ebpf.take_map("tcp_socket_count").unwrap())?;
 
         socket_handle = Some(tokio::task::spawn(async move {
             loop {
-                    for item in socket_map.iter() {
-                        let (pid, stats) = item;
-                        // Convert [u8; 16] to a readable string
-                        let name = std::str::from_utf8(&stats.comm)
-                            .unwrap_or("Unknown Process Name")
-                            .trim_matches('\0');
+                for item in socket_map.iter() {
+                    let (pid, stats) = item.unwrap();
+                    // Convert [u8; 16] to a readable string
+                    let name = std::str::from_utf8(&stats.comm)
+                        .unwrap_or("Unknown Process Name")
+                        .trim_matches('\0');
 
-                        info!("PID: {}, Name: {}, TCPConnectionCount: {}", pid, name, stats.count);
-                    }
-                    let _ = sleep(Duration::from_secs(sleep_interval)).await;
+                    info!(
+                        "PID: {}, Name: {}, TCPConnectionCount: {}",
+                        pid, name, stats.count
+                    );
                 }
+                let _ = sleep(Duration::from_secs(sleep_interval)).await;
             }
-        ));
-
-
-
+        }));
+    }
 
     // set up the memory fault monitoring
     let mut memory_handle: Option<JoinHandle<()>> = None;
     let sleep_interval = 10; // consume the option Jaxen is setting for overall polling frequency here
     if let Some(threshold_fault_count) = args.memory_faults {
-
         // example if you want to see all the proc info options, note that there is an example
         // message for RHEL8 detailed in this method in proc.rs
         //procfs::get_all_proc_info();
@@ -574,7 +580,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     }
-    if args.syscall_execve || (!args.bash && !args.zsh && !args.fmsh && 0==4) {
+    if args.syscall_execve || (!args.bash && !args.zsh && !args.fmsh && 0 == 4) {
         // this is the main program functionality
         // the default option if the other shells are not selected
         // load the ebpf program

@@ -97,6 +97,10 @@ pub struct RawArgs {
     #[arg(short, long, global = true)]
     #[serde(default)]
     pub zsh: bool,
+
+    /// Polling interval in seconds for monitoring information.
+    #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
+    pub poll: Option<u32>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -168,6 +172,8 @@ pub struct ConfigArgs {
     pub output: Option<Vec<OutputConfig>>,
 
     pub include_uid: Option<Vec<String>>,
+
+    pub poll: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -215,6 +221,7 @@ impl From<ConfigArgs> for RawArgs {
             exclude_max_uid: cfg.exclude_max_uid,
             executables: cfg.executables,
             include_uid: cfg.include_uid,
+            poll: cfg.poll,
             // output subcommand
             output,
             config: None,
@@ -253,6 +260,9 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     }
     if cli_args.memory_faults.is_some() {
         final_args.memory_faults = cli_args.memory_faults;
+    }
+    if cli_args.poll.is_some() {
+        final_args.poll = cli_args.poll;
     }
 
     // Merge CLI output into config output, or create it if missing

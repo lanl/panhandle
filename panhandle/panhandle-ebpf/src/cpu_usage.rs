@@ -42,8 +42,6 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
     // SAFETY: this is a core BPF function implemented in aya
     let now = unsafe { bpf_ktime_get_ns() };
 
-    info!(&ctx, "sched_switch: prev_pid={}, now={}", prev_pid, now);
-
     // handle the outgoing task
     let start_time_slot = START_TIMES.get_ptr_mut(0).ok_or_else(|| {
         info!(&ctx, "Failed to get start_time_slot");
@@ -53,31 +51,21 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
     // SAFETY: start_time_slot is valid as we just got it from the map
     let prev_start = unsafe { *start_time_slot };
 
-    info!(&ctx, "prev_start={}", prev_start);
-
     // if task was running, account its runtime
     if prev_start != 0 {
         let delta = now - prev_start;
-        info!(&ctx, "delta={}", delta);
 
         if prev_pid != 0 {
             // update the per PID total
             match PID_CPU_TIME.get_ptr_mut(&prev_pid) {
                 Some(entry) => {
                     // SAFETY: Activating Some block here means the entry is populated
-                    let old_value = unsafe { *entry };
                     unsafe { *entry += delta };
-                    let new_value = unsafe { *entry };
-                    info!(
-                        &ctx,
-                        "Updated PID {} CPU time: {} -> {}", prev_pid, old_value, new_value
-                    );
                 }
                 None => {
                     PID_CPU_TIME
                         .insert(&prev_pid, &delta, 0)
                         .map_err(|_e| 2i64)?;
-                    info!(&ctx, "Inserted new PID {} with delta {}", prev_pid, delta);
                 }
             }
 
@@ -87,16 +75,12 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
                 3i64
             })?;
             // SAFETY: Would have gotten panic on earlier line if busy_slot was null
-            let old_busy = unsafe { *busy_slot };
             unsafe { *busy_slot += delta };
-            let new_busy = unsafe { *busy_slot };
-            info!(&ctx, "Updated busy CPU time: {} -> {}", old_busy, new_busy);
         }
     }
 
     // now the start time for the incoming task is now
     unsafe { *start_time_slot = now };
-    info!(&ctx, "Set new start_time to {}", now);
 
     Ok(0)
 }

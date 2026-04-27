@@ -596,7 +596,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     }
-    if args.syscall_execve || (!args.bash && !args.zsh && !args.fmsh && 0 == 4) {
+    if args.syscall_execve || (!args.bash && !args.zsh && !args.fmsh && !args.memory_faults && !args.socket) {
         // this is the main program functionality
         // the default option if the other shells are not selected
         // load the ebpf program

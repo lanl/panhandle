@@ -1,9 +1,9 @@
 use reqwest::Client;
 use std::sync::Arc;
 
-use crate::helpers::{send_http_post, send_syslog};
+// local imports
+use crate::helpers::output_message;
 use procfs::process::all_processes;
-use simplelog::*;
 
 /*
 /*
@@ -42,7 +42,7 @@ pub async fn get_major_faults(
     use_json: &bool,
     http: &bool,
     syslog: &bool,
-    hostname: &String,
+    hostname: &Arc<String>,
     global_url: &Arc<String>,
     syslog_address: &Arc<String>,
     client: &Client,
@@ -66,60 +66,7 @@ pub async fn get_major_faults(
                     "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
                     stat.pid, stat.comm, stat.majflt, stat.cmajflt
                 );
-
-                if *http {
-                    if *use_json {
-                        let arc_string = Arc::new(json_string.clone().to_string());
-                        let result =
-                            send_http_post(client, global_url, &arc_string, use_json, debug).await;
-                        match result {
-                            Ok(()) => {}
-                            Err(result) => {
-                                error!("HTTP POST Failed: {:?}", result);
-                            }
-                        }
-                    } else {
-                        let arc_string = Arc::new(plain_string.clone().to_string());
-                        let result =
-                            send_http_post(client, global_url, &arc_string, use_json, debug).await;
-                        match result {
-                            Ok(()) => {}
-                            Err(result) => {
-                                error!("HTTP POST Failed: {:?}", result);
-                            }
-                        }
-                    }
-                }
-                if *syslog {
-                    if *use_json {
-                        let arc_string = Arc::new(json_string.clone().to_string());
-                        let result =
-                            send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
-                                .await;
-                        match result {
-                            Ok(()) => {}
-                            Err(result) => {
-                                error!("SYSLOG SEND Failed: {:?}", result);
-                            }
-                        }
-                    } else {
-                        let arc_string = Arc::new(plain_string.clone().to_string());
-                        let result =
-                            send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
-                                .await;
-                        match result {
-                            Ok(()) => {}
-                            Err(result) => {
-                                error!("SYSLOG SEND Failed: {:?}", result);
-                            }
-                        }
-                    }
-                }
-                if *debug {
-                    info!("\\{:#?}\\", json_string);
-                } else {
-                    info!("{}", plain_string);
-                }
+                output_message(http, syslog, hostname, syslog_address, global_url, use_json, &plain_string, &json_string, client, debug).await;
             }
         }
     }

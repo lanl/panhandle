@@ -541,3 +541,71 @@ pub async fn validate_url(url: &str) -> Result<&str, String> {
         Ok(url) // URL found valid
     }
 }
+
+// wrapper method to handle output formatting to syslog or http
+pub async fn output_message(
+    http: &bool, 
+    syslog: &bool, 
+    hostname: &Arc<String>,
+    syslog_address: &Arc<String>,
+    global_url: &Arc<String>,
+    use_json: &bool, 
+    plain_string: &String, 
+    json_string: &String, 
+    client: &Client, 
+    debug: &bool
+) {
+    if *http {
+        if *use_json {
+            let arc_string = Arc::new(json_string.clone().to_string());
+            let result =
+                send_http_post(&client, global_url, &arc_string, use_json, debug).await;
+            match result {
+                Ok(()) => {}
+                Err(result) => {
+                    error!("HTTP POST Failed: {:?}", result);
+                }
+            }
+        } else {
+            let arc_string = Arc::new(plain_string.clone().to_string());
+            let result =
+                send_http_post(&client, global_url, &arc_string, use_json, debug).await;
+            match result {
+                Ok(()) => {}
+                Err(result) => {
+                    error!("HTTP POST Failed: {:?}", result);
+                }
+            }
+        }
+    }
+    if *syslog {
+        if *use_json {
+            let arc_string = Arc::new(json_string.clone().to_string());
+            let result =
+                send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
+                    .await;
+            match result {
+                Ok(()) => {}
+                Err(result) => {
+                    error!("SYSLOG SEND Failed: {:?}", result);
+                }
+            }
+        } else {
+            let arc_string = Arc::new(plain_string.clone().to_string());
+            let result =
+                send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
+                    .await;
+            match result {
+                Ok(()) => {}
+                Err(result) => {
+                    error!("SYSLOG SEND Failed: {:?}", result);
+                }
+            }
+        }
+    }
+    if *debug {
+        info!("\\{:#?}\\", json_string);
+    } else {
+        info!("{}", plain_string);
+    }
+}

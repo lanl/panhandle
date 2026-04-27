@@ -23,6 +23,8 @@ use std::{
     sync::Arc,
 };
 use uzers::get_current_uid;
+use procfs::process::Process;
+
 #[rustfmt::skip]
 // this is the local import section
 mod helpers;
@@ -31,7 +33,7 @@ use helpers::*;
 use panhandle_common::*;
 mod input_configs;
 use crate::input_configs::*;
-mod procfs;
+mod procfs_helpers;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -228,12 +230,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // this introduces some code duplication
     let mut socket_handle: Option<JoinHandle<()>> = None;
     if args.socket {
-        let sleep_interval = 10; // consume the option Jaxen is setting for overall polling frequency here
+        let sleep_interval = 2; // consume the option Jaxen is setting for overall polling frequency here
 
-        let url = global_url.clone();
-        let host = hostname.clone();
-        let syslog = syslog_address.clone();
-        let client = Client::new();
         let btf = Btf::from_sys_fs()?;
 
         // Attach to the specific tracepoint category and name
@@ -244,22 +242,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         program.load("inet_sock_set_state", &btf)?;
         program.attach()?;
 
-        let socket_map: HashMap<_, u32, SocketStats> =
+        let socket_map: HashMap<_, u32, u32> =
             HashMap::try_from(ebpf.take_map("tcp_socket_count").unwrap())?;
+
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+        let client = Client::new();
 
         socket_handle = Some(tokio::task::spawn(async move {
             loop {
                 for item in socket_map.iter() {
-                    let (pid, stats) = item.unwrap();
-                    // Convert [u8; 16] to a readable string
-                    let name = std::str::from_utf8(&stats.comm)
-                        .unwrap_or("Unknown Process Name")
-                        .trim_matches('\0');
+                    let (pid, count) = item.unwrap();
+                    if count > 0 {
+                        if let Ok(proc) = Process::new(pid.try_into().unwrap()) {
+                            if let Ok(stat) = proc.stat() {
+                                debug!(
+                                    "PID: {}, Comm: {}, TCPConnectionCount: {}",
+                                    pid, stat.comm, count
+                                );
 
-                    info!(
-                        "PID: {}, Name: {}, TCPConnectionCount: {}",
-                        pid, name, stats.count
-                    );
+                                let plain_string = format!(
+                                    "PID: {}, Comm: {}, TCPConnectionCount: {}",
+                                    pid, stat.comm, count
+                                );
+                                let json_string: String = format!(
+                                    "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"TCPConnectionCount\": \"{}\"}}",
+                                    pid, stat.comm, count
+                                );
+                                output_message(&http_bool, &syslog_bool, &host, &syslog, &url, &args.json, &plain_string, &json_string, &client,  &args.debug).await;
+                            }
+                        }
+                    }
                 }
                 let _ = sleep(Duration::from_secs(sleep_interval)).await;
             }
@@ -276,10 +290,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
+
         let client = Client::new();
         memory_handle = Some(tokio::task::spawn(async move {
+
             loop {
-                let _ = procfs::get_major_faults(
+                let _ = procfs_helpers::get_major_faults(
                     threshold_fault_count,
                     &args.json,
                     &http_bool,

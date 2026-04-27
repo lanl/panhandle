@@ -289,14 +289,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .await;
                     }
                 }
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.clone().into())).await;
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
         }));
     }
 
     // set up the memory fault monitoring
     let mut memory_handle: Option<JoinHandle<()>> = None;
-    
+
     if let Some(threshold_fault_count) = args.memory_faults {
         // example if you want to see all the proc info options, note that there is an example
         // message for RHEL8 detailed in this method in proc.rs
@@ -320,7 +320,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &args.debug,
                 )
                 .await;
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.clone().into())).await;
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
         }));
     }

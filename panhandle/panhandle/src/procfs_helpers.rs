@@ -66,7 +66,19 @@ pub async fn get_major_faults(
                     "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
                     stat.pid, stat.comm, stat.majflt, stat.cmajflt
                 );
-                output_message(http, syslog, hostname, syslog_address, global_url, use_json, &plain_string, &json_string, client, debug).await;
+                output_message(
+                    http,
+                    syslog,
+                    hostname,
+                    syslog_address,
+                    global_url,
+                    use_json,
+                    &plain_string,
+                    &json_string,
+                    client,
+                    debug,
+                )
+                .await;
             }
         }
     }

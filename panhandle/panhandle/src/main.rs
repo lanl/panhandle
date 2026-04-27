@@ -15,6 +15,7 @@ extern crate simplelog;
 use bytes::BytesMut;
 use file_matcher::FileNamed;
 
+use procfs::process::Process;
 use reqwest::Client;
 use simplelog::*;
 use std::{
@@ -23,7 +24,6 @@ use std::{
     sync::Arc,
 };
 use uzers::get_current_uid;
-use procfs::process::Process;
 
 #[rustfmt::skip]
 // this is the local import section
@@ -254,25 +254,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             loop {
                 for item in socket_map.iter() {
                     let (pid, count) = item.unwrap();
-                    if count > 0 {
-                        if let Ok(proc) = Process::new(pid.try_into().unwrap()) {
-                            if let Ok(stat) = proc.stat() {
-                                debug!(
-                                    "PID: {}, Comm: {}, TCPConnectionCount: {}",
-                                    pid, stat.comm, count
-                                );
+                    if count > 0
+                        && let Ok(proc) = Process::new(pid.try_into().unwrap())
+                        && let Ok(stat) = proc.stat()
+                    {
+                        debug!(
+                            "PID: {}, Comm: {}, TCPConnectionCount: {}",
+                            pid, stat.comm, count
+                        );
 
-                                let plain_string = format!(
-                                    "PID: {}, Comm: {}, TCPConnectionCount: {}",
-                                    pid, stat.comm, count
-                                );
-                                let json_string: String = format!(
-                                    "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"TCPConnectionCount\": \"{}\"}}",
-                                    pid, stat.comm, count
-                                );
-                                output_message(&http_bool, &syslog_bool, &host, &syslog, &url, &args.json, &plain_string, &json_string, &client,  &args.debug).await;
-                            }
-                        }
+                        let plain_string = format!(
+                            "PID: {}, Comm: {}, TCPConnectionCount: {}",
+                            pid, stat.comm, count
+                        );
+                        let json_string: String = format!(
+                            "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"TCPConnectionCount\": \"{}\"}}",
+                            pid, stat.comm, count
+                        );
+                        output_message(
+                            &http_bool,
+                            &syslog_bool,
+                            &host,
+                            &syslog,
+                            &url,
+                            &args.json,
+                            &plain_string,
+                            &json_string,
+                            &client,
+                            &args.debug,
+                        )
+                        .await;
                     }
                 }
                 let _ = sleep(Duration::from_secs(sleep_interval)).await;
@@ -293,7 +304,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let client = Client::new();
         memory_handle = Some(tokio::task::spawn(async move {
-
             loop {
                 let _ = procfs_helpers::get_major_faults(
                     threshold_fault_count,
@@ -596,7 +606,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     }
-    if args.syscall_execve || (!args.bash && !args.zsh && !args.fmsh && !args.memory_faults && !args.socket) {
+    if args.syscall_execve
+        || (!args.bash && !args.zsh && !args.fmsh && args.memory_faults.is_none() && !args.socket)
+    {
         // this is the main program functionality
         // the default option if the other shells are not selected
         // load the ebpf program

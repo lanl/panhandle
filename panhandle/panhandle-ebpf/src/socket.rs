@@ -1,8 +1,4 @@
-use aya_ebpf::{
-    helpers::bpf_get_current_pid_tgid,
-    macros::map,
-    maps::HashMap,
-};
+use aya_ebpf::{helpers::bpf_get_current_pid_tgid, macros::map, maps::HashMap};
 //use aya_log_ebpf::info;
 
 #[map(name = "tcp_socket_count")]
@@ -29,9 +25,7 @@ fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
         // Get process name (handles new PIDs or re-used PIDs)
         //pcomm = bpf_get_current_comm().unwrap();
         // Get existing stats or create new
-        let mut count = unsafe {
-            TCP_SOCKET_COUNT.get(&pid).copied().unwrap_or(0)
-        };
+        let mut count = unsafe { TCP_SOCKET_COUNT.get(&pid).copied().unwrap_or(0) };
 
         count += 1;
 

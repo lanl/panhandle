@@ -5,7 +5,7 @@ use port_check::*;
 use std::{fs::canonicalize, sync::Arc};
 use url::Url;
 use reqwest::{Client, Error, Response, header::CONTENT_TYPE};
-use simplelog::{info, debug};
+use simplelog::{debug, error, info};
 use syslog::{Error as SyslogError, Facility, Formatter3164};
 use uzers::get_user_by_uid;
 use bytes::BytesMut;
@@ -92,7 +92,7 @@ pub async fn consume_shell_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("HTTP POST Failed: {:?}", result);
+                            error!("HTTP POST Failed: {:?}", result);
                         }
                     }
                 }
@@ -105,7 +105,7 @@ pub async fn consume_shell_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            debug!("SYSLOG SEND Failed: {:?}", result);
+                            error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
                 }
@@ -132,7 +132,7 @@ pub async fn consume_shell_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("HTTP POST Failed: {:?}", result);
+                            error!("HTTP POST Failed: {:?}", result);
                         }
                     }
                 } else if syslog {
@@ -143,7 +143,7 @@ pub async fn consume_shell_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            debug!("SYSLOG SEND Failed: {:?}", result);
+                            error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
                 } else {
@@ -259,10 +259,11 @@ pub async fn consume_execve_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("HTTP POST Failed: {:?}", result);
+                            error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                } else if syslog {
+                } 
+                if syslog {
                     let syslog_string: Arc<String> = Arc::new(json_string.clone());
                     let result: Result<(), SyslogError> =
                         send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
@@ -270,7 +271,7 @@ pub async fn consume_execve_ebpf_map(
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("SYSLOG SEND Failed: {:?}", result);
+                            error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
                 }
@@ -288,30 +289,30 @@ pub async fn consume_execve_ebpf_map(
                     formatted_utc
                 );
                 if http {
-                    let http_string: Arc<String> = Arc::new(string);
+                    let http_string: Arc<String> = Arc::new(string.clone());
                     let result: Result<(), Error> =
                         send_http_post(client, &global_url, &http_string, &json, &debug).await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("HTTP POST Failed: {:?}", result);
+                            error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                } else if syslog {
-                    let syslog_string: Arc<String> = Arc::new(string);
+                } 
+                if syslog {
+                    let syslog_string: Arc<String> = Arc::new(string.clone());
                     let result: Result<(), SyslogError> =
                         send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
                             .await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
-                            info!("SYSLOG SEND Failed: {:?}", result);
+                            error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
-                } else {
-                    // this is the human readable output
-                    info!("{}", string);
-                }
+                } 
+                // this is the human readable output
+                info!("{}", string);
             }
         }
     }
@@ -343,7 +344,7 @@ pub async fn send_syslog(
         match syslog::tcp(formatter, host_and_port.to_string()) {
             Ok(w) => w,
             Err(e) => {
-                info!("Failed to connect to TCP syslog server: {:?}", e);
+                error!("Failed to connect to TCP syslog server: {:?}", e);
                 return Err(e);
             }
         }
@@ -351,7 +352,7 @@ pub async fn send_syslog(
         match syslog::udp(formatter, "0.0.0.0:0", host_and_port.to_string()) {
             Ok(w) => w,
             Err(e) => {
-                info!("Failed to connect to UDP syslog server: {:?}", e);
+                error!("Failed to connect to UDP syslog server: {:?}", e);
                 return Err(e);
             }
         }
@@ -359,7 +360,7 @@ pub async fn send_syslog(
         match syslog::unix(formatter) {
             Ok(w) => w,
             Err(e) => {
-                info!("Failed to connect to local syslog: {:?}", e);
+                error!("Failed to connect to local syslog: {:?}", e);
                 return Err(e);
             }
         }
@@ -384,13 +385,13 @@ pub async fn send_syslog(
                         }
                     }
                     Err(e) => {
-                        info!("Error sending JSON to syslog: {:?}", e);
+                        error!("Error sending JSON to syslog: {:?}", e);
                         return Err(e);
                     }
                 }
             }
             Err(e) => {
-                info!("Invalid JSON: {:?}", e);
+                error!("Invalid JSON: {:?}", e);
             }
         }
     } else {
@@ -407,7 +408,7 @@ pub async fn send_syslog(
                 }
             }
             Err(e) => {
-                info!("Error sending plaintext to syslog: {:?}", e);
+                error!("Error sending plaintext to syslog: {:?}", e);
                 return Err(e);
             }
         }
@@ -442,7 +443,7 @@ pub async fn send_http_post(
                     .await?;
             }
             Err(val) => {
-                info!("{:?}", val);
+                error!("{:?}", val);
             }
         }
     } else {
@@ -467,10 +468,10 @@ pub async fn send_http_post(
                 info!("Unauthorized!");
             }
             reqwest::StatusCode::REQUEST_TIMEOUT => {
-                info!("Connection timed out");
+                error!("Connection timed out");
             }
             _ => {
-                info!("Unexpected error sending HTTP POST!");
+                error!("Unexpected error sending HTTP POST!");
             }
         }
     };
@@ -538,5 +539,73 @@ pub async fn validate_url(url: &str) -> Result<&str, String> {
         Err(format!("\nInvalid URL '{}' provided", url))
     } else {
         Ok(url) // URL found valid
+    }
+}
+
+// wrapper method to handle output formatting to syslog or http
+pub async fn output_message(
+    http: &bool, 
+    syslog: &bool, 
+    hostname: &Arc<String>,
+    syslog_address: &Arc<String>,
+    global_url: &Arc<String>,
+    use_json: &bool, 
+    plain_string: &String, 
+    json_string: &String, 
+    client: &Client, 
+    debug: &bool
+) {
+    if *http {
+        if *use_json {
+            let arc_string = Arc::new(json_string.clone().to_string());
+            let result =
+                send_http_post(client, global_url, &arc_string, use_json, debug).await;
+            match result {
+                Ok(()) => {}
+                Err(result) => {
+                    error!("HTTP POST Failed: {:?}", result);
+                }
+            }
+        } else {
+            let arc_string = Arc::new(plain_string.clone().to_string());
+            let result =
+                send_http_post(client, global_url, &arc_string, use_json, debug).await;
+            match result {
+                Ok(()) => {}
+                Err(result) => {
+                    error!("HTTP POST Failed: {:?}", result);
+                }
+            }
+        }
+    }
+    if *syslog {
+        if *use_json {
+            let arc_string = Arc::new(json_string.clone().to_string());
+            let result =
+                send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
+                    .await;
+            match result {
+                Ok(()) => {}
+                Err(result) => {
+                    error!("SYSLOG SEND Failed: {:?}", result);
+                }
+            }
+        } else {
+            let arc_string = Arc::new(plain_string.clone().to_string());
+            let result =
+                send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
+                    .await;
+            match result {
+                Ok(()) => {}
+                Err(result) => {
+                    error!("SYSLOG SEND Failed: {:?}", result);
+                }
+            }
+        }
+    }
+    if *debug {
+        info!("\\{:#?}\\", json_string);
+    } else {
+        info!("{}", plain_string);
     }
 }

@@ -1,15 +1,21 @@
 use aya::{
+    Btf,
     maps::{HashMap, perf::AsyncPerfEventArray},
-    programs::{TracePoint, UProbe},
+    programs::{BtfTracePoint, TracePoint, UProbe},
     util::online_cpus,
 };
 use clap::Parser;
 use std::{convert::TryInto, path::PathBuf};
-use tokio::signal;
+use tokio::{
+    signal,
+    task::JoinHandle,
+    time::{Duration, sleep},
+};
 extern crate simplelog;
 use bytes::BytesMut;
 use file_matcher::FileNamed;
 
+use procfs::process::Process;
 use reqwest::Client;
 use simplelog::*;
 use std::{
@@ -18,6 +24,7 @@ use std::{
     sync::Arc,
 };
 use uzers::get_current_uid;
+
 #[rustfmt::skip]
 // this is the local import section
 mod helpers;
@@ -26,6 +33,7 @@ use helpers::*;
 use panhandle_common::*;
 mod input_configs;
 use crate::input_configs::*;
+mod procfs_helpers;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -183,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // load the built ebpf program
-    // this looks like a falure until the ebpf build runs
+    // this looks like a failure until the ebpf build runs
     let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
         env!("OUT_DIR"),
         "/panhandle"
@@ -217,9 +225,106 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         process::exit(1);
     }
 
+    let mut polling_freq_seconds: u32 = 30;
+    if let Some(poll) = args.poll {
+        polling_freq_seconds = poll;
+    }
+
     // move to if statements for the main program args
     // goal is to try to allow a combination of all of the args
     // this introduces some code duplication
+    let mut socket_handle: Option<JoinHandle<()>> = None;
+    if args.socket {
+        let btf = Btf::from_sys_fs()?;
+
+        // Attach to the specific tracepoint category and name
+        let program: &mut BtfTracePoint = ebpf
+            .program_mut("inet_sock_set_state")
+            .unwrap()
+            .try_into()?;
+        program.load("inet_sock_set_state", &btf)?;
+        program.attach()?;
+
+        let socket_map: HashMap<_, u32, u32> =
+            HashMap::try_from(ebpf.take_map("tcp_socket_count").unwrap())?;
+
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+        let client = Client::new();
+
+        socket_handle = Some(tokio::task::spawn(async move {
+            loop {
+                for item in socket_map.iter() {
+                    let (pid, count) = item.unwrap();
+                    if count > 0
+                        && let Ok(proc) = Process::new(pid.try_into().unwrap())
+                        && let Ok(stat) = proc.stat()
+                    {
+                        debug!(
+                            "PID: {}, Comm: {}, TCPConnectionCount: {}",
+                            pid, stat.comm, count
+                        );
+
+                        let plain_string = format!(
+                            "PID: {}, Comm: {}, TCPConnectionCount: {}",
+                            pid, stat.comm, count
+                        );
+                        let json_string: String = format!(
+                            "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"TCPConnectionCount\": \"{}\"}}",
+                            pid, stat.comm, count
+                        );
+                        output_message(
+                            &http_bool,
+                            &syslog_bool,
+                            &host,
+                            &syslog,
+                            &url,
+                            &args.json,
+                            &plain_string,
+                            &json_string,
+                            &client,
+                            &args.debug,
+                        )
+                        .await;
+                    }
+                }
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.clone().into())).await;
+            }
+        }));
+    }
+
+    // set up the memory fault monitoring
+    let mut memory_handle: Option<JoinHandle<()>> = None;
+    
+    if let Some(threshold_fault_count) = args.memory_faults {
+        // example if you want to see all the proc info options, note that there is an example
+        // message for RHEL8 detailed in this method in proc.rs
+        //procfs::get_all_proc_info();
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+
+        let client = Client::new();
+        memory_handle = Some(tokio::task::spawn(async move {
+            loop {
+                let _ = procfs_helpers::get_major_faults(
+                    threshold_fault_count,
+                    &args.json,
+                    &http_bool,
+                    &syslog_bool,
+                    &host,
+                    &url,
+                    &syslog,
+                    &client,
+                    &args.debug,
+                )
+                .await;
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.clone().into())).await;
+            }
+        }));
+    }
+
     if args.fmsh {
         // fmsh is a little weird - the best way that i have found to monitor it also includes bash
         // basically, find the libreadline shared library and look for it's teardown method...
@@ -504,7 +609,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     }
-    if args.syscall_execve || (!args.bash && !args.zsh && !args.fmsh) {
+    if args.syscall_execve
+        || (!args.bash && !args.zsh && !args.fmsh && args.memory_faults.is_none() && !args.socket)
+    {
         // this is the main program functionality
         // the default option if the other shells are not selected
         // load the ebpf program
@@ -586,6 +693,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // await the escape signal - this may need to change based on the method of running the program
     signal::ctrl_c().await?;
     debug!("cleanly exiting program as requested");
-
+    if let Some(handle_ref) = memory_handle {
+        handle_ref.abort();
+    };
+    if let Some(handle_ref) = socket_handle {
+        handle_ref.abort();
+    };
     Ok(())
 }

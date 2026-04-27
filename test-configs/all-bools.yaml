@@ -7,3 +7,4 @@ verbose: true
 zsh: true
 quiet: true
 shells: true
+socket: true

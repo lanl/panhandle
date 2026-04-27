@@ -35,6 +35,9 @@ Specify the absolute path to the desired log file.
 \fB-f, --fmsh\fP
 Monitor events from the fmsh shell using the readline function. This also returns events from the bash shell as fmsh is a derivative of bash.
 .TP
+\fB-m, --memory-faults <MEMORY_FAULTS>\fP
+Report the processes with memory faults greater than the specified threshold value.
+.TP
 \fB-h, --help\fP
 Print help
 .TP
@@ -67,6 +70,9 @@ Monitor events from the execve syscall. This is the program default if no other 
 \fB--shells\fP
 Output execve syscall events only from the shells: bash, tcsh, zsh and fmsh. This does not effect the output of the bash or zsh options.
 .TP
+\fB--socket\fP
+Report the numbers of sockets per process.
+.TP
 \fB-v, --verbose\fP
 Verbose output
 .TP
@@ -75,16 +81,24 @@ Print version
 .TP
 \fB-z, --zsh\fP
 Monitor events from the zsh shell using the zlentry function.
+.TP
+\fB--poll <POLLING_FREQUENCY_SECONDS>\fP
+Polling interval in seconds for monitoring information.
 .SH FILES
+.TP
+\fC/opt/panhandle/panhandle.yaml\fR
+The panhandle configuration file
 .TP
 \fC/usr/sbin/panhandle\fR
 The panhandle executable
 .TP
 \fC/usr/lib/systemd/system/panhandle.service\fR
-The systemd service file
+The panhandle systemd service file
 .TP
 \fC/var/log/panhandle/panhandle.log\fR
 The panhandle log directory and log file(s)
+\fC/etc/logrotate.d/panhandle\fR
+The panhandle logrotate configuration file
 .SH "SEE ALSO"
 bash(1), zsh(1)
 .SH BUGS

@@ -51,6 +51,15 @@ pub struct RawArgs {
     #[serde(default)]
     pub fmsh: bool,
 
+    /// Report the numbers of sockets per process.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub socket: bool,
+
+    /// Report the processes with memory faults greater than the specified threshold value.
+    #[arg(short, long, value_parser(clap::value_parser!(u64)), global = true)]
+    pub memory_faults: Option<u64>,
+
     /// Subcommand to specify the type of output desired, see the --syslog, --http, or --file options.
     #[command(subcommand)]
     pub output: Option<OutputCommand>,
@@ -88,6 +97,10 @@ pub struct RawArgs {
     #[arg(short, long, global = true)]
     #[serde(default)]
     pub zsh: bool,
+
+    /// Polling interval in seconds for monitoring information.
+    #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
+    pub poll: Option<u32>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -138,6 +151,8 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub fmsh: bool,
 
+    pub memory_faults: Option<u64>,
+
     #[serde(default)]
     pub zsh: bool,
 
@@ -150,10 +165,15 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub shells: bool,
 
+    #[serde(default)]
+    pub socket: bool,
+
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
     pub include_uid: Option<Vec<String>>,
+
+    pub poll: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -190,15 +210,18 @@ impl From<ConfigArgs> for RawArgs {
             debug: cfg.debug,
             json: cfg.json,
             shells: cfg.shells,
+            socket: cfg.socket,
             syscall_execve: cfg.syscall_execve,
             bash: cfg.bash,
             fmsh: cfg.fmsh,
+            memory_faults: cfg.memory_faults,
             zsh: cfg.zsh,
             quiet: cfg.quiet,
             exclude_min_uid: cfg.exclude_min_uid,
             exclude_max_uid: cfg.exclude_max_uid,
             executables: cfg.executables,
             include_uid: cfg.include_uid,
+            poll: cfg.poll,
             // output subcommand
             output,
             config: None,
@@ -219,6 +242,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.json = cli_args.json || config_args.json;
     final_args.quiet = cli_args.quiet || config_args.quiet;
     final_args.shells = cli_args.shells || config_args.shells;
+    final_args.socket = cli_args.socket || config_args.socket;
     final_args.syscall_execve = cli_args.syscall_execve || config_args.syscall_execve;
 
     // Override non-bools with CLI args if present
@@ -233,6 +257,12 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     }
     if cli_args.include_uid.is_some() {
         final_args.include_uid = cli_args.include_uid.clone();
+    }
+    if cli_args.memory_faults.is_some() {
+        final_args.memory_faults = cli_args.memory_faults;
+    }
+    if cli_args.poll.is_some() {
+        final_args.poll = cli_args.poll;
     }
 
     // Merge CLI output into config output, or create it if missing

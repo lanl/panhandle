@@ -18,6 +18,7 @@ mod tests {
             zsh: true,
             quiet: true,
             shells: true,
+            socket: true,
             ..Default::default()
         };
 
@@ -66,6 +67,7 @@ mod tests {
             verbose: true,
             exclude_min_uid: Some(0),
             exclude_max_uid: Some(23),
+            memory_faults: Some(100),
             executables: Some(vec![
                 String::from("/path1/user1"),
                 String::from("/path2/something/files"),

@@ -225,13 +225,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         process::exit(1);
     }
 
+    let mut polling_freq_seconds: u32 = 30;
+    if let Some(poll) = args.poll {
+        polling_freq_seconds = poll;
+    }
+
     // move to if statements for the main program args
     // goal is to try to allow a combination of all of the args
     // this introduces some code duplication
     let mut socket_handle: Option<JoinHandle<()>> = None;
     if args.socket {
-        let sleep_interval = 2; // consume the option Jaxen is setting for overall polling frequency here
-
         let btf = Btf::from_sys_fs()?;
 
         // Attach to the specific tracepoint category and name
@@ -286,14 +289,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .await;
                     }
                 }
-                let _ = sleep(Duration::from_secs(sleep_interval)).await;
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.clone().into())).await;
             }
         }));
     }
 
     // set up the memory fault monitoring
     let mut memory_handle: Option<JoinHandle<()>> = None;
-    let sleep_interval = 10; // consume the option Jaxen is setting for overall polling frequency here
+    
     if let Some(threshold_fault_count) = args.memory_faults {
         // example if you want to see all the proc info options, note that there is an example
         // message for RHEL8 detailed in this method in proc.rs
@@ -317,7 +320,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &args.debug,
                 )
                 .await;
-                let _ = sleep(Duration::from_secs(sleep_interval)).await;
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.clone().into())).await;
             }
         }));
     }

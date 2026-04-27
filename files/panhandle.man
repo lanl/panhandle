@@ -81,6 +81,9 @@ Print version
 .TP
 \fB-z, --zsh\fP
 Monitor events from the zsh shell using the zlentry function.
+.TP
+\fB--poll <POLLING_FREQUENCY_SECONDS>\fP
+Polling interval in seconds for monitoring information.
 .SH FILES
 .TP
 \fC/opt/panhandle/panhandle.yaml\fR

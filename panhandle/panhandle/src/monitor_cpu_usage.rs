@@ -7,6 +7,15 @@ extern crate simplelog;
 use simplelog::*;
 use std::panic;
 
+// Structure to hold statistics for each monitored PID
+#[derive(Default)]
+struct PidStats {
+    total_time: u64,      // Total cumulative CPU time
+    sample_count: u64,    // Number of samples taken
+    max_cpu_percent: f64, // Maximum CPU percentage observed
+    avg_cpu_percent: f64, // Running average of CPU percentage
+}
+
 // cpu monitoring helper function
 pub async fn monitor_cpu_usage(
     pid_cpu_time: HashMap<aya::maps::MapData, u32, u64>, // Map storing CPU time per process ID
@@ -17,7 +26,7 @@ pub async fn monitor_cpu_usage(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::collections::HashMap as StdHashMap;
 
-    // Create a timer that ticks every 1 second - this controls our monitoring frequency
+    // Create a timer that ticks every poll_interval seconds
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(poll_interval.into()));
 
     // Get the number of online CPU cores on the system
@@ -25,7 +34,7 @@ pub async fn monitor_cpu_usage(
         .map_err(|(msg, err)| format!("{}: {}", msg, err))?
         .len();
 
-    // Counter to track how many samples we've taken
+    // Counter to track how many samples have been taken
     let mut sample_count = 0u64;
 
     // Print startup information banner (only if not using JSON output)
@@ -33,6 +42,7 @@ pub async fn monitor_cpu_usage(
         info!("═══════════════════════════════════════════════════════════");
         info!("  CPU Usage Monitor Started");
         info!("  CPUs: {}", num_cpus);
+        info!("  Poll Interval: {} seconds", poll_interval);
         if let Some(ref pids) = pid_filter {
             info!("  Tracking PIDs: {:?}", pids);
         } else {
@@ -41,21 +51,12 @@ pub async fn monitor_cpu_usage(
         info!("═══════════════════════════════════════════════════════════");
     }
 
-    // Variables to store previous measurements (needed to calculate deltas)
+    // Variables to store previous measurements
     let mut last_total_busy: u64 = 0; // Previous total busy CPU time across all cores
     let mut last_pid_times: StdHashMap<u32, u64> = StdHashMap::new(); // Previous CPU time per PID
     let mut pid_stats: StdHashMap<u32, PidStats> = StdHashMap::new(); // Accumulated statistics per PID
 
-    // Structure to hold statistics for each monitored PID
-    #[derive(Default)]
-    struct PidStats {
-        total_time: u64,      // Total cumulative CPU time
-        sample_count: u64,    // Number of samples taken
-        max_cpu_percent: f64, // Maximum CPU percentage observed
-        avg_cpu_percent: f64, // Running average of CPU percentage
-    }
-
-    // Print table header (only if not using JSON output)
+    // Print table header
     if !json_output {
         println!(
             "\n{:<10} {:<12} {:<12} {:<10} {:<10}",
@@ -66,24 +67,24 @@ pub async fn monitor_cpu_usage(
 
     // Main monitoring loop
     loop {
-        // Wait for either a timer tick (every second) or Ctrl+C signal
+        // Wait for either a timer tick (every poll interval) or Ctrl+C signal
         tokio::select! {
-            // This branch executes every 1 second
+            // This branch executes every poll_interval seconds
             _ = interval.tick() => {
                 // Increment sample counter
                 sample_count += 1;
 
                 // Get current total busy CPU time across all cores
                 let mut total_busy: u64 = 0;
-                // PerCpuArray stores one value per CPU core, so we sum them all
+                // PerCpuArray stores one value per CPU core, so sum them all
                 if let Ok(values) = busy_cpu_time.get(&0, 0) {
                     total_busy = values.iter().sum::<u64>();
                 }
 
                 // Calculate how much CPU time was used since last check
-                // This is the "delta" - the difference between current and previous reading
+                // This is delta - the difference between current and previous reading
                 let busy_delta = total_busy.saturating_sub(last_total_busy);
-                let interval_sec = 1.0;  // We're sampling every 1 second
+                let interval_sec = poll_interval as f64;  // Use actual polling interval
 
                 if !json_output {
                     // Print sample header
@@ -93,7 +94,6 @@ pub async fn monitor_cpu_usage(
                     if pid_filter.is_none() {
                         // Calculate total available CPU time in this interval
                         // Formula: seconds × nanoseconds_per_second × number_of_CPUs
-                        // Example: 1 sec × 1,000,000,000 ns × 4 CPUs = 4 billion nanoseconds available
                         let total_cpu_time_available = (interval_sec * 1_000_000_000.0 * num_cpus as f64) as u64;
 
                         // Calculate CPU utilization percentage
@@ -115,25 +115,21 @@ pub async fn monitor_cpu_usage(
                     }
                     // Per-PID tracking statistics
                     else {
-                        // Get the list of PIDs we're monitoring
+                        // Get the list of PIDs being monitored
                         let pids_to_check = pid_filter.as_ref().unwrap();
 
-                        // Process each PID we're tracking
                         for pid in pids_to_check {
-                            // Try to get CPU time for this specific PID from the eBPF map
                             if let Ok(cpu_time) = pid_cpu_time.get(pid, 0) {
                                 // Get the previous CPU time for this PID, or 0 if first time
                                 let last_time = last_pid_times.get(pid).copied().unwrap_or(0);
 
-                                // Calculate delta, how much CPU time this PID used since last check
+                                // Calculate delta: how much CPU time this PID used since last check
                                 let delta = cpu_time.saturating_sub(last_time);
 
                                 // Convert delta to CPU percentage
-                                // Delta is in nanoseconds, so divide by 1 billion to get seconds
-                                // Then multiply by 100 to get percentage
-                                let cpu_percent = (delta as f64 / 1_000_000_000.0) * 100.0;
+                                let cpu_percent = (delta as f64 / (interval_sec * 1_000_000_000.0)) * 100.0;
 
-                                // Update running statistics for this PID
+                                // Update running stats for this PID
                                 let stats = pid_stats.entry(*pid).or_default();
                                 stats.total_time = cpu_time;  // Update total cumulative time
                                 stats.sample_count += 1;       // Increment sample count
@@ -141,7 +137,7 @@ pub async fn monitor_cpu_usage(
                                 // Update maximum CPU percentage if current is higher
                                 stats.max_cpu_percent = stats.max_cpu_percent.max(cpu_percent);
 
-                                // Calculate running average using weighted formula:
+                                // Calculate average
                                 // new_avg = (old_avg × old_count + new_value) / new_count
                                 stats.avg_cpu_percent =
                                     (stats.avg_cpu_percent * (stats.sample_count - 1) as f64 + cpu_percent)
@@ -182,7 +178,7 @@ pub async fn monitor_cpu_usage(
                     println!("  CPU Monitor Summary");
                     println!("═══════════════════════════════════════════════════════════");
                     println!("  Total samples: {}", sample_count);
-                    println!("  Duration: {} seconds", sample_count);
+                    println!("  Duration: {} seconds", sample_count * poll_interval as u64);
 
                     // If we were tracking specific PIDs, show their stats
                     if !pid_stats.is_empty() {

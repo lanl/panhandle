@@ -98,6 +98,16 @@ pub struct RawArgs {
     #[serde(default)]
     pub zsh: bool,
 
+    /// Receive a report of CPU usage over time.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub cpu: bool,
+
+    /// Specify a list of PIDs to track CPU usage of. Leaving empty defaults to showing global cpu usage.
+    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[serde(default)]
+    pub pid_list: Option<Vec<u32>>,
+
     /// Polling interval in seconds for monitoring information.
     #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
     pub poll: Option<u32>,
@@ -168,10 +178,15 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub socket: bool,
 
+    #[serde(default)]
+    pub cpu: bool,
+
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
     pub include_uid: Option<Vec<String>>,
+
+    pub pid_list: Option<Vec<u32>>,
 
     pub poll: Option<u32>,
 }
@@ -221,6 +236,8 @@ impl From<ConfigArgs> for RawArgs {
             exclude_max_uid: cfg.exclude_max_uid,
             executables: cfg.executables,
             include_uid: cfg.include_uid,
+            cpu: cfg.cpu,
+            pid_list: cfg.pid_list,
             poll: cfg.poll,
             // output subcommand
             output,
@@ -244,6 +261,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.shells = cli_args.shells || config_args.shells;
     final_args.socket = cli_args.socket || config_args.socket;
     final_args.syscall_execve = cli_args.syscall_execve || config_args.syscall_execve;
+    final_args.cpu = cli_args.cpu || config_args.cpu;
 
     // Override non-bools with CLI args if present
     if cli_args.exclude_min_uid.is_some() {
@@ -263,6 +281,9 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     }
     if cli_args.poll.is_some() {
         final_args.poll = cli_args.poll;
+    }
+    if cli_args.pid_list.is_some() {
+        final_args.pid_list = cli_args.pid_list.clone();
     }
 
     // Merge CLI output into config output, or create it if missing

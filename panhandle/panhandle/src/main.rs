@@ -228,11 +228,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         process::exit(1);
     }
 
-    let mut polling_freq_seconds: u32 = 30;
-    if let Some(poll) = args.poll {
-        polling_freq_seconds = poll;
-    }
-
     // CPU monitoring
     if args.cpu {
         info!("Starting CPU usage monitoring...");
@@ -277,6 +272,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let mut polling_freq_seconds: u32 = 30;
+    if let Some(poll) = args.poll {
+        polling_freq_seconds = poll;
+    }
     // move to if statements for the main program args
     // goal is to try to allow a combination of all of the args
     // this introduces some code duplication

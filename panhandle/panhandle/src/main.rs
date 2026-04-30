@@ -1,9 +1,10 @@
 use aya::{
     Btf,
-    maps::{HashMap, perf::AsyncPerfEventArray},
+    maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
     programs::{BtfTracePoint, TracePoint, UProbe},
     util::online_cpus,
 };
+// use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
 use std::{convert::TryInto, path::PathBuf};
 use tokio::{
@@ -28,12 +29,14 @@ use uzers::get_current_uid;
 #[rustfmt::skip]
 // this is the local import section
 mod helpers;
+mod monitor_cpu_usage;
 mod unit_tests;
 use helpers::*;
 use panhandle_common::*;
 mod input_configs;
 use crate::input_configs::*;
 mod procfs_helpers;
+use crate::monitor_cpu_usage::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -228,6 +231,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut polling_freq_seconds: u32 = 30;
     if let Some(poll) = args.poll {
         polling_freq_seconds = poll;
+    }
+
+    // CPU monitoring
+    if args.cpu {
+        info!("Starting CPU usage monitoring...");
+
+        // Load and attach the sched_switch tracepoint
+        let program: &mut TracePoint = ebpf.program_mut("sched_switch").unwrap().try_into()?;
+        program.load()?;
+        program.attach("sched", "sched_switch")?;
+        // EbpfLogger::init(&mut ebpf)?; // enables log messages on ebpf side
+
+        info!("CPU monitoring eBPF program loaded and attached");
+
+        // Get the per pid and busy cpu time hashmaps
+        let pid_cpu_time_map = ebpf.take_map("per_cpu_time").unwrap();
+        let pid_cpu_time = HashMap::try_from(pid_cpu_time_map)?;
+
+        let busy_cpu_time_map = ebpf.take_map("busy_cpu_time").unwrap();
+        let busy_cpu_time = PerCpuArray::try_from(busy_cpu_time_map)?;
+
+        let pid_filter = args.pid_list.clone();
+        let json_output = args.json;
+        let poll_interval = args.poll.unwrap_or(3); // default poll interval of 3 seconds
+
+        // Spawn CPU monitoring task
+        tokio::spawn(async move {
+            if let Err(e) = monitor_cpu_usage(
+                pid_cpu_time,
+                busy_cpu_time,
+                pid_filter,
+                json_output,
+                poll_interval,
+            )
+            .await
+            {
+                error!("CPU monitoring error: {}", e);
+            }
+        });
+
+        // Wait for Ctrl+C
+        signal::ctrl_c().await?;
+        info!("Shutting down CPU monitoring...");
+        return Ok(());
     }
 
     // move to if statements for the main program args

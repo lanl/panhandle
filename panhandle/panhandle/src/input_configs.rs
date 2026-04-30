@@ -98,8 +98,6 @@ pub struct RawArgs {
     #[serde(default)]
     pub zsh: bool,
 
-<<<<<<< HEAD
-=======
     /// Receive a report of CPU usage over time.
     #[arg(long, global = true)]
     #[serde(default)]
@@ -110,7 +108,6 @@ pub struct RawArgs {
     #[serde(default)]
     pub pid_list: Option<Vec<u32>>,
 
->>>>>>> feature/cpu_usage
     /// Polling interval in seconds for monitoring information.
     #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
     pub poll: Option<u32>,
@@ -179,22 +176,16 @@ pub struct ConfigArgs {
     pub shells: bool,
 
     #[serde(default)]
-<<<<<<< HEAD
     pub socket: bool,
-=======
     pub cpu: bool,
->>>>>>> feature/cpu_usage
 
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
     pub include_uid: Option<Vec<String>>,
 
-<<<<<<< HEAD
-=======
     pub pid_list: Option<Vec<u32>>,
 
->>>>>>> feature/cpu_usage
     pub poll: Option<u32>,
 }
 
@@ -243,11 +234,8 @@ impl From<ConfigArgs> for RawArgs {
             exclude_max_uid: cfg.exclude_max_uid,
             executables: cfg.executables,
             include_uid: cfg.include_uid,
-<<<<<<< HEAD
-=======
             cpu: cfg.cpu,
             pid_list: cfg.pid_list,
->>>>>>> feature/cpu_usage
             poll: cfg.poll,
             // output subcommand
             output,
@@ -285,12 +273,9 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     if cli_args.include_uid.is_some() {
         final_args.include_uid = cli_args.include_uid.clone();
     }
-<<<<<<< HEAD
     if cli_args.memory_faults.is_some() {
         final_args.memory_faults = cli_args.memory_faults;
     }
-=======
->>>>>>> feature/cpu_usage
     if cli_args.poll.is_some() {
         final_args.poll = cli_args.poll;
     }

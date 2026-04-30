@@ -19,6 +19,7 @@ mod tests {
             quiet: true,
             shells: true,
             socket: true,
+            cpu: true,
             ..Default::default()
         };
 

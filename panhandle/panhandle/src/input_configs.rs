@@ -177,6 +177,8 @@ pub struct ConfigArgs {
 
     #[serde(default)]
     pub socket: bool,
+
+    #[serde(default)]
     pub cpu: bool,
 
     // list-based output format to promote hyphen key:value pair syntax in config files
@@ -259,6 +261,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.shells = cli_args.shells || config_args.shells;
     final_args.socket = cli_args.socket || config_args.socket;
     final_args.syscall_execve = cli_args.syscall_execve || config_args.syscall_execve;
+    final_args.cpu = cli_args.cpu || config_args.cpu;
 
     // Override non-bools with CLI args if present
     if cli_args.exclude_min_uid.is_some() {

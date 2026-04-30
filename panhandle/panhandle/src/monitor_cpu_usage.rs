@@ -22,12 +22,13 @@ pub async fn monitor_cpu_usage(
     busy_cpu_time: PerCpuArray<aya::maps::MapData, u64>, // Array storing busy time per CPU core
     pid_filter: Option<Vec<u32>>, // Optional list of PIDs to monitor (None = monitor all/global)
     json_output: bool,            // Flag to control output format
-    poll_interval: u32,            // Defines how frequently information is polled and displayed
+    poll_interval: u32,           // Defines how frequently information is polled and displayed
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::collections::HashMap as StdHashMap;
 
     // Create a timer that ticks every poll_interval seconds
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(poll_interval.into()));
+    let mut interval =
+        tokio::time::interval(tokio::time::Duration::from_secs(poll_interval.into()));
 
     // Get the number of online CPU cores on the system
     let num_cpus = online_cpus()

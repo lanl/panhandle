@@ -45,10 +45,10 @@ pub struct Readline {
 #[repr(C)]
 pub struct trace_event_raw_sched_switch {
     pub ent: trace_entry,
-    pub prev_comm: [i8; 16],  // Changed from ::aya_ebpf::cty::c_char
+    pub prev_comm: [i8; 16], // Changed from ::aya_ebpf::cty::c_char
     pub prev_pid: pid_t,
-    pub prev_prio: i32,        // Changed from ::aya_ebpf::cty::c_int
-    pub prev_state: i64,       // Changed from ::aya_ebpf::cty::c_long
+    pub prev_prio: i32,  // Changed from ::aya_ebpf::cty::c_int
+    pub prev_state: i64, // Changed from ::aya_ebpf::cty::c_long
     pub next_comm: [i8; 16],
     pub next_pid: pid_t,
     pub next_prio: i32,
@@ -57,10 +57,10 @@ pub struct trace_event_raw_sched_switch {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct trace_entry {
-    pub type_: u16,           // Changed from ::aya_ebpf::cty::c_ushort
-    pub flags: u8,            // Changed from ::aya_ebpf::cty::c_uchar
+    pub type_: u16, // Changed from ::aya_ebpf::cty::c_ushort
+    pub flags: u8,  // Changed from ::aya_ebpf::cty::c_uchar
     pub preempt_count: u8,
-    pub pid: i32,             // Changed from ::aya_ebpf::cty::c_int
+    pub pid: i32, // Changed from ::aya_ebpf::cty::c_int
 }
 
 #[repr(C)]

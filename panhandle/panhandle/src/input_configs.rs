@@ -282,6 +282,9 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     if cli_args.poll.is_some() {
         final_args.poll = cli_args.poll;
     }
+    if cli_args.pid_list.is_some() {
+        final_args.pid_list = cli_args.pid_list.clone();
+    }
 
     // Merge CLI output into config output, or create it if missing
     if let Some(OutputCommand::Output {

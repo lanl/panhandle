@@ -74,6 +74,7 @@ mod tests {
                 String::from("/path2/something/files"),
                 String::from("/path3/somewhere"),
             ]),
+            pid_list: Some(vec![1, 2, 3]),
             include_uid: Some(vec![String::from("uid1")]),
             output: Some(vec![OutputConfig::Syslog {
                 syslog: Some(Some("hpcsyslog.lanl.gov:514/tcp".to_string())),

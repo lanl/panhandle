@@ -23,6 +23,9 @@ Invalidates json option and returns output to help identify why the program migh
 \fB-e, --executables\fI <EXECUTABLES>\fR
 Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 10.
 .TP
+\fB--pid-list\fI <PIDS>\fR
+Specify a comma separated list of PIDs to monitor CPU usage of.
+.TP
 \fB--exclude-min-uid\fI <EXCLUDE_MIN_UID>\fR
 Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 1.
 .TP
@@ -72,6 +75,9 @@ Output execve syscall events only from the shells: bash, tcsh, zsh and fmsh. Thi
 .TP
 \fB--socket\fP
 Report the numbers of sockets per process.
+.TP
+\fB--cpu\fP
+Turn on cpu usage monitoring and reporting.
 .TP
 \fB-v, --verbose\fP
 Verbose output

@@ -92,33 +92,8 @@ pub async fn monitor_cpu_usage(
                     println!("\n[Sample #{}] ────────────────────────────────────", sample_count);
 
                     // Global CPU usage mode
-                    if pid_filter.is_none() {
-                        // Calculate total available CPU time in this interval
-                        // Formula: seconds × nanoseconds_per_second × number_of_CPUs
-                        let total_cpu_time_available = (interval_sec * 1_000_000_000.0 * num_cpus as f64) as u64;
-
-                        // Calculate CPU utilization percentage
-                        // Formula: (time_used / time_available) × 100
-                        let cpu_utilization = if total_cpu_time_available > 0 {
-                            (busy_delta as f64 / total_cpu_time_available as f64) * 100.0
-                        } else {
-                            0.0
-                        };
-
-                        // Print global CPU statistics
-                        println!("{:<10} {:<12.2} {:<12.2} {:<10.2} {:<10}",
-                            "GLOBAL",
-                            total_busy as f64 / 1_000_000.0,      // Total time in milliseconds
-                            busy_delta as f64 / 1_000_000.0,      // Delta time in milliseconds
-                            cpu_utilization,                       // CPU percentage
-                            "-"                                    // No average for global mode
-                        );
-                    }
-                    // Per-PID tracking statistics
-                    else {
-                        // Get the list of PIDs being monitored
-                        let pids_to_check = pid_filter.as_ref().unwrap();
-
+                    if let Some(pids_to_check) = &pid_filter {
+                        // Per-PID tracking statistics
                         for pid in pids_to_check {
                             if let Ok(cpu_time) = pid_cpu_time.get(pid, 0) {
                                 // Get the previous CPU time for this PID, or 0 if first time
@@ -161,6 +136,28 @@ pub async fn monitor_cpu_usage(
                                     pid, "N/A", "N/A", "N/A", "N/A");
                             }
                         }
+                    }
+                    else {
+                        // Calculate total available CPU time in this interval
+                        // Formula: seconds × nanoseconds_per_second × number_of_CPUs
+                        let total_cpu_time_available = (interval_sec * 1_000_000_000.0 * num_cpus as f64) as u64;
+
+                        // Calculate CPU utilization percentage
+                        // Formula: (time_used / time_available) × 100
+                        let cpu_utilization = if total_cpu_time_available > 0 {
+                            (busy_delta as f64 / total_cpu_time_available as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+
+                        // Print global CPU statistics
+                        println!("{:<10} {:<12.2} {:<12.2} {:<10.2} {:<10}",
+                            "GLOBAL",
+                            total_busy as f64 / 1_000_000.0,      // Total time in milliseconds
+                            busy_delta as f64 / 1_000_000.0,      // Delta time in milliseconds
+                            cpu_utilization,                       // CPU percentage
+                            "-"                                    // No average for global mode
+                        );
                     }
 
                     // Print separator line

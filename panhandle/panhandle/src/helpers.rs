@@ -330,7 +330,7 @@ pub async fn send_syslog(
     let formatter = Formatter3164 {
         facility: Facility::LOG_USER,
         hostname: Some(hostname.to_string()),
-        process: "panhandle".into(),
+        process: "panhandle_cpu".into(),
         pid: std::process::id(),
     };
 

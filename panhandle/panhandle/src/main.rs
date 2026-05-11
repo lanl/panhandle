@@ -29,14 +29,14 @@ use uzers::get_current_uid;
 #[rustfmt::skip]
 // this is the local import section
 mod helpers;
-mod monitor_cpu_usage;
-mod unit_tests;
 mod input_configs;
+mod monitor_cpu_usage;
 mod procfs_helpers;
+mod unit_tests;
 use helpers::*;
-use panhandle_common::*;
 use input_configs::*;
 use monitor_cpu_usage::*;
+use panhandle_common::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

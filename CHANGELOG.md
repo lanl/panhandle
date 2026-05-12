@@ -1,5 +1,11 @@
 # CHANGELOG
 
+### v1.0.10
+ - added cpu usage monitoring
+
+### v1.0.9
+ - added monitoring for sockets and memory paging
+
 ### v1.0.8
  - changed how the output subcommand is read in from the provided config file to support current Ansible YAML syntax
  

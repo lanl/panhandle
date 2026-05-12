@@ -29,14 +29,14 @@ use uzers::get_current_uid;
 #[rustfmt::skip]
 // this is the local import section
 mod helpers;
+mod input_configs;
 mod monitor_cpu_usage;
+mod procfs_helpers;
 mod unit_tests;
 use helpers::*;
+use input_configs::*;
+use monitor_cpu_usage::*;
 use panhandle_common::*;
-mod input_configs;
-use crate::input_configs::*;
-mod procfs_helpers;
-use crate::monitor_cpu_usage::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -236,7 +236,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let program: &mut TracePoint = ebpf.program_mut("sched_switch").unwrap().try_into()?;
         program.load()?;
         program.attach("sched", "sched_switch")?;
-        // EbpfLogger::init(&mut ebpf)?; // enables log messages on ebpf side
 
         info!("CPU monitoring eBPF program loaded and attached");
 
@@ -249,7 +248,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let pid_filter = args.pid_list.clone();
         let json_output = args.json;
-        let poll_interval = args.poll.unwrap_or(3); // default poll interval of 3 seconds
+        let poll_interval = args.poll.unwrap_or(3);
+
+        // Clone necessary variables for the async task
+        let ref_global_url = global_url.clone();
+        let ref_syslog_address = syslog_address.clone();
+        let ref_hostname = hostname.clone();
+        let client = Client::new();
 
         // Spawn CPU monitoring task
         tokio::spawn(async move {
@@ -259,6 +264,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 pid_filter,
                 json_output,
                 poll_interval,
+                http_bool,
+                syslog_bool,
+                ref_hostname,
+                ref_syslog_address,
+                ref_global_url,
+                client,
+                args.debug,
             )
             .await
             {

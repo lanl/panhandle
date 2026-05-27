@@ -14,11 +14,6 @@ use tokio::{
     time::{Duration, sleep},
 };
 extern crate simplelog;
-use bytes::BytesMut;
-
-use procfs::process::Process;
-use reqwest::Client;
-use simplelog::*;
 use std::{
     fs::{File, canonicalize},
     panic, process,

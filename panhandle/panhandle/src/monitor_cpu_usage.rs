@@ -6,9 +6,10 @@ use reqwest::Client;
 use serde_json::json;
 use tokio::signal;
 extern crate simplelog;
+use std::{panic, sync::Arc};
+
 use chrono::Utc;
 use simplelog::*;
-use std::{panic, sync::Arc};
 
 use crate::helpers::*;
 
@@ -39,6 +40,7 @@ pub async fn monitor_cpu_usage(
     poll_interval: u32,
     http: bool,
     syslog: bool,
+    file: bool,
     hostname: Arc<String>,
     syslog_address: Arc<String>,
     global_url: Arc<String>,
@@ -56,18 +58,18 @@ pub async fn monitor_cpu_usage(
 
     let mut sample_count = 0u64;
 
-    // Print startup information banner (only if not using JSON output)
-    if !syslog && !http {
-        info!("═══════════════════════════════════════════════════════════");
-        info!("  CPU Usage Monitor Started");
-        info!("  CPUs: {}", num_cpus);
-        info!("  Poll Interval: {} seconds", poll_interval);
+    // Print startup information banner for console only output
+    if !syslog && !http && !file {
+        println!("═══════════════════════════════════════════════════════════");
+        println!("  CPU Usage Monitor Started");
+        println!("  CPUs: {}", num_cpus);
+        println!("  Poll Interval: {} seconds", poll_interval);
         if let Some(ref pids) = pid_filter {
-            info!("  Tracking PIDs: {:?}", pids);
+            println!("  Tracking PIDs: {:?}", pids);
         } else {
-            info!("  Mode: Global CPU usage");
+            println!("  Mode: Global CPU usage");
         }
-        info!("═══════════════════════════════════════════════════════════");
+        println!("═══════════════════════════════════════════════════════════");
     }
 
     let mut last_total_busy: u64 = 0;
@@ -79,7 +81,7 @@ pub async fn monitor_cpu_usage(
     };
 
     // Print table header only for console output
-    if !syslog && !http {
+    if !syslog && !http && !file {
         if pid_filter.is_some() {
             println!(
                 "\n{:<10} {:<12} {:<12} {:<10} {:<10}",
@@ -125,7 +127,7 @@ pub async fn monitor_cpu_usage(
                                 / stats.sample_count as f64;
 
                             // Print table row for console output
-                            if !syslog && !http {
+                            if !syslog && !http && !file {
                                 println!(
                                     "{:<10} {:<12.2} {:<12.2} {:<10.2} {:<10.2}",
                                     pid,
@@ -164,8 +166,8 @@ pub async fn monitor_cpu_usage(
                             });
                             let json_string = json_value.to_string();
 
-                            // Send via output_message
-                            if syslog || http {
+                            // send via output_message if any of the outputs were specified
+                            if syslog || http || file{
                                 output_message(
                                     &http,
                                     &syslog,
@@ -183,7 +185,7 @@ pub async fn monitor_cpu_usage(
                             last_pid_times.insert(*pid, cpu_time);
                         } else {
                             // PID not found
-                            if !syslog && !http {
+                            if !syslog && !http && !file {
                                 println!(
                                     "{:<10} {:<12} {:<12} {:<10} {:<10}",
                                     pid,
@@ -208,7 +210,8 @@ pub async fn monitor_cpu_usage(
                             });
                             let json_string = json_value.to_string();
 
-                            if syslog || http {
+                            // send via output_message if any of the outputs were specified
+                            if syslog || http || file {
                                 output_message(
                                     &http,
                                     &syslog,
@@ -242,7 +245,7 @@ pub async fn monitor_cpu_usage(
                         / sample_count as f64;
 
                     // Print table row for console output
-                    if !syslog && !http {
+                    if !syslog && !http && !file{
                         println!(
                             "{:<12} {:<15.2} {:<15.2} {:<15.2}",
                             sample_count,
@@ -278,21 +281,21 @@ pub async fn monitor_cpu_usage(
                     });
                     let json_string = json_value.to_string();
 
-                    // Send via output_message
-                    if syslog || http {
-                                output_message(
-                                    &http,
-                                    &syslog,
-                                    &hostname,
-                                    &syslog_address,
-                                    &global_url,
-                                    &json_output,
-                                    &plain_string,
-                                    &json_string,
-                                    &client,
-                                    &debug,
-                                ).await;
-                            }
+                    // send via output_message if any of the outputs were specified
+                    if syslog || http || file {
+                        output_message(
+                            &http,
+                            &syslog,
+                            &hostname,
+                            &syslog_address,
+                            &global_url,
+                            &json_output,
+                            &plain_string,
+                            &json_string,
+                            &client,
+                            &debug,
+                        ).await;
+                    }
                 }
 
                 last_total_busy = total_busy;
@@ -300,7 +303,7 @@ pub async fn monitor_cpu_usage(
 
             _ = signal::ctrl_c() => {
                 // Print summary statistics
-                if !syslog && !http {
+                if !syslog && !http && !file {
                     println!("\n\n═══════════════════════════════════════════════════════════");
                     println!("  CPU Monitor Summary");
                     println!("═══════════════════════════════════════════════════════════");
@@ -368,20 +371,21 @@ pub async fn monitor_cpu_usage(
                     });
                     let json_string = json_value.to_string();
 
-                    if syslog || http {
-                                output_message(
-                                    &http,
-                                    &syslog,
-                                    &hostname,
-                                    &syslog_address,
-                                    &global_url,
-                                    &json_output,
-                                    &plain_string,
-                                    &json_string,
-                                    &client,
-                                    &debug,
-                                ).await;
-                            }
+                    // send via output_message if any of the outputs were specified
+                    if syslog || http || file {
+                        output_message(
+                            &http,
+                            &syslog,
+                            &hostname,
+                            &syslog_address,
+                            &global_url,
+                            &json_output,
+                            &plain_string,
+                            &json_string,
+                            &client,
+                            &debug,
+                        ).await;
+                    }
                 } else {
                     // Global mode summary
                     let plain_string = format!(
@@ -411,7 +415,8 @@ pub async fn monitor_cpu_usage(
 
                     let json_string = json_value.to_string();
 
-                    if syslog || http {
+                    // send via output_message if any of the outputs were specified
+                    if syslog || http || file {
                         output_message(
                             &http,
                             &syslog,

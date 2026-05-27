@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::helpers::*;
-    use crate::input_configs::*;
     use std::path::PathBuf;
+
+    use crate::{helpers::*, input_configs::*};
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
     #[tokio::test]

@@ -1,3 +1,5 @@
+use std::{convert::TryInto, path::PathBuf};
+
 use aya::{
     Btf,
     maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
@@ -6,23 +8,22 @@ use aya::{
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
-use std::{convert::TryInto, path::PathBuf};
 use tokio::{
     signal,
     task::JoinHandle,
     time::{Duration, sleep},
 };
 extern crate simplelog;
-use bytes::BytesMut;
-
-use procfs::process::Process;
-use reqwest::Client;
-use simplelog::*;
 use std::{
     fs::{File, canonicalize},
     panic, process,
     sync::Arc,
 };
+
+use bytes::BytesMut;
+use procfs::process::Process;
+use reqwest::Client;
+use simplelog::*;
 use uzers::get_current_uid;
 
 #[rustfmt::skip]
@@ -89,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let syslog_address: Arc<String>;
     let http_bool: bool;
     let syslog_bool: bool;
+    let file_bool: bool;
 
     let term_logger = TermLogger::new(
         log_filter_level,
@@ -144,9 +146,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Set up logging, either to a file or terminal based on args:
             if let Some(path) = file {
+                file_bool = true;
                 let file: File = File::options().append(true).create(true).open(&path)?;
                 if args.debug {
-                    println!("log file: {}", &path.display());
+                    println!("log file: {}", path.display());
                 }
 
                 let logger = WriteLogger::new(log_filter_level, simplelog::Config::default(), file);
@@ -157,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     CombinedLogger::init(vec![logger]).unwrap();
                 }
             } else {
+                file_bool = false;
                 // use the terminal logger if the file option is not specified
                 // and if the quiet option is also not specified
                 if !args.quiet {
@@ -170,6 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             syslog_address = Arc::new("".to_string());
             http_bool = false;
             syslog_bool = false;
+            file_bool = false;
             if !args.quiet {
                 CombinedLogger::init(vec![term_logger]).unwrap();
             }
@@ -265,6 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 poll_interval,
                 http_bool,
                 syslog_bool,
+                file_bool,
                 ref_hostname,
                 ref_syslog_address,
                 ref_global_url,

@@ -1,7 +1,7 @@
+use std::{fs, path::Path};
+
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
 
 //struct for the cli arguments / make them as layerable as possible
 ///Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
@@ -104,7 +104,7 @@ pub struct RawArgs {
     pub pid_list: Option<Vec<u32>>,
 
     /// Polling interval in seconds for monitoring information.
-    #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..), global = true)]
     pub poll: Option<u32>,
 }
 

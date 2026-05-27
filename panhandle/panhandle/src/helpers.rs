@@ -69,7 +69,7 @@ pub async fn consume_shell_ebpf_map(
             if json {
                 let json_string = format!(
                     "{{\"application\": \"panhandle\", \"hostname\": \"{}\", \"moniker\": \"{}\", \"entry\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": \"{}\"}}",
-                    &hostname,
+                    hostname,
                     user.name().to_string_lossy(),
                     core::str::from_utf8(&data.entry)
                         .unwrap_or_default()
@@ -120,7 +120,7 @@ pub async fn consume_shell_ebpf_map(
             } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
-                    &hostname,
+                    hostname,
                     user.name().to_string_lossy(),
                     data,
                     formatted_utc
@@ -239,7 +239,7 @@ pub async fn consume_execve_ebpf_map(
                 }
                 let json_string: String = format!(
                     "{{\"application\": \"panhandle\", \"hostname\": \"{}\", \"moniker\": \"{}\", \"filename\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"args\": {:?}, \"envs\": {:?}, \"ts_utc\": {:?} }}",
-                    &hostname,
+                    hostname,
                     user.name().to_string_lossy(),
                     filename,
                     command,
@@ -283,7 +283,7 @@ pub async fn consume_execve_ebpf_map(
             } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
-                    &hostname,
+                    hostname,
                     user.name().to_string_lossy(),
                     data,
                     formatted_utc

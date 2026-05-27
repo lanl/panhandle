@@ -10,7 +10,6 @@ use aya_ebpf::{
     programs::TracePointContext,
 };
 use aya_log_ebpf::info;
-
 use panhandle_common::*;
 
 // per cpu array that holds timestamp when currently running task on this cpu started executing

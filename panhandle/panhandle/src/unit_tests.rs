@@ -11,7 +11,6 @@ mod tests {
         let expected_all_bools = ConfigArgs {
             bash: true,
             debug: true,
-            fmsh: true,
             syscall_execve: true,
             json: true,
             verbose: true,
@@ -141,7 +140,6 @@ mod tests {
         let config = ConfigArgs {
             bash: true,
             debug: true,
-            fmsh: true,
             syscall_execve: true,
             json: true,
             verbose: true,
@@ -160,7 +158,6 @@ mod tests {
         let expected_merged_args = RawArgs {
             bash: true,
             debug: true,
-            fmsh: true,
             syscall_execve: true,
             json: true,
             verbose: true,

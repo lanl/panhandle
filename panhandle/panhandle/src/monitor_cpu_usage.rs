@@ -31,6 +31,15 @@ struct GlobalStats {
     total_busy_time: u64,
 }
 
+// Structure to hold global system statistics
+#[derive(Default)]
+struct GlobalStats {
+    max_utilization: f64,
+    min_utilization: f64,
+    avg_utilization: f64,
+    total_busy_time: u64,
+}
+
 // cpu monitoring helper function
 pub async fn monitor_cpu_usage(
     pid_cpu_time: HashMap<aya::maps::MapData, u32, u64>,
@@ -58,12 +67,12 @@ pub async fn monitor_cpu_usage(
 
     let mut sample_count = 0u64;
 
-    // Print startup information banner for console only output
-    if !syslog && !http && !file {
-        println!("═══════════════════════════════════════════════════════════");
-        println!("  CPU Usage Monitor Started");
-        println!("  CPUs: {}", num_cpus);
-        println!("  Poll Interval: {} seconds", poll_interval);
+    // Print startup information banner (only if not using JSON output)
+    if !syslog && !http {
+        info!("═══════════════════════════════════════════════════════════");
+        info!("  CPU Usage Monitor Started");
+        info!("  CPUs: {}", num_cpus);
+        info!("  Poll Interval: {} seconds", poll_interval);
         if let Some(ref pids) = pid_filter {
             println!("  Tracking PIDs: {:?}", pids);
         } else {
@@ -79,9 +88,13 @@ pub async fn monitor_cpu_usage(
         min_utilization: f64::MAX,
         ..Default::default()
     };
+    let mut global_stats = GlobalStats {
+        min_utilization: f64::MAX,
+        ..Default::default()
+    };
 
     // Print table header only for console output
-    if !syslog && !http && !file {
+    if !syslog && !http {
         if pid_filter.is_some() {
             println!(
                 "\n{:<10} {:<12} {:<12} {:<10} {:<10}",
@@ -127,7 +140,7 @@ pub async fn monitor_cpu_usage(
                                 / stats.sample_count as f64;
 
                             // Print table row for console output
-                            if !syslog && !http && !file {
+                            if !syslog && !http {
                                 println!(
                                     "{:<10} {:<12.2} {:<12.2} {:<10.2} {:<10.2}",
                                     pid,
@@ -166,8 +179,8 @@ pub async fn monitor_cpu_usage(
                             });
                             let json_string = json_value.to_string();
 
-                            // send via output_message if any of the outputs were specified
-                            if syslog || http || file{
+                            // Send via output_message
+                            if syslog || http {
                                 output_message(
                                     &http,
                                     &syslog,
@@ -185,7 +198,7 @@ pub async fn monitor_cpu_usage(
                             last_pid_times.insert(*pid, cpu_time);
                         } else {
                             // PID not found
-                            if !syslog && !http && !file {
+                            if !syslog && !http {
                                 println!(
                                     "{:<10} {:<12} {:<12} {:<10} {:<10}",
                                     pid,
@@ -210,8 +223,7 @@ pub async fn monitor_cpu_usage(
                             });
                             let json_string = json_value.to_string();
 
-                            // send via output_message if any of the outputs were specified
-                            if syslog || http || file {
+                            if syslog || http {
                                 output_message(
                                     &http,
                                     &syslog,
@@ -245,7 +257,7 @@ pub async fn monitor_cpu_usage(
                         / sample_count as f64;
 
                     // Print table row for console output
-                    if !syslog && !http && !file{
+                    if !syslog && !http {
                         println!(
                             "{:<12} {:<15.2} {:<15.2} {:<15.2}",
                             sample_count,
@@ -281,21 +293,21 @@ pub async fn monitor_cpu_usage(
                     });
                     let json_string = json_value.to_string();
 
-                    // send via output_message if any of the outputs were specified
-                    if syslog || http || file {
-                        output_message(
-                            &http,
-                            &syslog,
-                            &hostname,
-                            &syslog_address,
-                            &global_url,
-                            &json_output,
-                            &plain_string,
-                            &json_string,
-                            &client,
-                            &debug,
-                        ).await;
-                    }
+                    // Send via output_message
+                    if syslog || http {
+                                output_message(
+                                    &http,
+                                    &syslog,
+                                    &hostname,
+                                    &syslog_address,
+                                    &global_url,
+                                    &json_output,
+                                    &plain_string,
+                                    &json_string,
+                                    &client,
+                                    &debug,
+                                ).await;
+                            }
                 }
 
                 last_total_busy = total_busy;
@@ -303,7 +315,7 @@ pub async fn monitor_cpu_usage(
 
             _ = signal::ctrl_c() => {
                 // Print summary statistics
-                if !syslog && !http && !file {
+                if !syslog && !http {
                     println!("\n\n═══════════════════════════════════════════════════════════");
                     println!("  CPU Monitor Summary");
                     println!("═══════════════════════════════════════════════════════════");
@@ -332,6 +344,15 @@ pub async fn monitor_cpu_usage(
                         println!("  Average utilization: {:.2}%", global_stats.avg_utilization);
                         println!("  Minimum utilization: {:.2}%", global_stats.min_utilization);
                         println!("  Maximum utilization: {:.2}%", global_stats.max_utilization);
+                    } else {
+                        // Global mode statistics
+                        println!("\n  Global System Statistics:");
+                        println!("  {}", "─".repeat(60));
+                        println!("  Number of CPUs: {}", num_cpus);
+                        println!("  Total busy time: {:.2} ms", global_stats.total_busy_time as f64 / 1_000_000.0);
+                        println!("  Average utilization: {:.2}%", global_stats.avg_utilization);
+                        println!("  Minimum utilization: {:.2}%", global_stats.min_utilization);
+                        println!("  Maximum utilization: {:.2}%", global_stats.max_utilization);
                     }
 
                     println!("═══════════════════════════════════════════════════════════\n");
@@ -348,6 +369,25 @@ pub async fn monitor_cpu_usage(
                         pid_stats.len()
                     );
 
+                if !pid_stats.is_empty() {
+                    let plain_string = format!(
+                        "CPU_MONITOR_SUMMARY hostname={} total_samples={} duration_sec={} pids_monitored={}",
+                        hostname,
+                        sample_count,
+                        sample_count * poll_interval as u64,
+                        pid_stats.len()
+                    );
+
+                    let mut pid_summaries = Vec::new();
+                    for (pid, stats) in pid_stats.iter() {
+                        pid_summaries.push(json!({
+                            "pid": pid,
+                            "total_time_ms": format!("{:.2}", stats.total_time as f64 / 1_000_000.0),
+                            "avg_cpu_percent": format!("{:.2}", stats.avg_cpu_percent),
+                            "max_cpu_percent": format!("{:.2}", stats.max_cpu_percent),
+                            "sample_count": stats.sample_count
+                        }));
+                    }
                     let mut pid_summaries = Vec::new();
                     for (pid, stats) in pid_stats.iter() {
                         pid_summaries.push(json!({
@@ -370,22 +410,32 @@ pub async fn monitor_cpu_usage(
                         "pid_statistics": pid_summaries
                     });
                     let json_string = json_value.to_string();
+                    let json_value = json!({
+                        "event_type": "cpu_monitor_summary",
+                        "hostname": hostname.as_str(),
+                        "timestamp": timestamp,
+                        "total_samples": sample_count,
+                        "duration_sec": sample_count * poll_interval as u64,
+                        "poll_interval_sec": poll_interval,
+                        "num_cpus": num_cpus,
+                        "pid_statistics": pid_summaries
+                    });
+                    let json_string = json_value.to_string();
 
-                    // send via output_message if any of the outputs were specified
-                    if syslog || http || file {
-                        output_message(
-                            &http,
-                            &syslog,
-                            &hostname,
-                            &syslog_address,
-                            &global_url,
-                            &json_output,
-                            &plain_string,
-                            &json_string,
-                            &client,
-                            &debug,
-                        ).await;
-                    }
+                    if syslog || http {
+                                output_message(
+                                    &http,
+                                    &syslog,
+                                    &hostname,
+                                    &syslog_address,
+                                    &global_url,
+                                    &json_output,
+                                    &plain_string,
+                                    &json_string,
+                                    &client,
+                                    &debug,
+                                ).await;
+                            }
                 } else {
                     // Global mode summary
                     let plain_string = format!(
@@ -415,8 +465,7 @@ pub async fn monitor_cpu_usage(
 
                     let json_string = json_value.to_string();
 
-                    // send via output_message if any of the outputs were specified
-                    if syslog || http || file {
+                    if syslog || http {
                         output_message(
                             &http,
                             &syslog,

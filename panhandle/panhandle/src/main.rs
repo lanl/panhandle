@@ -1,3 +1,5 @@
+use std::{convert::TryInto, path::PathBuf};
+
 use aya::{
     Btf,
     maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
@@ -6,24 +8,22 @@ use aya::{
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
-use std::{convert::TryInto, path::PathBuf};
 use tokio::{
     signal,
     task::JoinHandle,
     time::{Duration, sleep},
 };
 extern crate simplelog;
-use bytes::BytesMut;
-use file_matcher::FileNamed;
-
-use procfs::process::Process;
-use reqwest::Client;
-use simplelog::*;
 use std::{
     fs::{File, canonicalize},
     panic, process,
     sync::Arc,
 };
+
+use bytes::BytesMut;
+use procfs::process::Process;
+use reqwest::Client;
+use simplelog::*;
 use uzers::get_current_uid;
 
 #[rustfmt::skip]
@@ -90,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let syslog_address: Arc<String>;
     let http_bool: bool;
     let syslog_bool: bool;
+    let file_bool: bool;
 
     let term_logger = TermLogger::new(
         log_filter_level,
@@ -145,9 +146,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Set up logging, either to a file or terminal based on args:
             if let Some(path) = file {
+                file_bool = true;
                 let file: File = File::options().append(true).create(true).open(&path)?;
                 if args.debug {
-                    println!("log file: {}", &path.display());
+                    println!("log file: {}", path.display());
                 }
 
                 let logger = WriteLogger::new(log_filter_level, simplelog::Config::default(), file);
@@ -158,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     CombinedLogger::init(vec![logger]).unwrap();
                 }
             } else {
+                file_bool = false;
                 // use the terminal logger if the file option is not specified
                 // and if the quiet option is also not specified
                 if !args.quiet {
@@ -171,6 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             syslog_address = Arc::new("".to_string());
             http_bool = false;
             syslog_bool = false;
+            file_bool = false;
             if !args.quiet {
                 CombinedLogger::init(vec![term_logger]).unwrap();
             }
@@ -266,6 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 poll_interval,
                 http_bool,
                 syslog_bool,
+                file_bool,
                 ref_hostname,
                 ref_syslog_address,
                 ref_global_url,
@@ -383,112 +388,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
-    if args.fmsh {
-        // fmsh is a little weird - the best way that i have found to monitor it also includes bash
-        // basically, find the libreadline shared library and look for it's teardown method...
-        // in RedHat this is in the /lib64/ dir...
-        // lets find this dir...
-        let mut file: std::path::PathBuf = FileNamed::regex("libreadline.so.*")
-            .within("/lib64/")
-            .find()?;
-        if !file.exists() {
-            debug!("Could not find the libreadline shared library in /lib64/, looking in /lib/");
-            file = FileNamed::regex("libreadline.so.*")
-                .within("/lib/")
-                .find()?;
-            if !file.exists() {
-                info!(
-                    "Could not find the libreadline shared library in /lib64/ or /lib/, exiting with error"
-                );
-                process::exit(1);
-            }
-        }
-        debug!("found file: {:?}", file);
-        let file_string = file.into_os_string().into_string().unwrap();
-        debug!(
-            "converted PathBuf path to this file string: '{}'",
-            file_string
-        );
-
-        // fmsh stuff
-        let program: &mut UProbe = ebpf.program_mut("fmsh").unwrap().try_into()?;
-        program.load()?;
-        program.attach(
-            Some("readline_internal_teardown"),
-            0,
-            file_string.as_str(),
-            None,
-        )?;
-
-        // get the uid_options map from ebpf land
-        let fmsh_uid_options_map = ebpf.take_map("fmsh_uid_options").unwrap();
-        let mut program_options: HashMap<_, u32, u32> =
-            HashMap::try_from(fmsh_uid_options_map).unwrap();
-        // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
-        // this is the shells identifier
-        program_options.insert(0, args.shells as u32, 0)?;
-        // this is the min uid identifier
-        program_options.insert(1, args.exclude_min_uid.unwrap_or(MINUID), 0)?;
-        // this is the max uid identifier
-        program_options.insert(2, args.exclude_max_uid.unwrap_or(MAXUID), 0)?;
-        // this is the include uid list option identifier
-        program_options.insert(3, include_uid_bool as u32, 0)?;
-
-        // get the uid_include_list map from ebpf land
-        let fmsh_uid_include_list_map = ebpf.take_map("fmsh_uid_include_list").unwrap();
-        let mut fmsh_uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
-            HashMap::try_from(fmsh_uid_include_list_map).unwrap();
-        // set up defaults of a zero'd array
-        let mut zeroed_array: [u32; UID_COUNT] = [0; UID_COUNT];
-
-        if include_uid_bool {
-            for (uid_list_counter, value) in only_these_uids_vec.iter().enumerate() {
-                zeroed_array[uid_list_counter] = *value;
-            }
-            debug!("array of specific uids to watch: {:?}", zeroed_array);
-        }
-        // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        fmsh_uid_list_map.insert(0, zeroed_array, 0)?;
-
-        let cpus: Vec<u32> = online_cpus().unwrap();
-        let num_cpus: usize = cpus.len();
-
-        // Process events from the perf buffer
-        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("fmsh_events").unwrap())?;
-        for cpu in cpus {
-            let buf = events.open(cpu, Some(32))?;
-
-            // have to clone these Vec's of Strings (due to lack of Copy trait) across the cpus for access to their data
-            let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
-            let ref_global_url = global_url.clone();
-            let ref_syslog_address = syslog_address.clone();
-            let client = Client::new();
-            let ref_hostname = hostname.clone();
-
-            // now spawn the async stuff
-            tokio::task::spawn(async move {
-                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
-                let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(2048))
-                    .collect::<Vec<_>>();
-
-                consume_shell_ebpf_map(
-                    &client,
-                    buf,
-                    buffers,
-                    ref_executable_vec,
-                    ref_global_url,
-                    http_bool,
-                    ref_syslog_address,
-                    ref_hostname,
-                    syslog_bool,
-                    args.json,
-                    args.debug,
-                )
-                .await;
-            });
-        }
-    }
     if args.bash {
         // canonicalize the path and then convert to string
         let file: PathBuf = canonicalize("/bin/bash").unwrap_or_default();
@@ -668,7 +567,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if args.syscall_execve
-        || (!args.bash && !args.zsh && !args.fmsh && args.memory_faults.is_none() && !args.socket)
+        || (!args.bash && !args.zsh && args.memory_faults.is_none() && !args.socket)
     {
         // this is the main program functionality
         // the default option if the other shells are not selected

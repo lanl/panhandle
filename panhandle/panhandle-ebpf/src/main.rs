@@ -15,10 +15,8 @@ use aya_ebpf::{
     maps::{HashMap, PerCpuArray, PerfEventArray},
     programs::TracePointContext,
 };
-
 use panhandle_common::*;
 mod cpu_usage;
-mod fmsh;
 mod readline;
 mod socket;
 mod vanilla_execve;

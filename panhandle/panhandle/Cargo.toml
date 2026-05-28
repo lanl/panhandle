@@ -4,7 +4,7 @@ version = "1.0.10"
 edition = "2024"
 homepage = "https://github.com/lanl/panhandle"
 license = "MIT"
-description = "Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior, as well as the ability to monitor specific shells (bash, zsh, and fmsh) on a linux host. Several optional filters enable an administrator to selectively apply criterion to examine desired user behavior. These include UID filtering as well as filtering for the use of specific executables. Specified events are logged for further reporting and/or analysis. Logging options include file or terminal output for selected events."
+description = "Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior, as well as the ability to monitor specific shells (bash and zsh) on a linux host. Several optional filters enable an administrator to selectively apply criterion to examine desired user behavior. These include UID filtering as well as filtering for the use of specific executables. Specified events are logged for further reporting and/or analysis. Logging options include file or terminal output for selected events."
 
 [dependencies]
 panhandle-common = { path = "../panhandle-common", features = ["user"] }
@@ -53,7 +53,7 @@ assets = [
     { source = "../CONTRIBUTORS.md", dest = "/usr/share/doc/panhandle/CONTRIBUTORS.md", mode = "644" },
     { source = "../panhandle-sbom.spdx", dest = "/usr/share/doc/panhandle/SBOM.spdx", mode = "600" },
 ]
-description = "Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior, as well as the ability to monitor specific shells (bash, zsh, and fmsh) on a linux host. Several optional filters enable an administrator to selectively apply criterion to examine desired user behavior. These include UID filtering as well as filtering for the use of specific executables. Specified events are logged for further reporting and/or analysis. Logging options include file, http, or terminal output for selected events."
+description = "Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior, as well as the ability to monitor specific shells (bash and zsh) on a linux host. Several optional filters enable an administrator to selectively apply criterion to examine desired user behavior. These include UID filtering as well as filtering for the use of specific executables. Specified events are logged for further reporting and/or analysis. Logging options include file, http, or terminal output for selected events."
 summary = "The objective of the panhandle project is to provide monitoring and reporting of interactive user activity on a linux node, with as little impact to host resources as possible. The panhandle rpm provides a systemd service file and a binary written in Rust, using the aya library to create eBPF bytecode."
 release = "0"
 pre_install_script = "../../scripts/pre-install-rpm.sh"

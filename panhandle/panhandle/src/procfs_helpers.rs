@@ -1,9 +1,10 @@
-use reqwest::Client;
 use std::sync::Arc;
+
+use procfs::process::all_processes;
+use reqwest::Client;
 
 // local imports
 use crate::helpers::output_message;
-use procfs::process::all_processes;
 
 /*
 /*

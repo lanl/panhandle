@@ -990,7 +990,7 @@
     },
     {
       "SPDXID": "SPDXRef-Package-panhandle-1.0.10",
-      "description": "Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior, as well as the ability to monitor specific shells (bash, zsh, and fmsh) on a linux host. Several optional filters enable an administrator to selectively apply criterion to examine desired user behavior. These include UID filtering as well as filtering for the use of specific executables. Specified events are logged for further reporting and/or analysis. Logging options include file or terminal output for selected events.",
+      "description": "Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior, as well as the ability to monitor specific shells (bash and zsh) on a linux host. Several optional filters enable an administrator to selectively apply criterion to examine desired user behavior. These include UID filtering as well as filtering for the use of specific executables. Specified events are logged for further reporting and/or analysis. Logging options include file or terminal output for selected events.",
       "downloadLocation": "NONE",
       "homepage": "https://github.com/lanl/panhandle",
       "licenseConcluded": "MIT",

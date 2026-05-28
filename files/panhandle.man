@@ -5,7 +5,7 @@ panhandle - User activity monitoring
 \fBpanhandle\fP [ \fIOPTIONS\fP ]
 .SH DESCRIPTION
 \fBpanhandle\fP provides the ability to monitor execve syscalls to identify specific interesting user behavior, 
-as well as the ability to monitor specific shells (bash, zsh, and fmsh) on a linux host. Several optional filters 
+as well as the ability to monitor specific shells (bash and zsh) on a linux host. Several optional filters 
 enable an administrator to selectively apply criterion to examine  desired user behavior. These include 
 UID filtering as well as filtering for the use of specific executables. Specified events are logged for 
 further reporting and/or analysis.
@@ -34,9 +34,6 @@ Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. D
 .TP
 \fB--file\fI <FILE>\fR
 Specify the absolute path to the desired log file.
-.TP
-\fB-f, --fmsh\fP
-Monitor events from the fmsh shell using the readline function. This also returns events from the bash shell as fmsh is a derivative of bash.
 .TP
 \fB-m, --memory-faults <MEMORY_FAULTS>\fP
 Report the processes with memory faults greater than the specified threshold value.
@@ -71,7 +68,7 @@ Output events as valid json strings separated by newlines.
 Monitor events from the execve syscall. This is the program default if no other arguments are selected.
 .TP
 \fB--shells\fP
-Output execve syscall events only from the shells: bash, tcsh, zsh and fmsh. This does not effect the output of the bash or zsh options.
+Output execve syscall events only from the shells: bash, tcsh, & zsh. This does not effect the output of the bash or zsh options.
 .TP
 \fB--socket\fP
 Report the numbers of sockets per process.

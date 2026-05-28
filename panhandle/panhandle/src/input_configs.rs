@@ -1,11 +1,11 @@
+use std::{fs, path::Path};
+
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
 
 //struct for the cli arguments / make them as layerable as possible
 ///Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
-///    as well as the ability to monitor specific shells (bash, zsh, and fmsh) on a linux host.
+///    as well as the ability to monitor specific shells (bash and zsh) on a linux host.
 ///    Several optional filters enable an administrator to selectively apply criterion to examine
 ///    desired user behavior. These include UID filtering as well as filtering for the use of specific executables.
 ///    Specified events are logged for further reporting and/or analysis. Logging options include file, http, syslog,
@@ -46,11 +46,6 @@ pub struct RawArgs {
     #[arg(short, long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     pub executables: Option<Vec<String>>,
 
-    /// Monitor events from the fmsh shell using the readline function. This also returns events from the bash shell as fmsh is a derivative of bash.
-    #[arg(short, long, global = true)]
-    #[serde(default)]
-    pub fmsh: bool,
-
     /// Report the numbers of sockets per process.
     #[arg(long, global = true)]
     #[serde(default)]
@@ -83,7 +78,7 @@ pub struct RawArgs {
     #[serde(default)]
     pub syscall_execve: bool,
 
-    /// Output execve syscall events only from the shells: bash, tcsh, zsh & fmsh. This does not effect the output of the bash or zsh options.
+    /// Output execve syscall events only from the shells: bash, tcsh, & zsh. This does not effect the output of the bash or zsh options.
     #[arg(long, global = true)]
     #[serde(default)]
     pub shells: bool,
@@ -109,7 +104,7 @@ pub struct RawArgs {
     pub pid_list: Option<Vec<u32>>,
 
     /// Polling interval in seconds for monitoring information.
-    #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..), global = true)]
     pub poll: Option<u32>,
 }
 
@@ -157,9 +152,6 @@ pub struct ConfigArgs {
 
     #[serde(default)]
     pub bash: bool,
-
-    #[serde(default)]
-    pub fmsh: bool,
 
     pub memory_faults: Option<u64>,
 
@@ -228,7 +220,6 @@ impl From<ConfigArgs> for RawArgs {
             socket: cfg.socket,
             syscall_execve: cfg.syscall_execve,
             bash: cfg.bash,
-            fmsh: cfg.fmsh,
             memory_faults: cfg.memory_faults,
             zsh: cfg.zsh,
             quiet: cfg.quiet,
@@ -254,7 +245,6 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.debug = cli_args.debug || config_args.debug;
     final_args.verbose = cli_args.verbose || config_args.verbose;
     final_args.bash = cli_args.bash || config_args.bash;
-    final_args.fmsh = cli_args.fmsh || config_args.fmsh;
     final_args.zsh = cli_args.zsh || config_args.zsh;
     final_args.json = cli_args.json || config_args.json;
     final_args.quiet = cli_args.quiet || config_args.quiet;

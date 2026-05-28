@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::helpers::*;
-    use crate::input_configs::*;
     use std::path::PathBuf;
+
+    use crate::{helpers::*, input_configs::*};
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
     #[tokio::test]
@@ -11,7 +11,6 @@ mod tests {
         let expected_all_bools = ConfigArgs {
             bash: true,
             debug: true,
-            fmsh: true,
             syscall_execve: true,
             json: true,
             verbose: true,
@@ -141,7 +140,6 @@ mod tests {
         let config = ConfigArgs {
             bash: true,
             debug: true,
-            fmsh: true,
             syscall_execve: true,
             json: true,
             verbose: true,
@@ -160,7 +158,6 @@ mod tests {
         let expected_merged_args = RawArgs {
             bash: true,
             debug: true,
-            fmsh: true,
             syscall_execve: true,
             json: true,
             verbose: true,

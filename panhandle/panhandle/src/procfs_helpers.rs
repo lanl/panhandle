@@ -59,7 +59,18 @@ pub async fn get_major_faults(
 
 /*
     Method to get memory usage information for all processes.
-    Takes the desired output formatting (json, boolean) as input parameters.
+    
+    Reads memory statistics from /proc filesystem for each running process and outputs:
+    - PID: Process identifier
+    - Comm: Command name
+    - RSS (MB): Resident Set Size in megabytes
+    - RSS (pages): Resident Set Size but in 4KB pages
+    - Peak RSS (MB): maximum physical RAM the process has used since it started
+    - VSize (MB): total virtual address space
+    - Resident (MB): number of pages in physical RAM, similar to RSS but from different /proc source
+    - Shared (MB): Shared memory pages
+    - Data+Stack (MB): Data + stack size: size of process heap and stack regions (excludes code/text segment)
+    Takes the desired output formatting (json, boolean) and pid filter as input parameters.
 */
 pub async fn get_all_memory_usage(
     use_json: &bool,
@@ -70,6 +81,7 @@ pub async fn get_all_memory_usage(
     syslog_address: &Arc<String>,
     client: &Client,
     debug: &bool,
+    pid_filter: &Option<Vec<u32>>,
 ) {
     // Get an iterator over all processes in /proc
     if let Ok(procs) = all_processes() {
@@ -80,6 +92,13 @@ pub async fn get_all_memory_usage(
             if let Ok(stat) = proc_res.stat()
                 && let Ok(statm) = proc_res.statm()
             {
+                // Apply PID filter if provided
+                if let Some(pids) = pid_filter {
+                    if !pids.contains(&(stat.pid as u32)) {
+                        continue; // Skip this process, it's not in filter list
+                    }
+                }
+                
                 // Read /proc/[pid]/status - this may fail for some processes due to permissions
                 let status = proc_res.status().ok();
                 

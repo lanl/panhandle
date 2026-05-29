@@ -391,6 +391,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
+        let pid_filter = args.pid_list.clone();
 
         let client = Client::new();
         memory_usage_handle = Some(tokio::task::spawn(async move {
@@ -404,6 +405,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &syslog,
                     &client,
                     &args.debug,
+                    &pid_filter
                 )
                 .await;
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;

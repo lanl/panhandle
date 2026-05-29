@@ -283,10 +283,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        // Wait for Ctrl+C
-        signal::ctrl_c().await?;
-        info!("Shutting down CPU monitoring...");
-        return Ok(());
     }
 
     let mut polling_freq_seconds: u32 = 30;
@@ -358,7 +354,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // set up the memory fault monitoring
-    let mut memory_handle: Option<JoinHandle<()>> = None;
+    let mut memory_fault_handle: Option<JoinHandle<()>> = None;
 
     if let Some(threshold_fault_count) = args.memory_faults {
         // example if you want to see all the proc info options, note that there is an example
@@ -369,10 +365,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let syslog = syslog_address.clone();
 
         let client = Client::new();
-        memory_handle = Some(tokio::task::spawn(async move {
+        memory_fault_handle = Some(tokio::task::spawn(async move {
             loop {
                 let _ = procfs_helpers::get_major_faults(
                     threshold_fault_count,
+                    &args.json,
+                    &http_bool,
+                    &syslog_bool,
+                    &host,
+                    &url,
+                    &syslog,
+                    &client,
+                    &args.debug,
+                )
+                .await;
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
+            }
+        }));
+    }
+
+    // set up the memory usage monitoring
+    let mut memory_usage_handle: Option<JoinHandle<()>> = None;
+
+    if args.memory {
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+
+        let client = Client::new();
+        memory_usage_handle = Some(tokio::task::spawn(async move {
+            loop {
+                let _ = procfs_helpers::get_all_memory_usage(
                     &args.json,
                     &http_bool,
                     &syslog_bool,
@@ -650,7 +673,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // await the escape signal - this may need to change based on the method of running the program
     signal::ctrl_c().await?;
     debug!("cleanly exiting program as requested");
-    if let Some(handle_ref) = memory_handle {
+    if let Some(handle_ref) = memory_fault_handle {
+        handle_ref.abort();
+    };
+    if let Some(handle_ref) = memory_usage_handle {
         handle_ref.abort();
     };
     if let Some(handle_ref) = socket_handle {

@@ -232,6 +232,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         process::exit(1);
     }
 
+    // polling frequency variable for performance monitoring tasks
+    let mut polling_freq_seconds: u32 = 30;
+    if let Some(poll) = args.poll {
+        polling_freq_seconds = poll;
+    }
+
     // CPU monitoring
     if args.cpu {
         info!("Starting CPU usage monitoring...");
@@ -252,7 +258,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let pid_filter = args.pid_list.clone();
         let json_output = args.json;
-        let poll_interval = args.poll.unwrap_or(3);
 
         // Clone necessary variables for the async task
         let ref_global_url = global_url.clone();
@@ -267,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 busy_cpu_time,
                 pid_filter,
                 json_output,
-                poll_interval,
+                polling_freq_seconds,
                 http_bool,
                 syslog_bool,
                 file_bool,
@@ -282,13 +287,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 error!("CPU monitoring error: {}", e);
             }
         });
-
     }
 
-    let mut polling_freq_seconds: u32 = 30;
-    if let Some(poll) = args.poll {
-        polling_freq_seconds = poll;
-    }
     // move to if statements for the main program args
     // goal is to try to allow a combination of all of the args
     // this introduces some code duplication
@@ -405,7 +405,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &syslog,
                     &client,
                     &args.debug,
-                    &pid_filter
+                    &pid_filter,
                 )
                 .await;
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;

@@ -59,9 +59,9 @@ pub async fn get_major_faults(
 
 /*
     Method to get memory usage information for all processes.
-    
-    Reads memory statistics from /proc filesystem for each running process and outputs:
-    - PID: Process identifier
+
+    Outputs:
+    - PID
     - Comm: Command name
     - RSS (MB): Resident Set Size in megabytes
     - RSS (pages): Resident Set Size but in 4KB pages
@@ -93,19 +93,19 @@ pub async fn get_all_memory_usage(
                 && let Ok(statm) = proc_res.statm()
             {
                 // Apply PID filter if provided
-                if let Some(pids) = pid_filter {
-                    if !pids.contains(&(stat.pid as u32)) {
-                        continue; // Skip this process, it's not in filter list
-                    }
+                if let Some(pids) = pid_filter
+                    && !pids.contains(&(stat.pid as u32))
+                {
+                    continue; // Skip this process, it's not in filter list
                 }
-                
-                // Read /proc/[pid]/status - this may fail for some processes due to permissions
+
+                // Read /proc/[pid]/status
                 let status = proc_res.status().ok();
-                
+
                 // Extract vm_hwm and vm_rss from status if available
                 let vm_hwm = status.as_ref().and_then(|s| s.vmhwm);
                 let vm_rss = status.as_ref().and_then(|s| s.vmrss);
-                
+
                 // Convert various metrics to MB for readability
                 let rss_mb = vm_rss.unwrap_or(0) / 1024;
                 let vsize_mb = stat.vsize / (1024 * 1024);
@@ -114,7 +114,7 @@ pub async fn get_all_memory_usage(
                 let shared_mb = (statm.shared * 4) / 1024;
                 let data_mb = (statm.data * 4) / 1024;
                 let rss_pages = stat.rss;
-                
+
                 let plain_string = format!(
                     "PID: {}, Comm: {}, RSS: {} MB, RSS: {} pages, Peak RSS: {} MB, VSize: {} MB, Resident: {} MB, Shared: {} MB, Data+Stack: {} MB",
                     stat.pid,
@@ -127,7 +127,7 @@ pub async fn get_all_memory_usage(
                     shared_mb,
                     data_mb
                 );
-                
+
                 let json_string = format!(
                     "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Resident_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_MB\": \"{}\"}}",
                     stat.pid,
@@ -140,7 +140,7 @@ pub async fn get_all_memory_usage(
                     shared_mb,
                     data_mb
                 );
-                
+
                 output_message(
                     http,
                     syslog,

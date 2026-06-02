@@ -8,3 +8,4 @@ quiet: true
 shells: true
 socket: true
 cpu: true
+memory: true

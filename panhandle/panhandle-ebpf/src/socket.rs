@@ -3,8 +3,11 @@ use aya_ebpf::{helpers::bpf_get_current_pid_tgid, macros::map, maps::HashMap};
 
 #[map(name = "tcp_socket_count")]
 static mut TCP_SOCKET_COUNT: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
+#[map(name = "tcp_syn_recv_count")]
+static mut TCP_SYN_RECV_COUNT: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
 const TCP_ESTABLISHED: i32 = 1;
+const TCP_SYN_RECV: i32 = 3;
 const TCP_CLOSE: i32 = 7;
 
 use aya_ebpf::{macros::btf_tracepoint, programs::BtfTracePointContext};
@@ -17,6 +20,7 @@ pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> u32 {
 }
 
 fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
+    let oldstate: i32 = unsafe { ctx.arg(1) };
     let newstate: i32 = unsafe { ctx.arg(2) };
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
     //let pcomm: [u8; 16];
@@ -30,7 +34,28 @@ fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
         count += 1;
 
         unsafe { TCP_SOCKET_COUNT.insert(&pid, &count, 0).map_err(|_| 1u32)? };
-    } else if newstate == TCP_CLOSE {
+    } else if newstate == TCP_SYN_RECV {
+        let mut count = unsafe { TCP_SYN_RECV_COUNT.get(&pid).copied().unwrap_or(0) };
+
+        count += 1;
+
+        unsafe { TCP_SYN_RECV_COUNT.insert(&pid, &count, 0).map_err(|_| 1u32)? };
+    }
+    else if oldstate == TCP_SYN_RECV && newstate != TCP_SYN_RECV {
+        if let Some(count) = unsafe { TCP_SYN_RECV_COUNT.get_ptr_mut(&pid)} {
+            unsafe {
+                if (*count) > 0 {
+                    (*count) -= 1;
+                }
+                
+                // Remove entry if count hits 0 to keep the map clean
+                if (*count) == 0 {
+                    let _ = TCP_SYN_RECV_COUNT.remove(&pid);
+                }
+            }
+        }
+    }
+    else if newstate == TCP_CLOSE {
         // Look up the record; if it exists, decrement the count
         if let Some(count) = unsafe { TCP_SOCKET_COUNT.get_ptr_mut(&pid) } {
             unsafe {

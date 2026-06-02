@@ -304,8 +304,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         program.load("inet_sock_set_state", &btf)?;
         program.attach()?;
 
+        // hashmap to keep count of TCP connections
         let socket_map: HashMap<_, u32, u32> =
             HashMap::try_from(ebpf.take_map("tcp_socket_count").unwrap())?;
+        // hashmap to keep count of SYN_RECV
+        let syn_recv_map: HashMap<_, u32, u32> =
+            HashMap::try_from(ebpf.take_map("tcp_syn_recv_count").unwrap())?;
 
         let url = global_url.clone();
         let host = hostname.clone();
@@ -313,44 +317,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new();
 
         socket_handle = Some(tokio::task::spawn(async move {
-            loop {
-                for item in socket_map.iter() {
-                    let (pid, count) = item.unwrap();
-                    if count > 0
-                        && let Ok(proc) = Process::new(pid.try_into().unwrap())
-                        && let Ok(stat) = proc.stat()
-                    {
-                        debug!(
-                            "PID: {}, Comm: {}, TCPConnectionCount: {}",
-                            pid, stat.comm, count
-                        );
-
-                        let plain_string = format!(
-                            "PID: {}, Comm: {}, TCPConnectionCount: {}",
-                            pid, stat.comm, count
-                        );
-                        let json_string: String = format!(
-                            "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"TCPConnectionCount\": \"{}\"}}",
-                            pid, stat.comm, count
-                        );
-                        output_message(
-                            &http_bool,
-                            &syslog_bool,
-                            &host,
-                            &syslog,
-                            &url,
-                            &args.json,
-                            &plain_string,
-                            &json_string,
-                            &client,
-                            &args.debug,
-                        )
-                        .await;
-                    }
+        loop {
+            // Collect all unique PIDs from both maps
+            let mut pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            
+            for item in socket_map.iter() {
+                if let Ok((pid, _)) = item {
+                    pids.insert(pid);
                 }
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
-        }));
+            
+            for item in syn_recv_map.iter() {
+                if let Ok((pid, _)) = item {
+                    pids.insert(pid);
+                }
+            }
+
+            // Report metrics for each PID
+            for pid in pids {
+                let established_count = socket_map.get(&pid, 0).unwrap_or(0);
+                let syn_recv_count = syn_recv_map.get(&pid, 0).unwrap_or(0);
+                
+                // Only report if there's activity
+                if (established_count > 0 || syn_recv_count > 0)
+                    && let Ok(proc) = Process::new(pid.try_into().unwrap())
+                    && let Ok(stat) = proc.stat()
+                {
+                    debug!(
+                        "PID: {}, Comm: {}, ESTABLISHED: {}, SYN_RECV: {}",
+                        pid, stat.comm, established_count, syn_recv_count
+                    );
+
+                    let plain_string = format!(
+                        "PID: {}, Comm: {}, ESTABLISHED: {}, SYN_RECV: {}",
+                        pid, stat.comm, established_count, syn_recv_count
+                    );
+                    let json_string: String = format!(
+                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"ESTABLISHED\": \"{}\", \"SYN_RECV\": \"{}\"}}",
+                        pid, stat.comm, established_count, syn_recv_count
+                    );
+                    
+                    output_message(
+                        &http_bool,
+                        &syslog_bool,
+                        &host,
+                        &syslog,
+                        &url,
+                        &args.json,
+                        &plain_string,
+                        &json_string,
+                        &client,
+                        &args.debug,
+                    )
+                    .await;
+                }
+            }
+
+            let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
+        }
+    }));
     }
 
     // set up the memory fault monitoring

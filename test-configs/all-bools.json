@@ -8,5 +8,6 @@
   "quiet": true,
   "shells": true,
   "socket": true,
-  "cpu": true
+  "cpu": true,
+  "memory": true
 }

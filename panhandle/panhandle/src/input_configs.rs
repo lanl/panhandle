@@ -93,12 +93,12 @@ pub struct RawArgs {
     #[serde(default)]
     pub zsh: bool,
 
-    /// Receive a report of CPU usage over time.
+    /// Receive a report of CPU usage over time. Filter by pid using --pid-list <PIDs>.
     #[arg(long, global = true)]
     #[serde(default)]
     pub cpu: bool,
 
-    /// Receive a report of memory usage over time.
+    /// Receive a report of memory usage over time. Filter by pid using --pid-list <PIDs>.
     #[arg(long, global = true)]
     #[serde(default)]
     pub memory: bool,

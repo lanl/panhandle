@@ -76,6 +76,9 @@ Report the numbers of sockets per process.
 \fB--cpu\fP
 Turn on cpu usage monitoring and reporting.
 .TP
+\fB--memory\fP
+Turn on memory usage monitoring and reporting.
+.TP
 \fB-v, --verbose\fP
 Verbose output
 .TP

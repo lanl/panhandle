@@ -233,7 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // polling frequency variable for performance monitoring tasks
-    let mut polling_freq_seconds: u32 = 30;
+    let mut polling_freq_seconds: u32 = 5;
     if let Some(poll) = args.poll {
         polling_freq_seconds = poll;
     }
@@ -450,7 +450,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // set up the memory usage monitoring
     let mut memory_usage_handle: Option<JoinHandle<()>> = None;
-
     if args.memory {
         let url = global_url.clone();
         let host = hostname.clone();

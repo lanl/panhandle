@@ -25,12 +25,6 @@ const TCP_CLOSE_WAIT: i32 = 8;
 
 use aya_ebpf::{macros::btf_tracepoint, programs::BtfTracePointContext};
 
-// Using #[btf_tracepoint] instead of #[tracepoint]
-#[btf_tracepoint(function = "inet_sock_set_state")]
-pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> u32 {
-    let _ = try_inet_sock_set_state(ctx);
-    0
-}
 
 // helper macro for updating state counts
 // increments/decrements the count of the corresponding state's hashmap
@@ -58,6 +52,14 @@ macro_rules! track_state {
         }
     };
 }
+
+// Using #[btf_tracepoint] instead of #[tracepoint]
+#[btf_tracepoint(function = "inet_sock_set_state")]
+pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> u32 {
+    let _ = try_inet_sock_set_state(ctx);
+    0
+}
+
 fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
     let oldstate: i32 = unsafe { ctx.arg(1) };
     let newstate: i32 = unsafe { ctx.arg(2) };
@@ -85,4 +87,14 @@ fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
     track_state!(TCP_FIN_WAIT_COUNT, oldstate, newstate, TCP_FIN_WAIT2, pid);
 
     Ok(0)
+}
+
+#[btf_tracepoint(function = "udp_sendmsg")]
+pub fn udp_sendmsg(ctx: BtfTracePointContext) -> u32 {
+    let _ = try_udp_sendmsg(ctx);
+    0
+}
+
+fn try_udp_sendmsg(ctx: BtfTracePointContext) -> Result<u32, u32> {
+    let pid = (bpf_get_current_pid_tgid() >> u32) as u32;
 }

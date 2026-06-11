@@ -31,15 +31,6 @@ struct GlobalStats {
     total_busy_time: u64,
 }
 
-// Structure to hold global system statistics
-#[derive(Default)]
-struct GlobalStats {
-    max_utilization: f64,
-    min_utilization: f64,
-    avg_utilization: f64,
-    total_busy_time: u64,
-}
-
 // cpu monitoring helper function
 pub async fn monitor_cpu_usage(
     pid_cpu_time: HashMap<aya::maps::MapData, u32, u64>,
@@ -84,10 +75,6 @@ pub async fn monitor_cpu_usage(
     let mut last_total_busy: u64 = 0;
     let mut last_pid_times: StdHashMap<u32, u64> = StdHashMap::new();
     let mut pid_stats: StdHashMap<u32, PidStats> = StdHashMap::new();
-    let mut global_stats = GlobalStats {
-        min_utilization: f64::MAX,
-        ..Default::default()
-    };
     let mut global_stats = GlobalStats {
         min_utilization: f64::MAX,
         ..Default::default()
@@ -345,15 +332,6 @@ pub async fn monitor_cpu_usage(
                         println!("  Average utilization: {:.2}%", global_stats.avg_utilization);
                         println!("  Minimum utilization: {:.2}%", global_stats.min_utilization);
                         println!("  Maximum utilization: {:.2}%", global_stats.max_utilization);
-                    } else {
-                        // Global mode statistics
-                        println!("\n  Global System Statistics:");
-                        println!("  {}", "─".repeat(60));
-                        println!("  Number of CPUs: {}", num_cpus);
-                        println!("  Total busy time: {:.2} ms", global_stats.total_busy_time as f64 / 1_000_000.0);
-                        println!("  Average utilization: {:.2}%", global_stats.avg_utilization);
-                        println!("  Minimum utilization: {:.2}%", global_stats.min_utilization);
-                        println!("  Maximum utilization: {:.2}%", global_stats.max_utilization);
                     }
 
                     println!("═══════════════════════════════════════════════════════════\n");
@@ -370,25 +348,6 @@ pub async fn monitor_cpu_usage(
                         pid_stats.len()
                     );
 
-                if !pid_stats.is_empty() {
-                    let plain_string = format!(
-                        "CPU_MONITOR_SUMMARY hostname={} total_samples={} duration_sec={} pids_monitored={}",
-                        hostname,
-                        sample_count,
-                        sample_count * poll_interval as u64,
-                        pid_stats.len()
-                    );
-
-                    let mut pid_summaries = Vec::new();
-                    for (pid, stats) in pid_stats.iter() {
-                        pid_summaries.push(json!({
-                            "pid": pid,
-                            "total_time_ms": format!("{:.2}", stats.total_time as f64 / 1_000_000.0),
-                            "avg_cpu_percent": format!("{:.2}", stats.avg_cpu_percent),
-                            "max_cpu_percent": format!("{:.2}", stats.max_cpu_percent),
-                            "sample_count": stats.sample_count
-                        }));
-                    }
                     let mut pid_summaries = Vec::new();
                     for (pid, stats) in pid_stats.iter() {
                         pid_summaries.push(json!({
@@ -400,17 +359,6 @@ pub async fn monitor_cpu_usage(
                         }));
                     }
 
-                    let json_value = json!({
-                        "event_type": "cpu_monitor_summary",
-                        "hostname": hostname.as_str(),
-                        "timestamp": timestamp,
-                        "total_samples": sample_count,
-                        "duration_sec": sample_count * poll_interval as u64,
-                        "poll_interval_sec": poll_interval,
-                        "num_cpus": num_cpus,
-                        "pid_statistics": pid_summaries
-                    });
-                    let json_string = json_value.to_string();
                     let json_value = json!({
                         "event_type": "cpu_monitor_summary",
                         "hostname": hostname.as_str(),

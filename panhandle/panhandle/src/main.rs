@@ -3,7 +3,7 @@ use std::{convert::TryInto, path::PathBuf};
 use aya::{
     Btf,
     maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
-    programs::{BtfTracePoint, TracePoint, UProbe},
+    programs::{TracePoint, UProbe},
     util::online_cpus,
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
@@ -21,7 +21,6 @@ use std::{
 };
 
 use bytes::BytesMut;
-use procfs::process::Process;
 use reqwest::Client;
 use simplelog::*;
 use uzers::get_current_uid;
@@ -31,11 +30,13 @@ use uzers::get_current_uid;
 mod helpers;
 mod input_configs;
 mod monitor_cpu_usage;
+mod monitor_network_usage;
 mod procfs_helpers;
 mod unit_tests;
 use helpers::*;
 use input_configs::*;
 use monitor_cpu_usage::*;
+use monitor_network_usage::*;
 use panhandle_common::*;
 
 #[tokio::main]
@@ -296,123 +297,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.socket {
         let btf = Btf::from_sys_fs()?;
 
-        // Attach to the specific tracepoint category and name
-        let program: &mut BtfTracePoint = ebpf
-            .program_mut("inet_sock_set_state")
-            .unwrap()
-            .try_into()?;
-        program.load("inet_sock_set_state", &btf)?;
-        program.attach()?;
+        // Attach all network monitoring programs
+        // TCP state transitions
+        attach_tracepoint(&mut ebpf, &btf, "inet_sock_set_state")?;
 
-        // Load all TCP state count maps (names match eBPF code)
-        let established_map: HashMap<_, u32, u32> =
-            HashMap::try_from(ebpf.take_map("tcp_established_count").unwrap())?;
-        let syn_recv_map: HashMap<_, u32, u32> =
-            HashMap::try_from(ebpf.take_map("tcp_syn_recv_count").unwrap())?;
-        let close_wait_map: HashMap<_, u32, u32> =
-            HashMap::try_from(ebpf.take_map("tcp_close_wait_count").unwrap())?;
-        let time_wait_map: HashMap<_, u32, u32> =
-            HashMap::try_from(ebpf.take_map("tcp_time_wait_count").unwrap())?;
-        let fin_wait_map: HashMap<_, u32, u32> =
-            HashMap::try_from(ebpf.take_map("tcp_fin_wait_count").unwrap())?;
+        // Attach kprobes for data transfer tracking
+        attach_kprobe(&mut ebpf, "tcp_sendmsg")?;
+        attach_kprobe(&mut ebpf, "tcp_cleanup_rbuf")?;
+        attach_kprobe(&mut ebpf, "udp_sendmsg")?;
+        attach_kprobe(&mut ebpf, "udp_recvmsg")?;
 
-        let url = global_url.clone();
-        let host = hostname.clone();
-        let syslog = syslog_address.clone();
+        // Load the network stats map
+        let net_stats_map_data = ebpf.take_map("net_stats").unwrap();
+        let net_stats_map: HashMap<_, u32, NetStats> = HashMap::try_from(net_stats_map_data)?;
+
+        let json_output = args.json;
+
+        // Clone necessary variables for the async task
+        let ref_global_url = global_url.clone();
+        let ref_syslog_address = syslog_address.clone();
+        let ref_hostname = hostname.clone();
         let client = Client::new();
 
-        socket_handle = Some(tokio::task::spawn(async move {
-            loop {
-                // Collect all unique PIDs from all maps
-                let mut pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-
-                for (pid, _) in established_map.iter().flatten() {
-                    pids.insert(pid);
-                }
-
-                for (pid, _) in syn_recv_map.iter().flatten() {
-                    pids.insert(pid);
-                }
-
-                for (pid, _) in close_wait_map.iter().flatten() {
-                    pids.insert(pid);
-                }
-
-                for (pid, _) in time_wait_map.iter().flatten() {
-                    pids.insert(pid);
-                }
-
-                for (pid, _) in fin_wait_map.iter().flatten() {
-                    pids.insert(pid);
-                }
-
-                // Report metrics for each PID
-                for pid in pids {
-                    let established_count = established_map.get(&pid, 0).unwrap_or(0);
-                    let syn_recv_count = syn_recv_map.get(&pid, 0).unwrap_or(0);
-                    let close_wait_count = close_wait_map.get(&pid, 0).unwrap_or(0);
-                    let time_wait_count = time_wait_map.get(&pid, 0).unwrap_or(0);
-                    let fin_wait_count = fin_wait_map.get(&pid, 0).unwrap_or(0);
-
-                    // Only report if there's activity
-                    if (established_count > 0
-                        || syn_recv_count > 0
-                        || close_wait_count > 0
-                        || time_wait_count > 0
-                        || fin_wait_count > 0)
-                        && let Ok(proc) = Process::new(pid.try_into().unwrap())
-                        && let Ok(stat) = proc.stat()
-                    {
-                        debug!(
-                            "PID: {}, Comm: {}, ESTABLISHED: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}",
-                            pid,
-                            stat.comm,
-                            established_count,
-                            syn_recv_count,
-                            close_wait_count,
-                            fin_wait_count,
-                            time_wait_count
-                        );
-
-                        let plain_string = format!(
-                            "PID: {}, Comm: {}, ESTABLISHED: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}",
-                            pid,
-                            stat.comm,
-                            established_count,
-                            syn_recv_count,
-                            close_wait_count,
-                            fin_wait_count,
-                            time_wait_count
-                        );
-
-                        let json_string: String = format!(
-                            "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"ESTABLISHED\": \"{}\", \"SYN_RECV\": \"{}\", \"CLOSE_WAIT\": \"{}\", \"FIN_WAIT\": \"{}\", \"TIME_WAIT\": \"{}\"}}",
-                            pid,
-                            stat.comm,
-                            established_count,
-                            syn_recv_count,
-                            close_wait_count,
-                            fin_wait_count,
-                            time_wait_count
-                        );
-
-                        output_message(
-                            &http_bool,
-                            &syslog_bool,
-                            &host,
-                            &syslog,
-                            &url,
-                            &args.json,
-                            &plain_string,
-                            &json_string,
-                            &client,
-                            &args.debug,
-                        )
-                        .await;
-                    }
-                }
-
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
+        // Spawn network monitoring task
+        socket_handle = Some(tokio::spawn(async move {
+            if let Err(e) = monitor_network_usage(
+                net_stats_map,
+                polling_freq_seconds,
+                json_output,
+                http_bool,
+                syslog_bool,
+                args.debug,
+                ref_hostname,
+                ref_syslog_address,
+                ref_global_url,
+                client,
+            )
+            .await
+            {
+                error!("Network monitoring error: {}", e);
             }
         }));
     }
@@ -421,9 +344,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut memory_fault_handle: Option<JoinHandle<()>> = None;
 
     if let Some(threshold_fault_count) = args.memory_faults {
-        // example if you want to see all the proc info options, note that there is an example
-        // message for RHEL8 detailed in this method in proc.rs
-        //procfs::get_all_proc_info();
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
@@ -746,6 +666,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if let Some(handle_ref) = socket_handle {
         handle_ref.abort();
-    };
+    }
     Ok(())
 }

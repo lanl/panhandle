@@ -4,6 +4,7 @@
 #![allow(clippy::comparison_chain)]
 // used code from https://github.com/FlakM/sysrat/blob/main/ebpf/common/src/lib.rs
 use core::fmt::{self, Formatter};
+
 pub type pid_t = i32;
 
 // put all the desired shared constants here / enables not adding them to the ebpf
@@ -61,6 +62,71 @@ pub struct trace_entry {
     pub flags: u8,  // Changed from ::aya_ebpf::cty::c_uchar
     pub preempt_count: u8,
     pub pid: i32, // Changed from ::aya_ebpf::cty::c_int
+}
+
+// Custom struct used for monitoring network usage
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct NetStats {
+    // TCP connection state counts of sockets per PID
+    pub tcp_established: u32,
+    pub tcp_syn_recv: u32,
+    pub tcp_close_wait: u32,
+    pub tcp_time_wait: u32,
+    pub tcp_fin_wait: u32,
+
+    // UDP
+    pub udp_sockets: u32, // treated as a flag variable for if a udp message has been sent from the socket
+
+    // Network I/O counters
+    pub bytes_sent: u64, // total bytes sent through this socket
+    pub bytes_recv: u64, // total bytes received through this socket
+    pub packets_sent: u64, // total packets sent through this socket
+    pub packets_recv: u64, // total packets received through this socket
+}
+// SAFETY: NetStats contains only primitive types (u32, u64) with no padding issues
+// and has #[repr(C)] layout, making it safe to treat as Plain Old Data
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for NetStats {}
+
+impl NetStats {
+    // Create a new NetStats instance with all fields initialized to zero
+    pub const fn new() -> Self {
+        Self {
+            tcp_established: 0,
+            tcp_syn_recv: 0,
+            tcp_close_wait: 0,
+            tcp_time_wait: 0,
+            tcp_fin_wait: 0,
+            udp_sockets: 0,
+            bytes_sent: 0,
+            bytes_recv: 0,
+            packets_sent: 0,
+            packets_recv: 0,
+        }
+    }
+
+    // Check if this NetStats entry has any activity worth reporting
+    // Returns true if there are any active connections or data transfer
+    pub const fn has_activity(&self) -> bool {
+        self.tcp_established > 0
+            || self.tcp_syn_recv > 0
+            || self.tcp_close_wait > 0
+            || self.tcp_time_wait > 0
+            || self.tcp_fin_wait > 0
+            || self.udp_sockets > 0
+            || self.bytes_sent > 0
+            || self.bytes_recv > 0
+            || self.packets_sent > 0
+            || self.packets_recv > 0
+    }
+}
+
+// Default trait implementation
+impl Default for NetStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[repr(C)]

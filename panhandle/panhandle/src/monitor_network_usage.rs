@@ -31,51 +31,56 @@ pub async fn monitor_network_usage(
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
     client: &Client,
+    pid_list: &Option<Vec<u32>>
 ) -> Result<(), Box<dyn std::error::Error>> {
-        // Iterate over all entries in the map
-        for (pid, stats) in net_stats_map.iter().flatten() {
-                // Skip entries with no activity
-                if !stats.has_activity() {
-                    continue;
-                }
+    // Iterate over all entries in the map
+    for (pid, stats) in net_stats_map.iter().flatten() {
+        // Skip entries with no activity
+        if !stats.has_activity() {
+            continue;
+        }
 
-                // Get process information from procfs
-                if let Ok(proc) = Process::new(pid.try_into().unwrap())
-                    && let Ok(stat) = proc.stat()
-                {
-                    // Get parent process pid and comm
-                    let ppid = stat.ppid as u32;
-                    let parent_comm = if ppid > 0 {
-                        get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
-                    } else {
-                        "unknown".to_string()
-                    };
-
-                    let (nic, ip, mac) = get_network_info(pid);
-
-                    // send all info to print function
-                    report_network_stats(
-                        pid,
-                        &stat.comm,
-                        ppid,
-                        &parent_comm,
-                        &nic,
-                        &ip,
-                        &mac,
-                        &stats,
-                        &json_output,
-                        &http,
-                        &syslog,
-                        &debug,
-                        &hostname,
-                        &syslog_address,
-                        &global_url,
-                        &client,
-                    )
-                    .await;
-                }
+        // Get process information from procfs
+        if let Ok(proc) = Process::new(pid.try_into().unwrap())
+            && let Ok(stat) = proc.stat()
+        {
+            // apply PID filter if provided
+            if let Some(pids) = pid_list && !pids.contains(&(stat.pid as u32))  {
+                continue;
             }
-            Ok(())
+            // Get parent process pid and comm
+            let ppid = stat.ppid as u32;
+            let parent_comm = if ppid > 0 {
+                get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+            } else {
+                "unknown".to_string()
+            };
+
+            let (nic, ip, mac) = get_network_info(pid);
+
+            // send all info to print function
+            report_network_stats(
+                pid,
+                &stat.comm,
+                ppid,
+                &parent_comm,
+                &nic,
+                &ip,
+                &mac,
+                &stats,
+                &json_output,
+                &http,
+                &syslog,
+                &debug,
+                hostname,
+                syslog_address,
+                global_url,
+                client,
+            )
+            .await;
+        }
+    }
+    Ok(())
 }
 
 // Format and output network statistics for a single process
@@ -144,16 +149,16 @@ async fn report_network_stats(
 
     // Output via configured channels
     output_message(
-        &http,
-        &syslog,
+        http,
+        syslog,
         hostname,
         syslog_address,
         http_url,
-        &json_output,
+        json_output,
         &plain_string,
         &json_string,
         client,
-        &debug_mode,
+        debug_mode,
     )
     .await;
 }

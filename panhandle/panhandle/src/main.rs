@@ -250,14 +250,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let busy_cpu_time_map = ebpf.take_map("busy_cpu_time").unwrap();
         let busy_cpu_time = PerCpuArray::try_from(busy_cpu_time_map)?;
 
-        let pid_filter = args.pid_list.clone();
         let json_output = args.json;
 
         // Clone necessary variables for the async task
-        let ref_global_url = global_url.clone();
-        let ref_syslog_address = syslog_address.clone();
-        let ref_hostname = hostname.clone();
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
         let client = Client::new();
+        let pid_filter = args.pid_list.clone();
 
         // Spawn CPU monitoring task
         cpu_handle = Some(tokio::spawn(async move {
@@ -269,9 +269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 polling_freq_seconds,
                 http_bool,
                 syslog_bool,
-                ref_hostname,
-                ref_syslog_address,
-                ref_global_url,
+                host,
+                syslog,
+                url,
                 client,
                 args.debug,
             )
@@ -312,6 +312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let host = hostname.clone();
         let syslog = syslog_address.clone();
         let client = Client::new();
+        let pid_filter = args.pid_list.clone();
 
         // Spawn network monitoring task
         socket_handle = Some(tokio::spawn(async move {
@@ -326,6 +327,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &syslog,
                     &url,
                     &client,
+                    &pid_filter
                 )
                 .await
                 {

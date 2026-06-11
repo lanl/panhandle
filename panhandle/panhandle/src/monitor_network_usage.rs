@@ -1,13 +1,11 @@
 use std::{convert::TryInto, sync::Arc};
 
 use aya::maps::HashMap;
-use log::debug;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig}; // for getting nic information
 use panhandle_common::NetStats;
 use procfs::process::Process;
 use reqwest::Client;
 use serde_json::json;
-use tokio::time::{Duration, sleep};
 
 use crate::helpers::output_message;
 
@@ -24,21 +22,18 @@ fn get_process_name(pid: u32) -> Option<String> {
 /// takes `net_stats_map` - eBPF map containing network statistics per PID
 /// takes output formatting and location options (json, syslog, http)
 pub async fn monitor_network_usage(
-    net_stats_map: HashMap<aya::maps::MapData, u32, NetStats>,
-    poll_interval: u32,
-    json_output: bool,
-    http: bool,
-    syslog: bool,
-    debug: bool,
-    hostname: Arc<String>,
-    syslog_address: Arc<String>,
-    global_url: Arc<String>,
-    client: Client,
+    net_stats_map: &HashMap<aya::maps::MapData, u32, NetStats>,
+    json_output: &bool,
+    http: &bool,
+    syslog: &bool,
+    debug: &bool,
+    hostname: &Arc<String>,
+    syslog_address: &Arc<String>,
+    global_url: &Arc<String>,
+    client: &Client,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    loop {
         // Iterate over all entries in the map
-        for item in net_stats_map.iter() {
-            if let Ok((pid, stats)) = item {
+        for (pid, stats) in net_stats_map.iter().flatten() {
                 // Skip entries with no activity
                 if !stats.has_activity() {
                     continue;
@@ -68,10 +63,10 @@ pub async fn monitor_network_usage(
                         &ip,
                         &mac,
                         &stats,
-                        json_output,
-                        http,
-                        syslog,
-                        debug,
+                        &json_output,
+                        &http,
+                        &syslog,
+                        &debug,
                         &hostname,
                         &syslog_address,
                         &global_url,
@@ -80,10 +75,7 @@ pub async fn monitor_network_usage(
                     .await;
                 }
             }
-        }
-
-        sleep(Duration::from_secs(poll_interval.into())).await;
-    }
+            Ok(())
 }
 
 // Format and output network statistics for a single process
@@ -96,10 +88,10 @@ async fn report_network_stats(
     ip: &str,
     mac: &str,
     stats: &NetStats,
-    json_output: bool,
-    http: bool,
-    syslog: bool,
-    debug_mode: bool,
+    json_output: &&bool,
+    http: &&bool,
+    syslog: &&bool,
+    debug_mode: &&bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     http_url: &Arc<String>,
@@ -149,8 +141,6 @@ async fn report_network_stats(
     });
 
     let json_string = json_value.to_string();
-
-    debug!("{}", plain_string);
 
     // Output via configured channels
     output_message(

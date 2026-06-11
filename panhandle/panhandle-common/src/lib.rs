@@ -79,8 +79,8 @@ pub struct NetStats {
     pub udp_sockets: u32, // treated as a flag variable for if a udp message has been sent from the socket
 
     // Network I/O counters
-    pub bytes_sent: u64, // total bytes sent through this socket
-    pub bytes_recv: u64, // total bytes received through this socket
+    pub bytes_sent: u64,   // total bytes sent through this socket
+    pub bytes_recv: u64,   // total bytes received through this socket
     pub packets_sent: u64, // total packets sent through this socket
     pub packets_recv: u64, // total packets received through this socket
 }

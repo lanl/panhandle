@@ -327,7 +327,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &syslog,
                     &url,
                     &client,
-                    &pid_filter
+                    &pid_filter,
                 )
                 .await
                 {

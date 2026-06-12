@@ -31,7 +31,7 @@ pub async fn monitor_network_usage(
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
     client: &Client,
-    pid_list: &Option<Vec<u32>>
+    pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Iterate over all entries in the map
     for (pid, stats) in net_stats_map.iter().flatten() {
@@ -45,7 +45,9 @@ pub async fn monitor_network_usage(
             && let Ok(stat) = proc.stat()
         {
             // apply PID filter if provided
-            if let Some(pids) = pid_list && !pids.contains(&(stat.pid as u32))  {
+            if let Some(pids) = pid_list
+                && !pids.contains(&(stat.pid as u32))
+            {
                 continue;
             }
             // Get parent process pid and comm

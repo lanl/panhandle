@@ -103,7 +103,7 @@ pub struct RawArgs {
     #[serde(default)]
     pub memory: bool,
 
-    /// Specify a list of PIDs to track CPU usage of. Leaving empty defaults to showing global cpu usage.
+    /// Specify a list of PIDs to track CPU and memory usage of. Leaving empty defaults to showing global usage.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
     pub pid_list: Option<Vec<u32>>,

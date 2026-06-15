@@ -31,6 +31,9 @@ serde = "1.0.228"
 uzers = "0.12.2"
 serde_yaml = "0.9.34"
 procfs = "0.18.0"
+anyhow = "1.0.102"
+aya-ebpf.workspace = true
+network-interface = "2.0.5"
 
 [build-dependencies]
 aya-build = { workspace = true }

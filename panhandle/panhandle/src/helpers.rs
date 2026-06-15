@@ -1,4 +1,6 @@
 use aya::maps::perf::AsyncPerfEventArrayBuffer;
+use aya::programs::KProbe;
+use aya::{Btf, programs::BtfTracePoint};
 use tokio::{net::lookup_host, time::Duration};
 extern crate simplelog;
 use port_check::*;
@@ -10,6 +12,7 @@ use syslog::{Error as SyslogError, Facility, Formatter3164};
 use uzers::get_user_by_uid;
 use bytes::BytesMut;
 use chrono::prelude::*;
+
 // this is the local import section
 use panhandle_common::*;
 
@@ -500,6 +503,7 @@ pub fn get_canonical_executable_list(arg_vec: &Vec<String>) -> Vec<String> {
     return_vec
 }
 
+/// validates the host name and port number given to the syslog argument
 pub async fn validate_syslog(addr: &str) -> Result<&str, String> {
     if addr == "unix" || addr == "/dev/log" || addr.is_empty() {
         Ok(addr) // valid
@@ -542,7 +546,7 @@ pub async fn validate_url(url: &str) -> Result<&str, String> {
     }
 }
 
-// wrapper method to handle output formatting to syslog or http
+/// wrapper method to handle output formatting to syslog or http
 pub async fn output_message(
     http: &bool, 
     syslog: &bool, 
@@ -608,4 +612,37 @@ pub async fn output_message(
     } else {
         info!("{}", plain_string);
     }
+}
+
+/// Helper function to attach a single BTF tracepoint
+pub fn attach_tracepoint(
+    ebpf: &mut aya::Ebpf,
+    btf: &Btf,
+    program_name: &str,
+) -> Result<(), anyhow::Error> {
+    let program: &mut BtfTracePoint = ebpf
+        .program_mut(program_name)
+        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
+        .try_into()?;
+
+    program.load(program_name, btf)?;
+    program.attach()?;
+
+    Ok(())
+}
+
+/// Helper function to attach a single kprobe
+pub fn attach_kprobe(
+    ebpf: &mut aya::Ebpf,
+    program_name: &str,
+) -> Result<(), anyhow::Error> {
+    let program: &mut KProbe = ebpf
+        .program_mut(program_name)
+        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
+        .try_into()?;
+    
+    program.load()?;
+    program.attach(program_name, 0)?;
+    
+    Ok(())
 }

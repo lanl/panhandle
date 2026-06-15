@@ -3,7 +3,7 @@ use std::{convert::TryInto, path::PathBuf};
 use aya::{
     Btf,
     maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
-    programs::{BtfTracePoint, TracePoint, UProbe},
+    programs::{TracePoint, UProbe},
     util::online_cpus,
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
@@ -21,7 +21,6 @@ use std::{
 };
 
 use bytes::BytesMut;
-use procfs::process::Process;
 use reqwest::Client;
 use simplelog::*;
 use uzers::get_current_uid;
@@ -31,11 +30,13 @@ use uzers::get_current_uid;
 mod helpers;
 mod input_configs;
 mod monitor_cpu_usage;
+mod monitor_network_usage;
 mod procfs_helpers;
 mod unit_tests;
 use helpers::*;
 use input_configs::*;
 use monitor_cpu_usage::*;
+use monitor_network_usage::*;
 use panhandle_common::*;
 
 #[tokio::main]
@@ -90,7 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let syslog_address: Arc<String>;
     let http_bool: bool;
     let syslog_bool: bool;
-    let file_bool: bool;
 
     let term_logger = TermLogger::new(
         log_filter_level,
@@ -146,7 +146,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Set up logging, either to a file or terminal based on args:
             if let Some(path) = file {
-                file_bool = true;
                 let file: File = File::options().append(true).create(true).open(&path)?;
                 if args.debug {
                     println!("log file: {}", path.display());
@@ -160,7 +159,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     CombinedLogger::init(vec![logger]).unwrap();
                 }
             } else {
-                file_bool = false;
                 // use the terminal logger if the file option is not specified
                 // and if the quiet option is also not specified
                 if !args.quiet {
@@ -174,7 +172,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             syslog_address = Arc::new("".to_string());
             http_bool = false;
             syslog_bool = false;
-            file_bool = false;
             if !args.quiet {
                 CombinedLogger::init(vec![term_logger]).unwrap();
             }
@@ -239,15 +236,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // CPU monitoring
+    let mut cpu_handle: Option<JoinHandle<()>> = None;
     if args.cpu {
-        info!("Starting CPU usage monitoring...");
-
         // Load and attach the sched_switch tracepoint
         let program: &mut TracePoint = ebpf.program_mut("sched_switch").unwrap().try_into()?;
         program.load()?;
         program.attach("sched", "sched_switch")?;
-
-        info!("CPU monitoring eBPF program loaded and attached");
 
         // Get the per pid and busy cpu time hashmaps
         let pid_cpu_time_map = ebpf.take_map("per_cpu_time").unwrap();
@@ -256,17 +250,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let busy_cpu_time_map = ebpf.take_map("busy_cpu_time").unwrap();
         let busy_cpu_time = PerCpuArray::try_from(busy_cpu_time_map)?;
 
-        let pid_filter = args.pid_list.clone();
         let json_output = args.json;
 
         // Clone necessary variables for the async task
-        let ref_global_url = global_url.clone();
-        let ref_syslog_address = syslog_address.clone();
-        let ref_hostname = hostname.clone();
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
         let client = Client::new();
+        let pid_filter = args.pid_list.clone();
 
         // Spawn CPU monitoring task
-        tokio::spawn(async move {
+        cpu_handle = Some(tokio::spawn(async move {
             if let Err(e) = monitor_cpu_usage(
                 pid_cpu_time,
                 busy_cpu_time,
@@ -275,10 +269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 polling_freq_seconds,
                 http_bool,
                 syslog_bool,
-                file_bool,
-                ref_hostname,
-                ref_syslog_address,
-                ref_global_url,
+                host,
+                syslog,
+                url,
                 client,
                 args.debug,
             )
@@ -286,67 +279,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 error!("CPU monitoring error: {}", e);
             }
-        });
+        }));
     }
 
     // move to if statements for the main program args
     // goal is to try to allow a combination of all of the args
     // this introduces some code duplication
+    // Network monitoring
     let mut socket_handle: Option<JoinHandle<()>> = None;
     if args.socket {
         let btf = Btf::from_sys_fs()?;
 
-        // Attach to the specific tracepoint category and name
-        let program: &mut BtfTracePoint = ebpf
-            .program_mut("inet_sock_set_state")
-            .unwrap()
-            .try_into()?;
-        program.load("inet_sock_set_state", &btf)?;
-        program.attach()?;
+        // Attach all network monitoring programs
+        // TCP state transitions
+        attach_tracepoint(&mut ebpf, &btf, "inet_sock_set_state")?;
 
-        let socket_map: HashMap<_, u32, u32> =
-            HashMap::try_from(ebpf.take_map("tcp_socket_count").unwrap())?;
+        // Attach kprobes for data transfer tracking
+        attach_kprobe(&mut ebpf, "tcp_sendmsg")?;
+        attach_kprobe(&mut ebpf, "tcp_cleanup_rbuf")?;
+        attach_kprobe(&mut ebpf, "udp_sendmsg")?;
+        attach_kprobe(&mut ebpf, "udp_recvmsg")?;
 
+        // Load the network stats map
+        let net_stats_map_data = ebpf.take_map("net_stats").unwrap();
+        let net_stats_map: HashMap<_, u32, NetStats> = HashMap::try_from(net_stats_map_data)?;
+
+        let json_output = args.json;
+        let debug_mode = args.debug;
+
+        // Clone necessary variables for the async task
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
         let client = Client::new();
+        let pid_filter = args.pid_list.clone();
 
-        socket_handle = Some(tokio::task::spawn(async move {
+        // Spawn network monitoring task
+        socket_handle = Some(tokio::spawn(async move {
             loop {
-                for item in socket_map.iter() {
-                    let (pid, count) = item.unwrap();
-                    if count > 0
-                        && let Ok(proc) = Process::new(pid.try_into().unwrap())
-                        && let Ok(stat) = proc.stat()
-                    {
-                        debug!(
-                            "PID: {}, Comm: {}, TCPConnectionCount: {}",
-                            pid, stat.comm, count
-                        );
-
-                        let plain_string = format!(
-                            "PID: {}, Comm: {}, TCPConnectionCount: {}",
-                            pid, stat.comm, count
-                        );
-                        let json_string: String = format!(
-                            "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"TCPConnectionCount\": \"{}\"}}",
-                            pid, stat.comm, count
-                        );
-                        output_message(
-                            &http_bool,
-                            &syslog_bool,
-                            &host,
-                            &syslog,
-                            &url,
-                            &args.json,
-                            &plain_string,
-                            &json_string,
-                            &client,
-                            &args.debug,
-                        )
-                        .await;
-                    }
+                if let Err(e) = monitor_network_usage(
+                    &net_stats_map,
+                    &json_output,
+                    &http_bool,
+                    &syslog_bool,
+                    &debug_mode,
+                    &host,
+                    &syslog,
+                    &url,
+                    &client,
+                    &pid_filter,
+                )
+                .await
+                {
+                    error!("Network monitoring error: {}", e);
                 }
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
@@ -357,14 +342,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut memory_fault_handle: Option<JoinHandle<()>> = None;
 
     if let Some(threshold_fault_count) = args.memory_faults {
-        // example if you want to see all the proc info options, note that there is an example
-        // message for RHEL8 detailed in this method in proc.rs
-        //procfs::get_all_proc_info();
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
-
         let client = Client::new();
+
         memory_fault_handle = Some(tokio::task::spawn(async move {
             loop {
                 let _ = procfs_helpers::get_major_faults(
@@ -386,7 +368,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // set up the memory usage monitoring
     let mut memory_usage_handle: Option<JoinHandle<()>> = None;
-
     if args.memory {
         let url = global_url.clone();
         let host = hostname.clone();
@@ -592,7 +573,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if args.syscall_execve
-        || (!args.bash && !args.zsh && args.memory_faults.is_none() && !args.socket)
+        || (!args.bash
+            && !args.zsh
+            && args.memory_faults.is_none()
+            && !args.socket
+            && !args.memory
+            && !args.cpu)
     {
         // this is the main program functionality
         // the default option if the other shells are not selected
@@ -683,6 +669,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if let Some(handle_ref) = socket_handle {
         handle_ref.abort();
-    };
+    }
+    if let Some(handle_ref) = cpu_handle {
+        handle_ref.abort();
+    }
     Ok(())
 }

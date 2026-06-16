@@ -98,6 +98,11 @@ pub struct RawArgs {
     #[serde(default)]
     pub cpu: bool,
 
+    /// Receive a report of GPU usage over time. Filter by pid using --pid-list <PIDs>.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub gpu: bool,
+
     /// Receive a report of memory usage over time. Filter by pid using --pid-list <PIDs>.
     #[arg(long, global = true)]
     #[serde(default)]
@@ -179,6 +184,9 @@ pub struct ConfigArgs {
     pub cpu: bool,
 
     #[serde(default)]
+    pub gpu: bool,
+
+    #[serde(default)]
     pub memory: bool,
 
     // list-based output format to promote hyphen key:value pair syntax in config files
@@ -236,6 +244,7 @@ impl From<ConfigArgs> for RawArgs {
             executables: cfg.executables,
             include_uid: cfg.include_uid,
             cpu: cfg.cpu,
+            gpu: cfg.gpu,
             memory: cfg.memory,
             pid_list: cfg.pid_list,
             poll: cfg.poll,
@@ -261,6 +270,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.socket = cli_args.socket || config_args.socket;
     final_args.syscall_execve = cli_args.syscall_execve || config_args.syscall_execve;
     final_args.cpu = cli_args.cpu || config_args.cpu;
+    final_args.gpu = cli_args.gpu || config_args.gpu;
     final_args.memory = cli_args.memory || config_args.memory;
 
     // Override non-bools with CLI args if present

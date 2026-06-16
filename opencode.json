@@ -1,0 +1,42 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "references": {
+    "panhandle": {
+      "path": ".",
+      "description": "Panhandle project - eBPF user activity monitoring for HPC"
+    }
+  },
+  "permission": {
+    "edit": "allow",
+    "bash": {
+      "cargo *": "allow",
+      "git *": "allow",
+      "make *": "allow",
+      "wc *": "allow",
+      "sed *": "allow",
+      "head *": "allow",
+      "rustc *": "allow",
+      "clippy *": "allow",
+      "fmt *": "allow",
+      "rm -rf *": "deny",
+      ":; *": "deny",
+      "sudo *": "deny",
+      "*": "ask"
+    },
+    "external_directory": {
+      "~/.cargo/**": "allow",
+      "/usr/lib/**": "allow",
+      "/usr/share/**": "allow",
+      "/usr/local/**": "allow",
+      "*": "ask"
+    }
+  },
+  "tool_output": {
+    "max_lines": 300,
+    "max_bytes": 16384
+  },
+  "experimental": {
+    "primary_tools": ["edit", "read", "glob", "grep", "bash"],
+    "mcp_timeout": 60000
+  }
+}

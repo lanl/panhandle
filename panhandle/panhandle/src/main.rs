@@ -21,25 +21,25 @@ use std::{
 };
 
 use bytes::BytesMut;
+use machine_info::Machine;
 use reqwest::Client;
 use simplelog::*;
-use uzers::get_current_uid;
-use machine_info::Machine; // for gpu monitoring
+use uzers::get_current_uid; // for gpu monitoring
 
 #[rustfmt::skip]
 // this is the local import section
 mod helpers;
 mod input_configs;
 mod monitor_cpu_usage;
-mod monitor_network_usage;
 mod monitor_gpu_usage;
+mod monitor_network_usage;
 mod procfs_helpers;
 mod unit_tests;
 use helpers::*;
 use input_configs::*;
 use monitor_cpu_usage::*;
-use monitor_network_usage::*;
 use monitor_gpu_usage::*;
+use monitor_network_usage::*;
 use panhandle_common::*;
 
 #[tokio::main]
@@ -311,11 +311,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &syslog,
                     &url,
                     &client,
-                    &pid_filter).await
-                    {
-                        error!("GPU monitoring error {}", e);
-                    }
-                    let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
+                    &pid_filter,
+                )
+                .await
+                {
+                    error!("GPU monitoring error {}", e);
+                }
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
         }));
     }

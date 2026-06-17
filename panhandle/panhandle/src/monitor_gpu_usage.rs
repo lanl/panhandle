@@ -22,7 +22,7 @@ Per GPU messages contain:
 - Encoder/Decoder usage
 - Temperature
 */
-pub async fn monitor_gpu_usage (
+pub async fn monitor_gpu_usage(
     machine: &Machine,
     json_output: &bool,
     http: &bool,
@@ -32,15 +32,15 @@ pub async fn monitor_gpu_usage (
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
     client: &Client,
-    pid_list: &Option<Vec<u32>>) -> Result<(), Box<dyn std::error::Error>> {
-    
+    pid_list: &Option<Vec<u32>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // graphics usage contains per computer gpu information
     for gpu in machine.graphics_status() {
         // GraphicsProcessUtilization contains per process gpu utilization
         for process in gpu.processes {
             // apply PID filter if provided
             if let Some(pids) = pid_list
-                && !pids.contains(&(process.pid as u32))
+                && !pids.contains(&{ process.pid })
             {
                 continue;
             }
@@ -50,8 +50,10 @@ pub async fn monitor_gpu_usage (
                 "unknown".to_string()
             };
             // construct output strings containing PID info
-            let plain_string = format!("PID: {}, Comm: {}, GPU_ID: {}, VRAM%: {}, Encoder%: {}, Decoder%: {}", 
-                process.pid, comm, process.gpu, process.memory, process.encoder, process.decoder);
+            let plain_string = format!(
+                "PID: {}, Comm: {}, GPU_ID: {}, VRAM%: {}, Encoder%: {}, Decoder%: {}",
+                process.pid, comm, process.gpu, process.memory, process.encoder, process.decoder
+            );
             let json_string = format!(
                 "{{\"PID\": {}, \"Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM%\": {}, \"Encoder%\": {}, \"Decoder%\": {}}}",
                 process.pid, comm, process.gpu, process.memory, process.encoder, process.decoder
@@ -72,15 +74,27 @@ pub async fn monitor_gpu_usage (
             )
             .await;
         }
-        
+
         // now construct the global (per gpu) messages
         let plain_string = format!(
             "GPU_ID: {}, GPU%: {}, VRAM%: {}, VRAM_Bytes: {}, Encoder%: {}, Decoder%: {}, Temperature: {}°C",
-            gpu.id, gpu.gpu, gpu.memory_usage, gpu.memory_used, gpu.encoder, gpu.decoder, gpu.temperature
+            gpu.id,
+            gpu.gpu,
+            gpu.memory_usage,
+            gpu.memory_used,
+            gpu.encoder,
+            gpu.decoder,
+            gpu.temperature
         );
         let json_string = format!(
             "{{\"GPU_ID\": {}, \"GPU%\": {}, \"VRAM%\": {}, \"VRAM_Bytes\": {}, \"Encoder%\": {}, \"Decoder%\": {}, \"Temperature\": \"{}°C\"}}",
-            gpu.id, gpu.gpu, gpu.memory_usage, gpu.memory_used, gpu.encoder, gpu.decoder, gpu.temperature
+            gpu.id,
+            gpu.gpu,
+            gpu.memory_usage,
+            gpu.memory_used,
+            gpu.encoder,
+            gpu.decoder,
+            gpu.temperature
         );
 
         // output the per gpu message

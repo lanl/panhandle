@@ -562,6 +562,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ref_executable_vec,
                     ref_global_url,
                     http_bool,
+                    args.https,
                     ref_syslog_address,
                     ref_hostname,
                     syslog_bool,
@@ -640,13 +641,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|_| BytesMut::with_capacity(2048))
                     .collect::<Vec<_>>();
 
-                consume_execve_ebpf_map(
+                consume_shell_ebpf_map(
                     &client,
                     buf,
                     buffers,
                     ref_executable_vec,
                     ref_global_url,
                     http_bool,
+                    args.https,
                     ref_syslog_address,
                     ref_hostname,
                     syslog_bool,

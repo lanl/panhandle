@@ -18,12 +18,13 @@ use panhandle_common::*;
 
 /// this is a method to handle the display of the shell (bash, zsh) ebpf events
 pub async fn consume_shell_ebpf_map(
-    client: &Client,
+    ref_client: &Client,
     mut buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
     mut buffers: Vec<BytesMut>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
     http: bool,
+    use_https: bool,
     syslog_address: Arc<String>,
     hostname: Arc<String>,
     syslog: bool,
@@ -91,7 +92,7 @@ pub async fn consume_shell_ebpf_map(
                 if http {
                     let http_string = Arc::new(json_string.clone());
                     let result =
-                        send_http_post(client, &global_url, &http_string, &json, &debug).await;
+                        send_http_post(&global_url, &http_string, &json, &debug, use_https).await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
@@ -131,7 +132,7 @@ pub async fn consume_shell_ebpf_map(
                 if http {
                     let http_string = Arc::new(string);
                     let result =
-                        send_http_post(client, &global_url, &http_string, &json, &debug).await;
+                        send_http_post(&global_url, &http_string, &json, &debug, use_https).await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
@@ -160,12 +161,13 @@ pub async fn consume_shell_ebpf_map(
 
 /// this is a method to handle the display of the execve ebpf events
 pub async fn consume_execve_ebpf_map(
-    client: &Client,
+    ref_client: &Client,
     mut buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
     mut buffers: Vec<BytesMut>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
     http: bool,
+    use_https: bool,
     syslog_address: Arc<String>,
     hostname: Arc<String>,
     syslog: bool,
@@ -257,7 +259,7 @@ pub async fn consume_execve_ebpf_map(
                 if http {
                     let http_string: Arc<String> = Arc::new(json_string.clone());
                     let result: Result<(), Error> =
-                        send_http_post(client, &global_url.clone(), &http_string, &json, &debug)
+                        send_http_post(&global_url.clone(), &http_string, &json, &debug, use_https)
                             .await;
                     match result {
                         Ok(()) => {}
@@ -294,7 +296,7 @@ pub async fn consume_execve_ebpf_map(
                 if http {
                     let http_string: Arc<String> = Arc::new(string.clone());
                     let result: Result<(), Error> =
-                        send_http_post(client, &global_url, &http_string, &json, &debug).await;
+                        send_http_post(&global_url, &http_string, &json, &debug, use_https).await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
@@ -420,15 +422,29 @@ pub async fn send_syslog(
     Ok(())
 }
 
-/// send a http post to a specified http url
+/// send a http post to a specified url (HTTP or HTTPS based on use_https flag)
 pub async fn send_http_post(
-    client: &Client,
     url: &Arc<String>,
     arc_string: &Arc<String>,
     json: &bool,
     debug: &bool,
+    use_https: bool,
 ) -> Result<(), Error> {
     let mut content_type: &str = "text/plain";
+
+    // Create appropriate client based on protocol
+    let client = if use_https {
+        // HTTPS client with default certificate validation
+        Client::builder()
+            .use_rustls_tls()
+            .timeout(Duration::from_millis(200))
+            .build()?
+    } else {
+        // HTTP client
+        Client::builder()
+            .timeout(Duration::from_millis(200))
+            .build()?
+    };
 
     if *json {
         //send json post
@@ -439,7 +455,6 @@ pub async fn send_http_post(
                 let message = val.to_string();
                 let _response: Response = client
                     .post(url.to_string().as_str())
-                    .timeout(Duration::from_millis(200))
                     .header(CONTENT_TYPE, content_type)
                     .body(message)
                     .send()
@@ -454,14 +469,15 @@ pub async fn send_http_post(
         let message: String = arc_string.to_string();
         let response: Response = client
             .post(url.to_string().as_str())
-            .timeout(Duration::from_millis(200))
             .header(CONTENT_TYPE, content_type)
             .body(message)
             .send()
             .await?;
         if *debug {
+            let protocol = if use_https { "HTTPS" } else { "HTTP" };
             info!(
-                "Completed https request with response code: {:#?}",
+                "Completed {} request with response code: {:#?}",
+                protocol,
                 response.status()
             );
         }
@@ -556,14 +572,14 @@ pub async fn output_message(
     use_json: &bool, 
     plain_string: &String, 
     json_string: &String, 
-    client: &Client, 
+    use_https: bool,
     debug: &bool
 ) {
     if *http {
         if *use_json {
             let arc_string = Arc::new(json_string.clone().to_string());
             let result =
-                send_http_post(client, global_url, &arc_string, use_json, debug).await;
+                send_http_post(global_url, &arc_string, use_json, debug, use_https).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -573,7 +589,7 @@ pub async fn output_message(
         } else {
             let arc_string = Arc::new(plain_string.clone().to_string());
             let result =
-                send_http_post(client, global_url, &arc_string, use_json, debug).await;
+                send_http_post(global_url, &arc_string, use_json, debug, use_https).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {

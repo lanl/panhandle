@@ -30,6 +30,11 @@ pub struct RawArgs {
     #[serde(default)]
     pub debug: bool,
 
+    /// Use HTTPS instead of HTTP for output. When enabled, certificate validation is performed by default.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub https: bool,
+
     /// Pass arguments from a config file in YAML or JSON, the default config file is located at /opt/panhandle/panhandle.yaml. Arguments provided in the command line will overwrite those given in the config file.
     #[arg(short, long, global = true)]
     pub config: Option<String>,
@@ -151,6 +156,9 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub debug: bool,
 
+    #[serde(default)]
+    pub https: bool,
+
     pub exclude_min_uid: Option<u32>,
     pub exclude_max_uid: Option<u32>,
     pub executables: Option<Vec<String>>,
@@ -223,6 +231,7 @@ impl From<ConfigArgs> for RawArgs {
             // Copy all simple fields
             verbose: cfg.verbose,
             debug: cfg.debug,
+            https: cfg.https,
             json: cfg.json,
             shells: cfg.shells,
             socket: cfg.socket,
@@ -253,6 +262,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     // Override bool fields with CLI args if present
     final_args.debug = cli_args.debug || config_args.debug;
     final_args.verbose = cli_args.verbose || config_args.verbose;
+    final_args.https = cli_args.https || config_args.https;
     final_args.bash = cli_args.bash || config_args.bash;
     final_args.zsh = cli_args.zsh || config_args.zsh;
     final_args.json = cli_args.json || config_args.json;

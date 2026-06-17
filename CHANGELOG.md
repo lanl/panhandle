@@ -1,5 +1,14 @@
 # CHANGELOG
 
+### v1.0.13
+ - added gpu usage monitoring
+
+### v1.0.12
+ - added network usage monitoring
+
+### v1.0.11
+ - added memory usage monitoring
+
 ### v1.0.10
  - added cpu usage monitoring
 

@@ -36,9 +36,9 @@ echo -e "\nPID List: $pid_list" >&2
 sleep 0.5
 
 # Run panhandle
-echo -e "\nRunning: cargo run -- --cpu output --syslog -d --json --pid-list $pid_list" >&2
+echo -e "\nRunning: cargo run -- --gpu output --syslog -d --json --pid-list $pid_list" >&2
 echo "==========================================================" >&2
-cargo run -- --cpu output --syslog -d --json --pid-list $pid_list
+cargo run -- --gpu --cpu output --syslog -d --json --pid-list $pid_list
 
 # Cleanup
 echo -e "\n==========================================================" >&2

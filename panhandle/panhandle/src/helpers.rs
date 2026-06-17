@@ -1,6 +1,7 @@
 use aya::maps::perf::AsyncPerfEventArrayBuffer;
 use aya::programs::KProbe;
 use aya::{Btf, programs::BtfTracePoint};
+use procfs::process::Process;
 use tokio::{net::lookup_host, time::Duration};
 extern crate simplelog;
 use port_check::*;
@@ -645,4 +646,12 @@ pub fn attach_kprobe(
     program.attach(program_name, 0)?;
     
     Ok(())
+}
+
+/// Get process name from PID
+pub fn get_process_name(pid: u32) -> Option<String> {
+    Process::new(pid as i32)
+        .ok()
+        .and_then(|proc| proc.stat().ok())
+        .map(|stat| stat.comm)
 }

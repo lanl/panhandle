@@ -19,6 +19,7 @@ mod tests {
             shells: true,
             socket: true,
             cpu: true,
+            gpu: true,
             memory: true,
             ..Default::default()
         };

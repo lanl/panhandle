@@ -24,6 +24,7 @@ use bytes::BytesMut;
 use reqwest::Client;
 use simplelog::*;
 use uzers::get_current_uid;
+use machine_info::Machine; // for gpu monitoring
 
 #[rustfmt::skip]
 // this is the local import section
@@ -31,12 +32,14 @@ mod helpers;
 mod input_configs;
 mod monitor_cpu_usage;
 mod monitor_network_usage;
+mod monitor_gpu_usage;
 mod procfs_helpers;
 mod unit_tests;
 use helpers::*;
 use input_configs::*;
 use monitor_cpu_usage::*;
 use monitor_network_usage::*;
+use monitor_gpu_usage::*;
 use panhandle_common::*;
 
 #[tokio::main]
@@ -235,6 +238,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         polling_freq_seconds = poll;
     }
 
+    // move to if statements for the main program args
+    // goal is to try to allow a combination of all of the args
+    // this introduces some code duplication
     // CPU monitoring
     let mut cpu_handle: Option<JoinHandle<()>> = None;
     if args.cpu {
@@ -282,9 +288,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
-    // move to if statements for the main program args
-    // goal is to try to allow a combination of all of the args
-    // this introduces some code duplication
+    // GPU monitoring
+    let mut gpu_handle: Option<JoinHandle<()>> = None;
+    if args.gpu {
+        let json_output = args.json;
+        let debug_mode = args.debug;
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+        let client = Client::new();
+        let pid_filter = args.pid_list.clone();
+        let machine = Machine::new(); // create machine representing the current computer (node) we are monitoring
+        gpu_handle = Some(tokio::spawn(async move {
+            loop {
+                if let Err(e) = monitor_gpu_usage(
+                    &machine,
+                    &json_output,
+                    &http_bool,
+                    &syslog_bool,
+                    &debug_mode,
+                    &host,
+                    &syslog,
+                    &url,
+                    &client,
+                    &pid_filter).await
+                    {
+                        error!("GPU monitoring error {}", e);
+                    }
+                    let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
+            }
+        }));
+    }
+
     // Network monitoring
     let mut socket_handle: Option<JoinHandle<()>> = None;
     if args.socket {
@@ -578,7 +613,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             && args.memory_faults.is_none()
             && !args.socket
             && !args.memory
-            && !args.cpu)
+            && !args.cpu
+            && !args.gpu)
     {
         // this is the main program functionality
         // the default option if the other shells are not selected
@@ -671,6 +707,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle_ref.abort();
     }
     if let Some(handle_ref) = cpu_handle {
+        handle_ref.abort();
+    }
+    if let Some(handle_ref) = gpu_handle {
         handle_ref.abort();
     }
     Ok(())

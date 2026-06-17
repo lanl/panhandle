@@ -34,6 +34,7 @@ procfs = "0.18.0"
 anyhow = "1.0.102"
 aya-ebpf.workspace = true
 network-interface = "2.0.5"
+machine-info = "1.0.9"
 
 [build-dependencies]
 aya-build = { workspace = true }

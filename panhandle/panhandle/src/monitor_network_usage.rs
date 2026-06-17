@@ -7,15 +7,7 @@ use procfs::process::Process;
 use reqwest::Client;
 use serde_json::json;
 
-use crate::helpers::output_message;
-
-/// Get process name from PID
-fn get_process_name(pid: u32) -> Option<String> {
-    Process::new(pid as i32)
-        .ok()
-        .and_then(|proc| proc.stat().ok())
-        .map(|stat| stat.comm)
-}
+use crate::helpers::*;
 
 /// Network monitoring main function
 /// This function runs continuously and reports network statistics for all processes

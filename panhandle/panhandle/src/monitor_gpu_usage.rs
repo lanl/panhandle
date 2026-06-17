@@ -2,17 +2,16 @@ use std::sync::Arc;
 
 use machine_info::Machine; // main crate used for reading gpu utilization
 use reqwest::Client;
-use serde_json::json;
 
-use crate::helpers::output_message;
+use crate::helpers::*;
 /*
 Monitors gpu usage per pid and globally per gpu
 Two output messages:
 Per process messages contain:
 - PID
+- Comm (process name)
 - GPU ID
 - VRAM usage as percentage
-- VRAM usage in bytes
 - Encoder/Decoder usage
 
 Per GPU messages contain:
@@ -45,16 +44,18 @@ pub async fn monitor_gpu_usage (
             {
                 continue;
             }
+            let comm = if process.pid > 0 {
+                get_process_name(process.pid).unwrap_or_else(|| "unknown".to_string())
+            } else {
+                "unknown".to_string()
+            };
             // construct output strings containing PID info
-            let plain_string = format!("PID: {}, GPU: {}, VRAM_Usage: {}%, Encoder: {}%, Decoder: {}%", process.pid, process.gpu, process.memory, process.encoder, process.decoder);
-            let json_value = json!({
-                "PID": process.pid,
-                "GPU": process.gpu,
-                "VRAM_Usage": process.memory,
-                "Encoder": process.encoder,
-                "Decoder": process.decoder
-            });
-            let json_string = json_value.to_string();
+            let plain_string = format!("PID: {}, Comm: {}, GPU_ID: {}, VRAM%: {}, Encoder%: {}, Decoder%: {}", 
+                process.pid, comm, process.gpu, process.memory, process.encoder, process.decoder);
+            let json_string = format!(
+                "{{\"PID\": {}, \"Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM%\": {}, \"Encoder%\": {}, \"Decoder%\": {}}}",
+                process.pid, comm, process.gpu, process.memory, process.encoder, process.decoder
+            );
 
             // output the per pid message
             output_message(
@@ -74,19 +75,13 @@ pub async fn monitor_gpu_usage (
         
         // now construct the global (per gpu) messages
         let plain_string = format!(
-            "GPU_ID: {}, GPU_Utilization: {}%, VRAM_Usage: {}%, VRAM_Used: {} bytes, Encoder: {}%, Decoder: {}%, Temperature: {} Celsius",
+            "GPU_ID: {}, GPU%: {}, VRAM%: {}, VRAM_Bytes: {}, Encoder%: {}, Decoder%: {}, Temperature: {}°C",
             gpu.id, gpu.gpu, gpu.memory_usage, gpu.memory_used, gpu.encoder, gpu.decoder, gpu.temperature
         );
-        let json_value = json!({
-            "GPU_ID": gpu.id,
-            "GPU_Utilization": gpu.gpu,
-            "VRAM_Usage": gpu.memory_usage,
-            "VRAM_Used": gpu.memory_used,
-            "Encoder": gpu.encoder,
-            "Decoder": gpu.decoder,
-            "Temperature": gpu.temperature
-        });
-        let json_string = json_value.to_string();
+        let json_string = format!(
+            "{{\"GPU_ID\": {}, \"GPU%\": {}, \"VRAM%\": {}, \"VRAM_Bytes\": {}, \"Encoder%\": {}, \"Decoder%\": {}, \"Temperature\": \"{}°C\"}}",
+            gpu.id, gpu.gpu, gpu.memory_usage, gpu.memory_used, gpu.encoder, gpu.decoder, gpu.temperature
+        );
 
         // output the per gpu message
         output_message(

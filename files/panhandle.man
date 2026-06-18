@@ -82,6 +82,9 @@ Turn on gpu usage monitoring and reporting.
 \fB--memory\fP
 Turn on memory usage monitoring and reporting.
 .TP
+\fB--io\fP
+Turn on io usage monitoring and reporting.
+.TP
 \fB-v, --verbose\fP
 Verbose output
 .TP

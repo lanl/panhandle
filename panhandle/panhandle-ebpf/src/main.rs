@@ -19,6 +19,7 @@ use panhandle_common::*;
 mod cpu_usage;
 mod readline;
 mod socket;
+mod io;
 mod vanilla_execve;
 mod zlentry;
 

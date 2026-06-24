@@ -33,6 +33,7 @@ mod input_configs;
 mod monitor_cpu_usage;
 mod monitor_gpu_usage;
 mod monitor_network_usage;
+mod monitor_io_usage;
 mod procfs_helpers;
 mod unit_tests;
 use helpers::*;
@@ -40,6 +41,7 @@ use input_configs::*;
 use monitor_cpu_usage::*;
 use monitor_gpu_usage::*;
 use monitor_network_usage::*;
+use monitor_io_usage::*;
 use panhandle_common::*;
 
 #[tokio::main]
@@ -375,6 +377,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
+    // IO monitoring - Using procfs instead of eBPF
+    let mut io_handle: Option<JoinHandle<()>> = None;
+    if args.io {
+
+        let json_output = args.json;
+        let debug_mode = args.debug;
+
+        // Clone necessary variables for the async task
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+        let client = Client::new();
+        let pid_filter = args.pid_list.clone();
+
+        // Spawn IO monitoring task
+        io_handle = Some(tokio::spawn(async move {
+            loop {
+                if let Err(e) = monitor_io_usage(
+                    &json_output,
+                    &http_bool,
+                    &syslog_bool,
+                    &debug_mode,
+                    &host,
+                    &syslog,
+                    &url,
+                    &client,
+                    &pid_filter,
+                )
+                .await
+                {
+                    error!("IO monitoring error: {}", e);
+                }
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
+            }
+        }));
+    }
+
     // set up the memory fault monitoring
     let mut memory_fault_handle: Option<JoinHandle<()>> = None;
 
@@ -616,7 +655,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             && !args.socket
             && !args.memory
             && !args.cpu
-            && !args.gpu)
+            && !args.gpu
+            && !args.io
+        )
     {
         // this is the main program functionality
         // the default option if the other shells are not selected
@@ -706,6 +747,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle_ref.abort();
     };
     if let Some(handle_ref) = socket_handle {
+        handle_ref.abort();
+    }
+    if let Some(handle_ref) = io_handle {
         handle_ref.abort();
     }
     if let Some(handle_ref) = cpu_handle {

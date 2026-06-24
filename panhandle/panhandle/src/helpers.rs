@@ -1,5 +1,5 @@
 use aya::maps::perf::AsyncPerfEventArrayBuffer;
-use aya::programs::KProbe;
+use aya::programs::{KProbe};
 use aya::{Btf, programs::BtfTracePoint};
 use procfs::process::Process;
 use tokio::{net::lookup_host, time::Duration};

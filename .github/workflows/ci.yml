@@ -90,7 +90,7 @@ jobs:
               zypper install -y gcc gcc7 binutils cross-gcc-common
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Get package version
         id: get_version

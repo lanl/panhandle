@@ -1,11 +1,19 @@
-use std::sync::Arc;
+use std::{collections::HashSet, os::unix::fs::MetadataExt, sync::Arc};
+
 use reqwest::Client;
 use serde_json::json;
 
 use crate::helpers::*;
 
-/// IO monitoring main function using procfs
-/// This function runs continuously and reports IO statistics for all processes
+/* Monitor both IO statistics and inode counts for all processes
+Output messages contain:
+- Read_Count: Total number of read system calls since process start (syscr)
+- Write_Count: Total number of write system calls since process start (syscw)
+- Read_Bytes: Total bytes read from storage (cumulative since process start)
+- Write_Bytes: Total bytes written to storage (cumulative since process start)
+- Open_FDs: Current number of open file descriptors
+- Unique_Inodes: Current number of unique inodes being accessed. Usually the same as Open_FDS, but Multiple FDs can sometimes point to one inode.
+ */
 pub async fn monitor_io_usage(
     json_output: &bool,
     http: &bool,
@@ -37,13 +45,13 @@ pub async fn monitor_io_usage(
         let pid = proc.pid();
 
         // Apply PID filter if provided
-        if let Some(pids) = pid_list {
-            if !pids.contains(&(pid as u32)) {
-                continue;
-            }
+        if let Some(pids) = pid_list
+            && !pids.contains(&(pid as u32))
+        {
+            continue;
         }
 
-        // Get process stats
+        // Get process stats (for comm and ppid)
         let stat = match proc.stat() {
             Ok(s) => s,
             Err(_) => continue,
@@ -52,11 +60,32 @@ pub async fn monitor_io_usage(
         // Get IO stats from /proc/[pid]/io
         let io = match proc.io() {
             Ok(io_stats) => io_stats,
-            Err(_) => continue, // skip process if there was an error reading it
+            Err(_) => continue, // skip process if we can't read IO stats
         };
 
-        // Skip if no activity
-        if io.read_bytes == 0 && io.write_bytes == 0 && io.syscr == 0 && io.syscw == 0 {
+        // Count open file descriptors and unique inodes
+        let fd_path = format!("/proc/{}/fd", pid);
+        let mut unique_inodes = HashSet::new();
+        let mut fd_count = 0;
+
+        if let Ok(entries) = std::fs::read_dir(&fd_path) {
+            for entry in entries.flatten() {
+                fd_count += 1;
+
+                // Get inode number from the file descriptor
+                if let Ok(metadata) = entry.metadata() {
+                    unique_inodes.insert(metadata.ino());
+                }
+            }
+        }
+
+        // Skip processes with no IO activity and no open files
+        if io.read_bytes == 0
+            && io.write_bytes == 0
+            && io.syscr == 0
+            && io.syscw == 0
+            && unique_inodes.is_empty()
+        {
             continue;
         }
 
@@ -68,8 +97,8 @@ pub async fn monitor_io_usage(
             "unknown".to_string()
         };
 
-        // Report the statistics
-        report_io_stats(
+        // Report stats
+        report_io_and_inode_stats(
             pid as u32,
             &stat.comm,
             ppid,
@@ -78,6 +107,8 @@ pub async fn monitor_io_usage(
             io.syscw,
             io.read_bytes,
             io.write_bytes,
+            fd_count,
+            unique_inodes.len(),
             json_output,
             http,
             syslog,
@@ -93,8 +124,8 @@ pub async fn monitor_io_usage(
     Ok(())
 }
 
-/// Format and output IO statistics for a single process
-async fn report_io_stats(
+/// Format and output IO stats for a single process
+async fn report_io_and_inode_stats(
     pid: u32,
     comm: &str,
     ppid: u32,
@@ -103,6 +134,8 @@ async fn report_io_stats(
     write_count: u64,
     read_bytes: u64,
     write_bytes: u64,
+    open_fds: usize,
+    unique_inodes: usize,
     json_output: &bool,
     http: &bool,
     syslog: &bool,
@@ -112,9 +145,11 @@ async fn report_io_stats(
     http_url: &Arc<String>,
     client: &Client,
 ) {
-    // Plain text format
+    // format plaintext string
     let plain_string = format!(
-        "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Read_Count: {}, Write_Count: {}, Read_Bytes: {}, Write_Bytes: {}",
+        "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, \
+         Read_Count: {}, Write_Count: {}, Read_Bytes: {}, Write_Bytes: {}, \
+         Open_FDs: {}, Unique_Inodes: {}",
         pid,
         comm,
         ppid,
@@ -122,10 +157,12 @@ async fn report_io_stats(
         read_count,
         write_count,
         read_bytes,
-        write_bytes
+        write_bytes,
+        open_fds,
+        unique_inodes
     );
 
-    // JSON format
+    // format json string
     let json_value = json!({
         "PID": pid,
         "Comm": comm,
@@ -135,11 +172,13 @@ async fn report_io_stats(
         "Write_Count": write_count,
         "Read_Bytes": read_bytes,
         "Write_Bytes": write_bytes,
+        "Open_FDs": open_fds,
+        "Unique_Inodes": unique_inodes,
     });
 
     let json_string = json_value.to_string();
 
-    // Output via configured channels
+    // send via output message
     output_message(
         http,
         syslog,

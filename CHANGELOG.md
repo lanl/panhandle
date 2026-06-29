@@ -1,5 +1,8 @@
 # CHANGELOG
 
+### v1.0.14
+ - added io usage monitoring
+
 ### v1.0.13
  - added gpu usage monitoring
 

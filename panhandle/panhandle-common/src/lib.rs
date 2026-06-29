@@ -129,54 +129,6 @@ impl Default for NetStats {
     }
 }
 
-// Custom struct used for monitoring IO usage
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct IoStats {
-    pub read_count: u64,         // Number of disk read operations
-    pub write_count: u64,        // Number of disk write operations
-    pub read_bytes: u64,         // Total bytes read
-    pub write_bytes: u64,        // Total bytes written
-    pub inode_create_count: u64, // Number of inodes created
-    pub disk_errors: u64,        // Number of disk errors encountered
-}
-
-// SAFETY: IoStats contains only primitive types (u64) with no padding issues
-// and has #[repr(C)] layout, making it safe to treat as Plain Old Data
-#[cfg(feature = "user")]
-unsafe impl aya::Pod for IoStats {}
-
-impl IoStats {
-    // Create a new IoStats instance with all fields initialized to zero
-    pub const fn new() -> Self {
-        Self {
-            read_count: 0,
-            write_count: 0,
-            read_bytes: 0,
-            write_bytes: 0,
-            inode_create_count: 0,
-            disk_errors: 0,
-        }
-    }
-
-    // Check if this IoStats entry has any activity worth reporting
-    pub const fn has_activity(&self) -> bool {
-        self.read_count > 0
-            || self.write_count > 0
-            || self.read_bytes > 0
-            || self.write_bytes > 0
-            || self.inode_create_count > 0
-            || self.disk_errors > 0
-    }
-}
-
-// Default trait implementation
-impl Default for IoStats {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SysEnterExecve {

@@ -4,7 +4,7 @@ use aya::{Btf, programs::BtfTracePoint};
 use tokio::{net::lookup_host, time::Duration};
 extern crate simplelog;
 use port_check::*;
-use std::{fs::canonicalize, sync::Arc};
+use std::{fs::canonicalize, path::Path, sync::Arc};
 use url::Url;
 use reqwest::{Client, Error, Response, header::CONTENT_TYPE};
 use simplelog::{debug, error, info};
@@ -19,7 +19,7 @@ use panhandle_common::*;
 
 /// Trait for eBPF event types that can be consumed generically
 /// This enables code reuse between consume_shell_ebpf_map and consume_execve_ebpf_map
-pub trait EbpfEvent: Sized + std::fmt::Debug + std::fmt::Display {
+pub trait EbpfEvent: Sized + Serialize {
     /// Extract the command or filename from the event for filtering
     fn get_filter_key(&self) -> &str;
     
@@ -206,13 +206,12 @@ pub async fn consume_ebpf_map<T: EbpfEvent + std::fmt::Display + std::fmt::Debug
             let processed_event = event_processor(data);
             
             // Create output based on the processed event
-            let user_name = user.name().to_string_lossy();
             let plain_string = format!(
                 "{} hostname={} timestamp={} user={} pid={} uid={} event_type={} command={}",
                 processed_event.event_type,
                 processed_event.hostname,
                 processed_event.timestamp,
-                user_name,
+                user,
                 processed_event.pid,
                 processed_event.uid,
                 processed_event.event_type,
@@ -284,23 +283,132 @@ pub async fn consume_shell_ebpf_map(
     json: bool,
     debug: bool,
 ) {
-    // REFACTORED: Use the generic consume_ebpf_map function with Readline event type
-    let hostname_clone = hostname.clone();
-    consume_ebpf_map(
-        ref_client,
-        buf,
-        buffers,
-        ref_executable_vec,
-        global_url,
-        http,
-        use_https,
-        syslog_address,
-        hostname,
-        syslog,
-        json,
-        debug,
-        move |data: &Readline| process_readline_event(data, &hostname_clone),
-    ).await
+    // set up vecs needed internal to the loop because of no Copy trait implementation
+    let executable_vec = ref_executable_vec;
+
+    // main cpu loop
+    loop {
+        let events: aya::maps::perf::Events = buf.read_events(&mut buffers).await.unwrap();
+        for buf in buffers.iter_mut().take(events.read) {
+            // read the event
+            let ptr: *const Readline = buf.as_ptr() as *const Readline;
+            // SAFETY: derefernce the pointer that we created in ebpf-land
+            // this is implemented by a shared struct and zero'd on the ebpf side for consistency
+            let data: &Readline = unsafe { &*ptr };
+
+            // process the command to fix artifacts in the scratch
+            let mut command: &str = core::str::from_utf8(&data.command)
+                .unwrap_or_default()
+                .trim_end_matches('\0');
+            if let Some((prefix, _)) = command.split_once("\0") {
+                command = prefix.trim();
+            }
+
+            // escape if matching the list of binaries to exclude
+            if !executable_vec.is_empty() && !executable_vec.contains(&command.to_string()) {
+                debug!(
+                    "skipping event with path: '{}' not in the list to monitor: '{:?}'",
+                    command, &executable_vec
+                );
+                // escape iteration of events.read
+                break;
+            }
+
+            // get the moniker of the uid of the event
+            let user = get_user_by_uid(data.uid).unwrap();
+
+            // timestamp
+            let utc: DateTime<Utc> = Utc::now();
+            let formatted_utc = utc.format("%Y-%m-%d_%H:%M:%S").to_string();
+
+            // if json string is desired
+            if json {
+                let json_string = format!(
+                    "{{\"application\": \"panhandle\", \"hostname\": \"{}\", \"moniker\": \"{}\", \"entry\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": \"{}\"}}",
+                    hostname,
+                    user.name().to_string_lossy(),
+                    core::str::from_utf8(&data.entry)
+                        .unwrap_or_default()
+                        .trim_end_matches("\0")
+                        .trim(),
+                    core::str::from_utf8(&data.command)
+                        .unwrap_or_default()
+                        .trim_end_matches("\0")
+                        .trim(),
+                    data.uid,
+                    data.pid,
+                    data.gid,
+                    data.tgid,
+                    formatted_utc
+                );
+                if http {
+                    let http_string = Arc::new(json_string.clone());
+                    let result =
+                        send_http_post(&global_url, &http_string, &json, &debug, use_https).await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("HTTP POST Failed: {:?}", result);
+                        }
+                    }
+                }
+
+                if syslog {
+                    let syslog_string = Arc::new(json_string.clone());
+                    let result =
+                        send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
+                            .await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("SYSLOG SEND Failed: {:?}", result);
+                        }
+                    }
+                }
+
+                if debug {
+                    // this is an invalid json string, overriden by the debug
+                    info!("\\{:#?}\\", json_string);
+                } else {
+                    // this is a valid json string
+                    info!("{}", json_string);
+                }
+            } else {
+                let string = format!(
+                    "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
+                    hostname,
+                    user.name().to_string_lossy(),
+                    data,
+                    formatted_utc
+                );
+                if http {
+                    let http_string = Arc::new(string);
+                    let result =
+                        send_http_post(&global_url, &http_string, &json, &debug, use_https).await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("HTTP POST Failed: {:?}", result);
+                        }
+                    }
+                } else if syslog {
+                    let syslog_string = Arc::new(string);
+                    let result =
+                        send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
+                            .await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("SYSLOG SEND Failed: {:?}", result);
+                        }
+                    }
+                } else {
+                    // this is the human readable output
+                    info!("{}", string);
+                }
+            }
+        }
+    }
 }
 
 /// this is a method to handle the display of the execve ebpf events
@@ -576,63 +684,54 @@ pub async fn send_http_post(
 ) -> Result<(), Error> {
     let mut content_type: &str = "text/plain";
 
-    // Parse and validate the URL
-    let mut target_url = url.to_string();
-    
-    // If use_https is true and the URL doesn't start with https://, convert it
-    if use_https && !target_url.to_lowercase().starts_with("https://") {
-        // If it starts with http://, replace with https://
-        if target_url.to_lowercase().starts_with("http://") {
-            target_url = "https://".to_string() + &target_url[7..];
-        } else {
-            // If no protocol is specified, add https://
-            target_url = "https://".to_string() + &target_url;
+    // Create appropriate client based on protocol
+    let client = if use_https {
+        // HTTPS client with default certificate validation
+        Client::builder()
+            .use_rustls_tls()
+            .timeout(Duration::from_millis(200))
+            .build()?
+    } else {
+        // HTTP client
+        Client::builder()
+            .timeout(Duration::from_millis(200))
+            .build()?
+    };
+
+    if *json {
+        //send json post
+        let to_json_message: String = arc_string.to_string();
+        content_type = "application/json";
+        match serde_json::from_str::<serde_json::Value>(to_json_message.as_str()) {
+            Ok(val) => {
+                let message = val.to_string();
+                let _response: Response = client
+                    .post(url.to_string().as_str())
+                    .header(CONTENT_TYPE, content_type)
+                    .body(message)
+                    .send()
+                    .await?;
+            }
+            Err(val) => {
+                error!("{:?}", val);
+            }
         }
-    } else if !use_https && target_url.to_lowercase().starts_with("https://") {
-        // If use_https is false but URL is https://, fall back to http
-        // Note: This maintains HTTP as the default behavior when --https flag is not used
-        target_url = "http://".to_string() + &target_url[8..];
-    }
-
-    // Create client with appropriate TLS configuration
-    let client = Client::builder()
-        .timeout(Duration::from_millis(200))
-        .build()?;
-
-     if *json {
-         //send json post
-         let to_json_message: String = arc_string.to_string();
-         content_type = "application/json";
-         match serde_json::from_str::<serde_json::Value>(to_json_message.as_str()) {
-             Ok(val) => {
-                 let message = val.to_string();
-                 let _response: Response = client
-                     .post(target_url.as_str())
-                     .header(CONTENT_TYPE, content_type)
-                     .body(message)
-                     .send()
-                     .await?;
-             }
-             Err(val) => {
-                 error!("{:?}", val);
-             }
-         }
-     } else {
-         // send text post
-         let message: String = arc_string.to_string();
-         let response: Response = client
-             .post(target_url.as_str())
-             .header(CONTENT_TYPE, content_type)
-             .body(message)
-             .send()
-             .await?;
-         if *debug {
-             let protocol = if target_url.starts_with("https://") { "HTTPS" } else { "HTTP" };
-             info!(
-                 "Completed {} request with response code: {:#?}",
-                 protocol,
-                 response.status()
-             );
+    } else {
+        // send text post
+        let message: String = arc_string.to_string();
+        let response: Response = client
+            .post(url.to_string().as_str())
+            .header(CONTENT_TYPE, content_type)
+            .body(message)
+            .send()
+            .await?;
+        if *debug {
+            let protocol = if use_https { "HTTPS" } else { "HTTP" };
+            info!(
+                "Completed {} request with response code: {:#?}",
+                protocol,
+                response.status()
+            );
         }
         match response.status() {
             reqwest::StatusCode::OK => {}
@@ -706,22 +805,12 @@ pub async fn validate_syslog(addr: &str) -> Result<&str, String> {
     }
 }
 
-pub async fn validate_url(url: &str) -> Result<String, String> {
+pub async fn validate_url(url: &str) -> Result<&str, String> {
     // validate given URL
-    match Url::parse(url) {
-        Ok(parsed_url) => {
-            let scheme = parsed_url.scheme();
-            // Accept both http and https URLs
-            if scheme == "http" || scheme == "https" {
-                Ok(url.to_string())
-            } else if scheme.is_empty() {
-                // If no scheme is provided, default to http
-                Ok(format!("http://{}", url.trim_start_matches("://")))
-            } else {
-                Err(format!("\nUnsupported URL scheme '{}'. Only http:// and https:// are supported.", scheme))
-            }
-        }
-        Err(_) => Err(format!("\nInvalid URL '{}' provided", url)),
+    if Url::parse(url).is_err() {
+        Err(format!("\nInvalid URL '{}' provided", url))
+    } else {
+        Ok(url) // URL found valid
     }
 }
 

@@ -4,7 +4,6 @@ use aya::maps::HashMap;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig}; // for getting nic information
 use panhandle_common::NetStats;
 use procfs::process::Process;
-use reqwest::Client;
 use serde_json::json;
 
 use crate::helpers::output_message;
@@ -26,11 +25,11 @@ pub async fn monitor_network_usage(
     json_output: &bool,
     http: &bool,
     syslog: &bool,
+    use_https: bool,
     debug: &bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
-    client: &Client,
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Iterate over all entries in the map
@@ -41,45 +40,47 @@ pub async fn monitor_network_usage(
         }
 
         // Get process information from procfs
-        if let Ok(proc) = Process::new(pid.try_into().unwrap())
-            && let Ok(stat) = proc.stat()
-        {
-            // apply PID filter if provided
-            if let Some(pids) = pid_list
-                && !pids.contains(&(stat.pid as u32))
+        if let Ok(pid_i32) = pid.try_into() {
+            if let Ok(proc) = Process::new(pid_i32)
+                && let Ok(stat) = proc.stat()
             {
-                continue;
+                // apply PID filter if provided
+                if let Some(pids) = pid_list
+                    && !pids.contains(&(stat.pid as u32))
+                {
+                    continue;
+                }
+                // Get parent process pid and comm
+                let ppid = stat.ppid as u32;
+                let parent_comm = if ppid > 0 {
+                    get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+                } else {
+                    "unknown".to_string()
+                };
+
+                let (nic, ip, mac) = get_network_info(pid);
+
+                // send all info to print function
+                 report_network_stats(
+                     pid,
+                     &stat.comm,
+                     ppid,
+                     &parent_comm,
+                     &nic,
+                     &ip,
+                     &mac,
+                     &stats,
+                     &json_output,
+                     &http,
+                     &syslog,
+                     use_https,
+                     &debug,
+                     hostname,
+                     syslog_address,
+                     global_url,
+                )
+                .await;
             }
-            // Get parent process pid and comm
-            let ppid = stat.ppid as u32;
-            let parent_comm = if ppid > 0 {
-                get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
-            } else {
-                "unknown".to_string()
-            };
-
-            let (nic, ip, mac) = get_network_info(pid);
-
-            // send all info to print function
-            report_network_stats(
-                pid,
-                &stat.comm,
-                ppid,
-                &parent_comm,
-                &nic,
-                &ip,
-                &mac,
-                &stats,
-                &json_output,
-                &http,
-                &syslog,
-                &debug,
-                hostname,
-                syslog_address,
-                global_url,
-                client,
-            )
-            .await;
         }
     }
     Ok(())
@@ -98,11 +99,11 @@ async fn report_network_stats(
     json_output: &&bool,
     http: &&bool,
     syslog: &&bool,
+    use_https: bool,
     debug_mode: &&bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     http_url: &Arc<String>,
-    client: &Client,
 ) {
     // Plain text format
     let plain_string = format!(
@@ -159,7 +160,7 @@ async fn report_network_stats(
         json_output,
         &plain_string,
         &json_string,
-        client,
+        use_https,
         debug_mode,
     )
     .await;

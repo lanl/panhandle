@@ -30,8 +30,11 @@ pub fn monitor_execve(ctx: TracePointContext) -> u32 {
 fn try_monitor_execve(ctx: TracePointContext) -> Result<u32, i64> {
     let uid: u32 = bpf_get_current_uid_gid() as u32;
     if (uid >= MINUID) && (uid <= MAXUID) {
-        // SAFETY: we are getting and copying a reference to our self-defined struct,
-        // the map is created on program load
+        // SAFETY: PerCpuArray pointer dereferencing is safe in eBPF context
+        // - EXECVE_SCRATCH is a PerCpuArray<ExecveEvent> with max_entries=4096, created at program load
+        // - get_ptr_mut(0) returns a valid pointer for CPU 0's slot
+        // - The pointer is only used when Some is returned, error handled via ok_or(0)
+        // - The struct is properly aligned for ExecveEvent type
         let event: &mut ExecveEvent = unsafe {
             let ptr: *mut ExecveEvent = EXECVE_SCRATCH.get_ptr_mut(0).ok_or(0)?;
             &mut *ptr
@@ -41,11 +44,20 @@ fn try_monitor_execve(ctx: TracePointContext) -> Result<u32, i64> {
         event.pid = bpf_get_current_pid_tgid() as u32;
         event.tgid = (bpf_get_current_pid_tgid() >> 32) as u32;
         event.gid = (bpf_get_current_uid_gid() >> 32) as u32;
+        
+        // SAFETY: bpf_ktime_get_boot_ns is a verified eBPF helper function
+        // - Returns monotonically increasing nanoseconds since boot
+        // - No error conditions as it's a simple time read
+        // - Provided by Aya library which wraps the kernel helper
         event.timestamp = unsafe { bpf_ktime_get_boot_ns() };
         //info!(&ctx, "filename: {}, command: {}, uid: {}, pid: {}, gid: {}, tgid: {}", event.filename, event.command, event.uid, event.pid, event.gid, event.tgid);
 
-        // SAFETY: this map is created with a custom struct, the struct is zeroed before population
-        // the map is created on program load
+        // SAFETY: Output to PerfEventArray is safe
+        // - EXECVE_EVENTS is a properly initialized PerfEventArray<ExecveEvent>
+        // - event is a valid, populated ExecveEvent struct
+        // - The context is valid for the current tracepoint
+        // - Size parameter 0 uses the struct size automatically
+        // - Map was created at program load and is guaranteed to exist
         unsafe {
             EXECVE_EVENTS.output(&ctx, event, 0);
         }

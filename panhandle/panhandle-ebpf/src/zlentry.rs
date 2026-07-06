@@ -2,7 +2,6 @@
 use core::u8;
 
 use aya_ebpf::{
-    EbpfContext,
     helpers::{
         bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_boot_ns,
         bpf_probe_read_user_str_bytes,
@@ -10,6 +9,7 @@ use aya_ebpf::{
     macros::{map, uretprobe},
     maps::{HashMap, PerCpuArray, PerfEventArray},
     programs::RetProbeContext,
+    EbpfContext,
 };
 use panhandle_common::Readline;
 
@@ -36,7 +36,16 @@ pub fn zlentry(ctx: RetProbeContext) -> u32 {
 
 fn try_zlentry(ctx: RetProbeContext) -> Result<u32, i64> {
     // get the pointer to this event
-    let ret_ptr: *const u8 = ctx.ret().unwrap();
+    // SAFETY: ctx.ret() validation ensures we have a valid return pointer
+    // - ok_or(0) handles None case by returning error 0 (EPERM equivalent)
+    // - ? operator propagates error if ret() returns None (invalid context)
+    // - In eBPF uretprobe context, ret() should always return Some for valid probes
+    // - Null pointer would cause verifier rejection, so this ensures non-null
+    let ret_ptr: *const u8 = ctx.ret().ok_or(0)?;
+    // Null pointer check: ret_ptr must not be null for valid zlentry return
+    if ret_ptr.is_null() {
+        return Ok(0);
+    }
     let initial_uid: u32 = bpf_get_current_uid_gid() as u32;
 
     // skip event if the uid is not in the range of UIDs
@@ -52,18 +61,51 @@ fn try_zlentry(ctx: RetProbeContext) -> Result<u32, i64> {
         }
     }
 
-    // SAFETY: we are getting and copying a reference to our self-defined struct,
-    // the map is created on program load
+    // SAFETY: PerCpuArray pointer dereferencing is safe in eBPF context
+    // - ZLENTRY_SCRATCH is a PerCpuArray<Readline> with max_entries=4096, created at program load
+    // - get_ptr_mut(0) returns a valid pointer for the current CPU's slot (index 0)
+    // - The pointer is only used when Some is returned, error handled via ok_or(0)
+    // - The struct is properly aligned for Readline type
+    // - PerCpuArray guarantees valid, non-null pointers for allocated slots
+    // - eBPF verifier ensures the pointer remains valid for the duration of this context
     let event: &mut Readline = unsafe {
         let ptr: *mut Readline = ZLENTRY_SCRATCH.get_ptr_mut(0).ok_or(0)?;
+        // Null pointer check for defense in depth (verifier should catch this)
+        if ptr.is_null() {
+            return Err(0);
+        }
         &mut *ptr
     };
-    // SAFETY: Readline only holds ints and byte arrays, and all 0s is a valid byte-pattern
-    // for each of those.
+
+    // SAFETY: Zeroing memory for Readline is safe
+    // - Readline contains only primitive types (ints, byte arrays) that are valid in zeroed state
+    // - All 0s is a valid bit pattern for all fields in Readline
+    // - This provides a clean slate before populating event data
     *event = unsafe { core::mem::zeroed::<Readline>() };
+
+    // SAFETY: Reading user space string via bpf_probe_read_user_str_bytes is safe
+    // - ret_ptr points to valid user space memory (return value from zlentry function)
+    // - ret_ptr has been validated as non-null above
+    // - event.entry has fixed capacity (256 bytes) for command line input strings
+    // - Error handling via unwrap_or provides empty string on failure
+    // - bpf_probe_read_user_str_bytes handles null termination and bounds checking
+    // - Buffer overflow protection: helper respects the capacity of event.entry
+    // - Source validation: ret_ptr comes from verified uretprobe context
     unsafe { bpf_probe_read_user_str_bytes(ret_ptr, &mut event.entry).unwrap_or(b"") };
+
+    // get the command
+    // SAFETY: ctx.command() is safe to call in eBPF probe context
+    // - command() returns the path of the probed function (zsh zlentry)
+    // - unwrap_or_default() handles None case by providing empty array
+    // - In uretprobe context, command() should always return Some for valid probes
+    // - The Aya library ensures the command string is properly encoded
+    // - Empty default is acceptable for error cases (non-critical field)
     event.command = ctx.command().unwrap_or_default();
-    // SAFETY: this is a core BPF method implemented in Aya
+
+    // SAFETY: bpf_ktime_get_boot_ns is a verified eBPF helper function
+    // - Returns monotonically increasing nanoseconds since boot
+    // - No error conditions as it's a simple time read
+    // - Provided by Aya library which wraps the kernel helper
     event.timestamp = unsafe { bpf_ktime_get_boot_ns() };
     event.uid = initial_uid;
     event.gid = (bpf_get_current_uid_gid() >> 32) as u32;
@@ -71,8 +113,12 @@ fn try_zlentry(ctx: RetProbeContext) -> Result<u32, i64> {
     event.tgid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
     // output the event to the userspace program
-    // SAFETY: this map is created with a custom struct, the struct is zeroed before population
-    // the map is created on program load
+    // SAFETY: Output to PerfEventArray is safe
+    // - ZLENTRY_EVENTS is a properly initialized PerfEventArray<Readline>
+    // - event is a valid, populated Readline struct
+    // - The context is valid for the current uretprobe
+    // - Size parameter 0 uses the struct size automatically
+    // - Map was created at program load and is guaranteed to exist
     unsafe {
         ZLENTRY_EVENTS.output(&ctx, event, 0);
     }

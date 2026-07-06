@@ -16,5 +16,10 @@ fn main() {
     let mut defaultpath = PathBuf::new();
     defaultpath.push("~/.cargo/bin/bpf-linker");
     let bpf_linker = which("bpf-linker").unwrap_or(defaultpath);
-    println!("cargo:rerun-if-changed={}", bpf_linker.to_str().unwrap());
+    if let Some(path_str) = bpf_linker.to_str() {
+        println!("cargo:rerun-if-changed={}", path_str);
+    } else {
+        eprintln!("Invalid bpf-linker path");
+        std::process::exit(1);
+    }
 }

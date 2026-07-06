@@ -2,7 +2,6 @@ use aya::{
     maps::{HashMap, PerCpuArray},
     util::online_cpus,
 };
-use reqwest::Client;
 use serde_json::json;
 use tokio::signal;
 extern crate simplelog;
@@ -42,7 +41,7 @@ pub async fn monitor_cpu_usage(
     hostname: Arc<String>,
     syslog_address: Arc<String>,
     global_url: Arc<String>,
-    client: Client,
+    use_https: bool,
     debug: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::collections::HashMap as StdHashMap;
@@ -75,21 +74,45 @@ pub async fn monitor_cpu_usage(
                     total_busy = values.iter().sum::<u64>();
                 }
 
+                // OVERFLOW PROTECTION: Use saturating_sub to prevent underflow from clock anomalies
+                // or counter resets. If total_busy < last_total_busy (shouldn't happen normally),
+                // saturating_sub returns 0 instead of wrapping around, preventing false CPU usage spikes.
                 let busy_delta = total_busy.saturating_sub(last_total_busy);
+                
+                // OVERFLOW PROTECTION: poll_interval is validated as > 0 earlier, so cast is safe
+                // using as f64 for floating-point arithmetic to prevent integer overflow
                 let interval_sec = poll_interval as f64;
 
                 if let Some(pids_to_check) = &pid_filter {
                     // Per-PID tracking
                     for pid in pids_to_check {
-                        if let Ok(cpu_time) = pid_cpu_time.get(pid, 0) {
-                            let last_time = last_pid_times.get(pid).copied().unwrap_or(0);
-                            let delta = cpu_time.saturating_sub(last_time);
-                            let cpu_percent = (delta as f64 / (interval_sec * 1_000_000_000.0)) * 100.0;
+                         if let Ok(cpu_time) = pid_cpu_time.get(pid, 0) {
+                             let last_time = last_pid_times.get(pid).copied().unwrap_or(0);
+                             // OVERFLOW PROTECTION: Use saturating_sub for CPU time delta calculation
+                             // Prevents underflow if cpu_time < last_time (e.g., counter reset, systems with
+                             // CPU time counters that don't always monotonically increase). Returns 0 instead
+                             // of wrapping around, which is safer than showing erroneous negative usage.
+                             let delta = cpu_time.saturating_sub(last_time);
+                             
+                             // OVERFLOW PROTECTION: Use f64 for CPU percentage calculation to handle large
+                             // delta values without integer overflow. Division by large constants (1B ns/sec)
+                             // is safe in floating-point arithmetic.
+                             let cpu_percent = (delta as f64 / (interval_sec * 1_000_000_000.0)) * 100.0;
 
                             let stats = pid_stats.entry(*pid).or_default();
+                            // OVERFLOW PROTECTION: Direct assignment from eBPF map, no arithmetic needed
                             stats.total_time = cpu_time;
+                            
+                            // OVERFLOW PROTECTION: sample_count is a u64, addition cannot overflow in practice
+                            // (would require billions of samples per PID, which is unrealistic)
                             stats.sample_count += 1;
+                            
+                            // OVERFLOW PROTECTION: max operation on f64 is safe, no overflow possible
                             stats.max_cpu_percent = stats.max_cpu_percent.max(cpu_percent);
+                            
+                            // OVERFLOW PROTECTION: Weighted average calculation using f64 arithmetic
+                            // (sample_count - 1) is safe because sample_count >= 1 here
+                            // Multiplication and division are safe in floating-point
                             stats.avg_cpu_percent =
                                 (stats.avg_cpu_percent * (stats.sample_count - 1) as f64 + cpu_percent)
                                 / stats.sample_count as f64;
@@ -133,7 +156,7 @@ pub async fn monitor_cpu_usage(
                                 &json_output,
                                 &plain_string,
                                 &json_string,
-                                &client,
+                                use_https,
                                 &debug,
                             ).await;
 
@@ -164,27 +187,49 @@ pub async fn monitor_cpu_usage(
                                 &json_output,
                                 &plain_string,
                                 &json_string,
-                                &client,
+                                use_https,
                                 &debug,
                             ).await;
                         }
                     }
-                } else {
-                    // Global CPU monitoring
-                    let total_cpu_time_available = (interval_sec * 1_000_000_000.0 * num_cpus as f64) as u64;
-                    let cpu_utilization = if total_cpu_time_available > 0 {
-                        (busy_delta as f64 / total_cpu_time_available as f64) * 100.0
-                    } else {
-                        0.0
-                    };
+                   } else {
+                       // Global CPU monitoring
+                       // Use checked arithmetic to prevent overflow in all calculations
+                       let total_cpu_time_available = if poll_interval > 0 && num_cpus > 0 {
+                           // OVERFLOW PROTECTION: Use checked_mul to prevent overflow when calculating
+                           // total available CPU time across all cores. If multiplication would overflow,
+                           // return u64::MAX as a safe upper bound.
+                           // Step 1: Convert poll_interval to nanoseconds safely
+                           let interval_ns = (poll_interval as u64).checked_mul(1_000_000_000).unwrap_or(u64::MAX);
+                           // Step 2: Multiply by number of CPUs safely
+                           interval_ns.checked_mul(num_cpus as u64).unwrap_or(u64::MAX)
+                       } else {
+                           0u64
+                       };
+                       
+                       // OVERFLOW PROTECTION: Division is safe in floating-point, prevent divide by zero
+                       let cpu_utilization = if total_cpu_time_available > 0 {
+                           (busy_delta as f64 / total_cpu_time_available as f64) * 100.0
+                       } else {
+                           0.0
+                       };
 
-                    // Track global statistics
-                    global_stats.total_busy_time = total_busy;
-                    global_stats.max_utilization = global_stats.max_utilization.max(cpu_utilization);
-                    global_stats.min_utilization = global_stats.min_utilization.min(cpu_utilization);
-                    global_stats.avg_utilization =
-                        (global_stats.avg_utilization * (sample_count - 1) as f64 + cpu_utilization)
-                        / sample_count as f64;
+                      // Track global statistics with overflow protection
+                      // OVERFLOW PROTECTION: Direct assignment, no arithmetic
+                     global_stats.total_busy_time = total_busy;
+                      
+                      // OVERFLOW PROTECTION: max operation on f64 is safe
+                     global_stats.max_utilization = global_stats.max_utilization.max(cpu_utilization);
+                      
+                      // OVERFLOW PROTECTION: min operation on f64 is safe, but handle initial case
+                     // f64::MAX is the initial value, so first min will set it to actual utilization
+                     global_stats.min_utilization = global_stats.min_utilization.min(cpu_utilization);
+                      
+                      // OVERFLOW PROTECTION: weighted average using f64 arithmetic
+                      // (sample_count - 1) is safe because sample_count >= 1
+                     global_stats.avg_utilization =
+                         (global_stats.avg_utilization * (sample_count - 1) as f64 + cpu_utilization)
+                         / sample_count as f64;
 
                     // Create plain text message
                     let plain_string = format!(
@@ -222,7 +267,7 @@ pub async fn monitor_cpu_usage(
                         &json_output,
                         &plain_string,
                         &json_string,
-                        &client,
+                        use_https,
                         &debug,
                     ).await;
 
@@ -235,14 +280,16 @@ pub async fn monitor_cpu_usage(
                 // Print summary statistics
                 let timestamp = Utc::now().to_rfc3339();
 
-                if !pid_stats.is_empty() {
-                    let plain_string = format!(
-                        "CPU_MONITOR_SUMMARY hostname={} total_samples={} duration_sec={} pids_monitored={}",
-                        hostname,
-                        sample_count,
-                        sample_count * poll_interval as u64,
-                        pid_stats.len()
-                    );
+                 if !pid_stats.is_empty() {
+                     // Use checked arithmetic to prevent overflow
+                     let duration_sec = sample_count.checked_mul(poll_interval as u64).unwrap_or(u64::MAX);
+                     let plain_string = format!(
+                         "CPU_MONITOR_SUMMARY hostname={} total_samples={} duration_sec={} pids_monitored={}",
+                         hostname,
+                         sample_count,
+                         duration_sec,
+                         pid_stats.len()
+                     );
 
                     let mut pid_summaries = Vec::new();
                     for (pid, stats) in pid_stats.iter() {
@@ -255,16 +302,16 @@ pub async fn monitor_cpu_usage(
                         }));
                     }
 
-                    let json_value = json!({
-                        "event_type": "cpu_monitor_summary",
-                        "hostname": hostname.as_str(),
-                        "timestamp": timestamp,
-                        "total_samples": sample_count,
-                        "duration_sec": sample_count * poll_interval as u64,
-                        "poll_interval_sec": poll_interval,
-                        "num_cpus": num_cpus,
-                        "pid_statistics": pid_summaries
-                    });
+                     let json_value = json!({
+                         "event_type": "cpu_monitor_summary",
+                         "hostname": hostname.as_str(),
+                         "timestamp": timestamp,
+                         "total_samples": sample_count,
+                         "duration_sec": duration_sec,
+                         "poll_interval_sec": poll_interval,
+                         "num_cpus": num_cpus,
+                         "pid_statistics": pid_summaries
+                     });
                     let json_string = json_value.to_string();
 
                     // send via output_message if any of the outputs were specified
@@ -278,35 +325,37 @@ pub async fn monitor_cpu_usage(
                         &json_output,
                         &plain_string,
                         &json_string,
-                        &client,
+                        use_https,
                         &debug,
                     ).await;
-                } else {
-                    // Global mode summary
-                    let plain_string = format!(
-                        "CPU_MONITOR_SUMMARY hostname={} total_samples={} duration_sec={} mode=global avg_util={:.2}% min_util={:.2}% max_util={:.2}%",
-                        hostname,
-                        sample_count,
-                        sample_count * poll_interval as u64,
-                        global_stats.avg_utilization,
-                        global_stats.min_utilization,
-                        global_stats.max_utilization
-                    );
+                 } else {
+                     // Global mode summary
+                     // Use checked arithmetic to prevent overflow
+                     let duration_sec = sample_count.checked_mul(poll_interval as u64).unwrap_or(u64::MAX);
+                     let plain_string = format!(
+                         "CPU_MONITOR_SUMMARY hostname={} total_samples={} duration_sec={} mode=global avg_util={:.2}% min_util={:.2}% max_util={:.2}%",
+                         hostname,
+                         sample_count,
+                         duration_sec,
+                         global_stats.avg_utilization,
+                         global_stats.min_utilization,
+                         global_stats.max_utilization
+                     );
 
-                    let json_value = json!({
-                        "event_type": "cpu_monitor_summary",
-                        "hostname": hostname.as_str(),
-                        "timestamp": timestamp,
-                        "total_samples": sample_count,
-                        "duration_sec": sample_count * poll_interval as u64,
-                        "poll_interval_sec": poll_interval,
-                        "num_cpus": num_cpus,
-                        "mode": "global",
-                        "total_busy_time_ms": format!("{:.2}", global_stats.total_busy_time as f64 / 1_000_000.0),
-                        "avg_utilization_percent": format!("{:.2}", global_stats.avg_utilization),
-                        "min_utilization_percent": format!("{:.2}", global_stats.min_utilization),
-                        "max_utilization_percent": format!("{:.2}", global_stats.max_utilization)
-                    });
+                     let json_value = json!({
+                         "event_type": "cpu_monitor_summary",
+                         "hostname": hostname.as_str(),
+                         "timestamp": timestamp,
+                         "total_samples": sample_count,
+                         "duration_sec": duration_sec,
+                         "poll_interval_sec": poll_interval,
+                         "num_cpus": num_cpus,
+                         "mode": "global",
+                         "total_busy_time_ms": format!("{:.2}", global_stats.total_busy_time as f64 / 1_000_000.0),
+                         "avg_utilization_percent": format!("{:.2}", global_stats.avg_utilization),
+                         "min_utilization_percent": format!("{:.2}", global_stats.min_utilization),
+                         "max_utilization_percent": format!("{:.2}", global_stats.max_utilization)
+                     });
 
                     let json_string = json_value.to_string();
 
@@ -320,7 +369,7 @@ pub async fn monitor_cpu_usage(
                         &json_output,
                         &plain_string,
                         &json_string,
-                        &client,
+                        use_https,
                         &debug,
                     ).await;
                 }

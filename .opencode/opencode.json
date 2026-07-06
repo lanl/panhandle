@@ -4,6 +4,10 @@
     "panhandle": {
       "path": ".",
       "description": "Panhandle project - eBPF user activity monitoring for HPC"
+    },
+    "aya-github": {
+      "path": "/home/dmcgee/.local/share/opencode/repos/github.com/aya-rs/aya",
+      "description": "Official Aya library GitHub repository - latest eBPF development in Rust"
     }
   },
   "permission": {
@@ -15,28 +19,52 @@
       "wc *": "allow",
       "sed *": "allow",
       "head *": "allow",
+      "tail *": "allow",
       "rustc *": "allow",
       "clippy *": "allow",
       "fmt *": "allow",
+      "check *": "allow",
+      "build *": "allow",
+      "test *": "allow",
+      "bench *": "allow",
+      "doc *": "allow",
+      "audit *": "allow",
+      "tarpaulin *": "allow",
+      "bpf-linker *": "allow",
       "rm -rf *": "deny",
       ":; *": "deny",
       "sudo *": "deny",
+      "dd *": "deny",
+      "mkfs *": "deny",
+      "mv * /": "deny",
+      "cp * /": "deny",
+      "* > *": "ask",
+      "* >> *": "ask",
       "*": "ask"
     },
     "external_directory": {
       "~/.cargo/**": "allow",
+      "~/.rustup/**": "allow",
+      "~/.local/share/opencode/**": "allow",
       "/usr/lib/**": "allow",
       "/usr/share/**": "allow",
       "/usr/local/**": "allow",
+      "/usr/include/**": "allow",
+      "/usr/bin/**": "allow",
+      "/opt/**": "allow",
+      "/var/log/panhandle/**": "allow",
+      "/etc/panhandle/**": "allow",
+      "/etc/logrotate.d/panhandle": "allow",
+      "/usr/lib/systemd/system/panhandle.service": "allow",
       "*": "ask"
     }
   },
   "tool_output": {
-    "max_lines": 300,
-    "max_bytes": 16384
+    "max_lines": 500,
+    "max_bytes": 32768
   },
   "experimental": {
-    "primary_tools": ["edit", "read", "glob", "grep", "bash"],
-    "mcp_timeout": 60000
+    "primary_tools": ["edit", "read", "glob", "grep", "bash", "lsp_diagnostics"],
+    "mcp_timeout": 120000
   }
 }

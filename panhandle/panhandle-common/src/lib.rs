@@ -204,7 +204,7 @@ impl core::fmt::Debug for ExecveEvent {
         write!(f, "\"args\": [")?;
         for arg in &self.argv {
             let arg = core::str::from_utf8(arg).unwrap_or_default().trim();
-            if arg.chars().nth(0).unwrap() != '\0' {
+            if !arg.is_empty() && arg.chars().next().unwrap_or('\0') != '\0' {
                 item_count += 1;
             } else {
                 break;
@@ -227,7 +227,7 @@ impl core::fmt::Debug for ExecveEvent {
         write!(f, "], \"envs\": [")?;
         for env in &self.envp {
             let env = core::str::from_utf8(env).unwrap_or_default().trim();
-            if env.chars().nth(0).unwrap() != '\0' {
+            if !env.is_empty() && env.chars().next().unwrap_or('\0') != '\0' {
                 item_count += 1;
             } else {
                 break;
@@ -269,14 +269,14 @@ impl core::fmt::Display for ExecveEvent {
         write!(f, "args: [")?;
         for arg in &self.argv {
             let arg = core::str::from_utf8(arg).unwrap_or_default().trim();
-            if arg.chars().nth(0).unwrap() != '\0' {
+            if !arg.is_empty() && arg.chars().next().unwrap_or('\0') != '\0' {
                 write!(f, "{},", arg.trim())?;
             }
         }
         write!(f, "], envs: [")?;
         for env in &self.envp {
             let env = core::str::from_utf8(env).unwrap_or_default().trim();
-            if env.chars().nth(0).unwrap() != '\0' {
+            if !env.is_empty() && env.chars().next().unwrap_or('\0') != '\0' {
                 write!(f, "{},", env.trim())?;
             }
         }

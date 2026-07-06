@@ -10,3 +10,4 @@ socket: true
 cpu: true
 gpu: true
 memory: true
+io: true

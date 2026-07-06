@@ -108,6 +108,11 @@ pub struct RawArgs {
     #[serde(default)]
     pub memory: bool,
 
+    /// Receive a report of I/O usage over time. Filter by pid using --pid-list <PIDs>.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub io: bool,
+
     /// Specify a list of PIDs to track CPU and memory usage of. Leaving empty defaults to showing global usage.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
@@ -189,6 +194,9 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub memory: bool,
 
+    #[serde(default)]
+    pub io: bool,
+
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
@@ -246,6 +254,7 @@ impl From<ConfigArgs> for RawArgs {
             cpu: cfg.cpu,
             gpu: cfg.gpu,
             memory: cfg.memory,
+            io: cfg.io,
             pid_list: cfg.pid_list,
             poll: cfg.poll,
             // output subcommand
@@ -272,6 +281,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.cpu = cli_args.cpu || config_args.cpu;
     final_args.gpu = cli_args.gpu || config_args.gpu;
     final_args.memory = cli_args.memory || config_args.memory;
+    final_args.io = cli_args.io || config_args.io;
 
     // Override non-bools with CLI args if present
     if cli_args.exclude_min_uid.is_some() {

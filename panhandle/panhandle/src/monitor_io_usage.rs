@@ -19,13 +19,13 @@ pub async fn monitor_io_usage(
     http: &bool,
     syslog: &bool,
     debug: &bool,
+    verbose: &bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
     client: &Client,
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Get all processes
     let all_processes = match procfs::process::all_processes() {
         Ok(procs) => procs,
         Err(e) => {
@@ -44,26 +44,22 @@ pub async fn monitor_io_usage(
 
         let pid = proc.pid();
 
-        // Apply PID filter if provided
         if let Some(pids) = pid_list
             && !pids.contains(&(pid as u32))
         {
             continue;
         }
 
-        // Get process stats (for comm and ppid)
         let stat = match proc.stat() {
             Ok(s) => s,
             Err(_) => continue,
         };
 
-        // Get IO stats from /proc/[pid]/io
         let io = match proc.io() {
             Ok(io_stats) => io_stats,
-            Err(_) => continue, // skip process if we can't read IO stats
+            Err(_) => continue,
         };
 
-        // Count open file descriptors and unique inodes
         let fd_path = format!("/proc/{}/fd", pid);
         let mut unique_inodes = HashSet::new();
         let mut fd_count = 0;
@@ -72,14 +68,12 @@ pub async fn monitor_io_usage(
             for entry in entries.flatten() {
                 fd_count += 1;
 
-                // Get inode number from the file descriptor
                 if let Ok(metadata) = entry.metadata() {
                     unique_inodes.insert(metadata.ino());
                 }
             }
         }
 
-        // Skip processes with no IO activity and no open files
         if io.read_bytes == 0
             && io.write_bytes == 0
             && io.syscr == 0
@@ -89,20 +83,24 @@ pub async fn monitor_io_usage(
             continue;
         }
 
-        // Get parent process info
-        let ppid = stat.ppid as u32;
-        let parent_comm = if ppid > 0 {
-            get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+        // Retrieve parent process info only if verbose flag is set
+        let (ppid, parent_comm) = if *verbose {
+            let ppid = stat.ppid as u32;
+            let parent_comm = if ppid > 0 {
+                get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+            } else {
+                "unknown".to_string()
+            };
+            (Some(ppid), Some(parent_comm))
         } else {
-            "unknown".to_string()
+            (None, None)
         };
 
-        // Report stats
         report_io_and_inode_stats(
             pid as u32,
             &stat.comm,
             ppid,
-            &parent_comm,
+            parent_comm.as_deref(),
             io.syscr,
             io.syscw,
             io.read_bytes,
@@ -113,6 +111,7 @@ pub async fn monitor_io_usage(
             http,
             syslog,
             debug,
+            verbose,
             hostname,
             syslog_address,
             global_url,
@@ -128,8 +127,8 @@ pub async fn monitor_io_usage(
 async fn report_io_and_inode_stats(
     pid: u32,
     comm: &str,
-    ppid: u32,
-    parent_comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
     read_count: u64,
     write_count: u64,
     read_bytes: u64,
@@ -140,45 +139,75 @@ async fn report_io_and_inode_stats(
     http: &bool,
     syslog: &bool,
     debug_mode: &bool,
+    verbose: &bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     http_url: &Arc<String>,
     client: &Client,
 ) {
-    // format plaintext string
-    let plain_string = format!(
-        "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, \
-         Read_Count: {}, Write_Count: {}, Read_Bytes: {}, Write_Bytes: {}, \
-         Open_FDs: {}, Unique_Inodes: {}",
-        pid,
-        comm,
-        ppid,
-        parent_comm,
-        read_count,
-        write_count,
-        read_bytes,
-        write_bytes,
-        open_fds,
-        unique_inodes
-    );
+    let (plain_string, json_string) = if *verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
 
-    // format json string
-    let json_value = json!({
-        "PID": pid,
-        "Comm": comm,
-        "PPID": ppid,
-        "Parent_Comm": parent_comm,
-        "Read_Count": read_count,
-        "Write_Count": write_count,
-        "Read_Bytes": read_bytes,
-        "Write_Bytes": write_bytes,
-        "Open_FDs": open_fds,
-        "Unique_Inodes": unique_inodes,
-    });
+        let plain = format!(
+            "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, \
+             Read_Count: {}, Write_Count: {}, Read_Bytes: {}, Write_Bytes: {}, \
+             Open_FDs: {}, Unique_Inodes: {}",
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            read_count,
+            write_count,
+            read_bytes,
+            write_bytes,
+            open_fds,
+            unique_inodes
+        );
 
-    let json_string = json_value.to_string();
+        let json_value = json!({
+            "PID": pid,
+            "Comm": comm,
+            "PPID": ppid_val,
+            "Parent_Comm": parent_comm_val,
+            "Read_Count": read_count,
+            "Write_Count": write_count,
+            "Read_Bytes": read_bytes,
+            "Write_Bytes": write_bytes,
+            "Open_FDs": open_fds,
+            "Unique_Inodes": unique_inodes,
+        });
 
-    // send via output message
+        (plain, json_value.to_string())
+    } else {
+        let plain = format!(
+            "PID: {}, Comm: {}, \
+             Read_Count: {}, Write_Count: {}, Read_Bytes: {}, Write_Bytes: {}, \
+             Open_FDs: {}, Unique_Inodes: {}",
+            pid,
+            comm,
+            read_count,
+            write_count,
+            read_bytes,
+            write_bytes,
+            open_fds,
+            unique_inodes
+        );
+
+        let json_value = json!({
+            "PID": pid,
+            "Comm": comm,
+            "Read_Count": read_count,
+            "Write_Count": write_count,
+            "Read_Bytes": read_bytes,
+            "Write_Bytes": write_bytes,
+            "Open_FDs": open_fds,
+            "Unique_Inodes": unique_inodes,
+        });
+
+        (plain, json_value.to_string())
+    };
+
     output_message(
         http,
         syslog,

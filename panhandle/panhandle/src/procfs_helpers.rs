@@ -3,36 +3,7 @@ use std::sync::Arc;
 use procfs::process::all_processes;
 use reqwest::Client;
 
-// local imports
-use crate::helpers::output_message;
-
-/*
-/*
-    Method to return all information procfs finds about all processes.
-    Takes no input parameters.
-    Use for debugging only.
-*/
-pub fn get_all_proc_info() {
-    if let Ok(procs) = all_processes() {
-        for proc_res in procs {
-            if let Ok(p) = proc_res
-                && let Ok(stat) = p.stat()
-            {
-                // This prints the following example:
-                //14:27:35 [INFO] panhandle::procfs: [panhandle/src/procfs.rs:10] Stat { pid: 395900, comm: "sudo", state: 'S', ppid: 395435, pgrp: 395900,
-                //session: 395900, tty_nr: 34817, tpgid: 395901, flags: 4194368, minflt: 47, cminflt: 0, majflt: 0, cmajflt: 0, utime: 0, stime: 0, cutime: 0,
-                //cstime: 0, priority: 20, nice: 0, num_threads: 1, itrealvalue: 0, starttime: 8616530, vsize: 153325568, rss: 267, rsslim: 18446744073709551615,
-                //startcode: 94800910770176, endcode: 94800910944616, startstack: 140726370712480, kstkesp: 0, kstkeip: 0, signal: 0, blocked: 0, sigignore: 3149824,
-                //sigcatch: 616967, wchan: 1, nswap: 0, cnswap: 0, exit_signal: Some(17), processor: Some(10), rt_priority: Some(0), policy: Some(0),
-                //delayacct_blkio_ticks: Some(0), guest_time: Some(0), cguest_time: Some(0), start_data: Some(94800913045008), end_data: Some(94800913052000),
-                //start_brk: Some(94800922886144), arg_start: Some(140726370718480), arg_end: Some(140726370718511), env_start: Some(140726370718511),
-                //env_end: Some(140726370725866), exit_code: Some(0) }
-                info!("{:?}", stat);
-            }
-        }
-    }
-}
-*/
+use crate::helpers::{get_parent_pid, get_process_name, output_message};
 
 /*
     Method to check if processes or their children have memory faults greater than a certain threshold.
@@ -43,30 +14,60 @@ pub async fn get_major_faults(
     use_json: &bool,
     http: &bool,
     syslog: &bool,
+    verbose: &bool,
     hostname: &Arc<String>,
     global_url: &Arc<String>,
     syslog_address: &Arc<String>,
     client: &Client,
     debug: &bool,
 ) {
-    // Get an iterator over all processes in /proc
     if let Ok(procs) = all_processes() {
         for proc_res in procs.flatten() {
-            // Read /proc/[pid]/stat for this process
-            // this stat() call is a potential TOCTOU issue
-            // the process may no longer exist at the time that stat() is called on it
-            // therefore we need to prevent / protect from that condition with the `if let Ok()` check
             if let Ok(stat) = proc_res.stat()
                 && (stat.majflt > maj_fault_threshold || stat.cmajflt > maj_fault_threshold)
             {
-                let plain_string = format!(
-                    "PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {},",
-                    stat.pid, stat.comm, stat.majflt, stat.cmajflt
-                );
-                let json_string: String = format!(
-                    "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
-                    stat.pid, stat.comm, stat.majflt, stat.cmajflt
-                );
+                // Retrieve parent process info only if verbose flag is set
+                let (ppid, parent_comm) = if *verbose {
+                    if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
+                        let parent_name = get_process_name(parent_pid)
+                            .unwrap_or_else(|| "unknown".to_string());
+                        (Some(parent_pid), Some(parent_name))
+                    } else {
+                        (Some(0), Some("unknown".to_string()))
+                    }
+                } else {
+                    (None, None)
+                };
+
+                let (plain_string, json_string) = if *verbose {
+                    let ppid_val = ppid.unwrap_or(0);
+                    let parent_comm_val = parent_comm.as_deref().unwrap_or("unknown");
+
+                    let plain = format!(
+                        "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Major Faults: {}, Child Major Faults: {}",
+                        stat.pid, stat.comm, ppid_val, parent_comm_val, stat.majflt, stat.cmajflt
+                    );
+
+                    let json = format!(
+                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
+                        stat.pid, stat.comm, ppid_val, parent_comm_val, stat.majflt, stat.cmajflt
+                    );
+
+                    (plain, json)
+                } else {
+                    let plain = format!(
+                        "PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {}",
+                        stat.pid, stat.comm, stat.majflt, stat.cmajflt
+                    );
+
+                    let json = format!(
+                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
+                        stat.pid, stat.comm, stat.majflt, stat.cmajflt
+                    );
+
+                    (plain, json)
+                };
+
                 output_message(
                     http,
                     syslog,
@@ -91,6 +92,8 @@ pub async fn get_major_faults(
     Outputs:
     - PID
     - Comm: Command name
+    - PPID (if verbose)
+    - Parent_Comm (if verbose)
     - RSS (MB): Resident Set Size in megabytes
     - RSS (pages): Resident Set Size but in 4KB pages
     - Peak RSS (MB): maximum physical RAM the process has used since it started
@@ -104,6 +107,7 @@ pub async fn get_all_memory_usage(
     use_json: &bool,
     http: &bool,
     syslog: &bool,
+    verbose: &bool,
     hostname: &Arc<String>,
     global_url: &Arc<String>,
     syslog_address: &Arc<String>,
@@ -111,63 +115,107 @@ pub async fn get_all_memory_usage(
     debug: &bool,
     pid_filter: &Option<Vec<u32>>,
 ) {
-    // Get an iterator over all processes in /proc
     if let Ok(procs) = all_processes() {
         for proc_res in procs.flatten() {
-            // Read /proc/[pid]/stat, /proc/[pid]/statm, and /proc/[pid]/status
-            // these calls are potential TOCTOU issues - the process may no longer exist
-            // therefore we need to prevent / protect from that condition with the `if let Ok()` checks
             if let Ok(stat) = proc_res.stat()
                 && let Ok(statm) = proc_res.statm()
             {
-                // Apply PID filter if provided
                 if let Some(pids) = pid_filter
                     && !pids.contains(&(stat.pid as u32))
                 {
-                    continue; // Skip this process, it's not in filter list
+                    continue;
                 }
 
-                // Read /proc/[pid]/status
                 let status = proc_res.status().ok();
 
-                // Extract vm_hwm and vm_rss from status if available
                 let vm_hwm = status.as_ref().and_then(|s| s.vmhwm);
                 let vm_rss = status.as_ref().and_then(|s| s.vmrss);
 
-                // Convert various metrics to MB for readability
                 let rss_mb = vm_rss.unwrap_or(0) / 1024;
                 let vsize_mb = stat.vsize / (1024 * 1024);
                 let vm_hwm_mb = vm_hwm.unwrap_or(0) / 1024;
-                let resident_mb = (statm.resident * 4) / 1024; // pages to MB (4KB pages)
+                let resident_mb = (statm.resident * 4) / 1024;
                 let shared_mb = (statm.shared * 4) / 1024;
                 let data_mb = (statm.data * 4) / 1024;
                 let rss_pages = stat.rss;
 
-                let plain_string = format!(
-                    "PID: {}, Comm: {}, RSS: {} MB, RSS: {} pages, Peak RSS: {} MB, VSize: {} MB, Resident: {} MB, Shared: {} MB, Data+Stack: {} MB",
-                    stat.pid,
-                    stat.comm,
-                    rss_mb,
-                    rss_pages,
-                    vm_hwm_mb,
-                    vsize_mb,
-                    resident_mb,
-                    shared_mb,
-                    data_mb
-                );
+                // Retrieve parent process info only if verbose flag is set
+                let (ppid, parent_comm) = if *verbose {
+                    if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
+                        let parent_name = get_process_name(parent_pid)
+                            .unwrap_or_else(|| "unknown".to_string());
+                        (Some(parent_pid), Some(parent_name))
+                    } else {
+                        (Some(0), Some("unknown".to_string()))
+                    }
+                } else {
+                    (None, None)
+                };
 
-                let json_string = format!(
-                    "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Resident_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_MB\": \"{}\"}}",
-                    stat.pid,
-                    stat.comm,
-                    rss_mb,
-                    rss_pages,
-                    vm_hwm_mb,
-                    vsize_mb,
-                    resident_mb,
-                    shared_mb,
-                    data_mb
-                );
+                let (plain_string, json_string) = if *verbose {
+                    let ppid_val = ppid.unwrap_or(0);
+                    let parent_comm_val = parent_comm.as_deref().unwrap_or("unknown");
+
+                    let plain = format!(
+                        "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, RSS: {} MB, RSS: {} pages, Peak RSS: {} MB, VSize: {} MB, Resident: {} MB, Shared: {} MB, Data+Stack: {} MB",
+                        stat.pid,
+                        stat.comm,
+                        ppid_val,
+                        parent_comm_val,
+                        rss_mb,
+                        rss_pages,
+                        vm_hwm_mb,
+                        vsize_mb,
+                        resident_mb,
+                        shared_mb,
+                        data_mb
+                    );
+
+                    let json = format!(
+                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Resident_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_MB\": \"{}\"}}",
+                        stat.pid,
+                        stat.comm,
+                        ppid_val,
+                        parent_comm_val,
+                        rss_mb,
+                        rss_pages,
+                        vm_hwm_mb,
+                        vsize_mb,
+                        resident_mb,
+                        shared_mb,
+                        data_mb
+                    );
+
+                    (plain, json)
+                } else {
+                    let plain = format!(
+                        "PID: {}, Comm: {}, RSS: {} MB, RSS: {} pages, Peak RSS: {} MB, VSize: {} MB, Resident: {} MB, Shared: {} MB, Data+Stack: {} MB",
+                        stat.pid,
+                        stat.comm,
+                        rss_mb,
+                        rss_pages,
+                        vm_hwm_mb,
+                        vsize_mb,
+                        resident_mb,
+                        shared_mb,
+                        data_mb
+                    );
+
+                    let json = format!(
+                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Resident_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_MB\": \"{}\"}}",
+                        stat.pid,
+                        stat.comm,
+                        rss_mb,
+                        rss_pages,
+                        vm_hwm_mb,
+                        vsize_mb,
+                        resident_mb,
+                        shared_mb,
+                        data_mb
+                    );
+
+                    (plain, json)
+                };
 
                 output_message(
                     http,

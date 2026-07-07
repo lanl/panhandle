@@ -637,3 +637,10 @@ pub fn get_process_name(pid: u32) -> Option<String> {
         .and_then(|proc| proc.stat().ok())
         .map(|stat| stat.comm)
 }
+
+/// Get the parent PID for a given PID
+pub fn get_parent_pid(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
+    let proc = Process::new(pid as i32)?;
+    let stat = proc.stat()?;
+    Ok(stat.ppid as u32)
+}

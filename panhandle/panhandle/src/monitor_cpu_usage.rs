@@ -24,6 +24,7 @@ pub async fn monitor_cpu_usage(
     json_output: &bool,
     http: &bool,
     syslog: &bool,
+    verbose: &bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
@@ -65,7 +66,6 @@ pub async fn monitor_cpu_usage(
             let last_time = last_pid_times.get(&pid).copied().unwrap_or(0);
             let delta = cpu_time.saturating_sub(last_time);
             
-            // ✓ Calculate CPU percentage as portion of ONE core (like top)
             // 100% = fully using one core, 200% = fully using two cores, etc.
             let cpu_percent = if interval_ns > 0 {
                 (delta as f64 / interval_ns as f64) * 100.0
@@ -88,29 +88,77 @@ pub async fn monitor_cpu_usage(
                 "unknown".to_string()
             };
 
-            // Create plain text message
-            let plain_string = format!(
-                "PID: {}, Comm: {}, Total_Time_ms: {:.2}, Delta_Time_ms: {:.2}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
-                pid,
-                comm,
-                cpu_time as f64 / 1_000_000.0,
-                delta as f64 / 1_000_000.0,
-                cpu_percent,
-                stats.avg_cpu_percent,
-                stats.max_cpu_percent
-            );
+            // Only get parent info if verbose flag is set
+            let (ppid, parent_comm) = if *verbose {
+                if let Ok(parent_pid) = get_parent_pid(pid) {
+                    let parent_name = get_process_name(parent_pid)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    (Some(parent_pid), Some(parent_name))
+                } else {
+                    (Some(0), Some("unknown".to_string()))
+                }
+            } else {
+                (None, None)
+            };
 
-            // Create JSON message
-            let json_string = format!(
-                "{{\"PID\": {}, \"Comm\": \"{}\", \"Total_Time_ms\": {:.2}, \"Delta_Time_ms\": {:.2}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
-                pid,
-                comm,
-                cpu_time as f64 / 1_000_000.0,
-                delta as f64 / 1_000_000.0,
-                cpu_percent,
-                stats.avg_cpu_percent,
-                stats.max_cpu_percent
-            );
+            // Build messages conditionally based on verbose flag
+            let (plain_string, json_string) = if *verbose {
+                let ppid_val = ppid.unwrap_or(0);
+                let parent_comm_val = parent_comm.as_deref().unwrap_or("unknown");
+                
+                let plain = format!(
+                    "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Total_Time_ms: {:.2}, Delta_Time_ms: {:.2}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
+                    pid,
+                    comm,
+                    ppid_val,
+                    parent_comm_val,
+                    cpu_time as f64 / 1_000_000.0,
+                    delta as f64 / 1_000_000.0,
+                    cpu_percent,
+                    stats.avg_cpu_percent,
+                    stats.max_cpu_percent
+                );
+
+                let json = format!(
+                    "{{\"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"Total_Time_ms\": {:.2}, \"Delta_Time_ms\": {:.2}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
+                    pid,
+                    comm,
+                    ppid_val,
+                    parent_comm_val,
+                    cpu_time as f64 / 1_000_000.0,
+                    delta as f64 / 1_000_000.0,
+                    cpu_percent,
+                    stats.avg_cpu_percent,
+                    stats.max_cpu_percent
+                );
+
+                (plain, json)
+            } else {
+                // Non-verbose: exclude parent info
+                let plain = format!(
+                    "PID: {}, Comm: {}, Total_Time_ms: {:.2}, Delta_Time_ms: {:.2}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
+                    pid,
+                    comm,
+                    cpu_time as f64 / 1_000_000.0,
+                    delta as f64 / 1_000_000.0,
+                    cpu_percent,
+                    stats.avg_cpu_percent,
+                    stats.max_cpu_percent
+                );
+
+                let json = format!(
+                    "{{\"PID\": {}, \"Comm\": \"{}\", \"Total_Time_ms\": {:.2}, \"Delta_Time_ms\": {:.2}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
+                    pid,
+                    comm,
+                    cpu_time as f64 / 1_000_000.0,
+                    delta as f64 / 1_000_000.0,
+                    cpu_percent,
+                    stats.avg_cpu_percent,
+                    stats.max_cpu_percent
+                );
+
+                (plain, json)
+            };
 
             output_message(
                 http,
@@ -134,11 +182,35 @@ pub async fn monitor_cpu_usage(
                 "unknown".to_string()
             };
 
-            let plain_string = format!("PID: {}, Comm: {}, Status: not_found", pid, comm);
-            let json_string = format!(
-                "{{\"PID\": {}, \"Comm\": \"{}\", \"Status\": \"not_found\"}}",
-                pid, comm
-            );
+            // conditionally include parent info in not_found messages too
+            let (plain_string, json_string) = if *verbose {
+                let (ppid, parent_comm) = if let Ok(parent_pid) = get_parent_pid(pid) {
+                    let parent_name = get_process_name(parent_pid)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    (parent_pid, parent_name)
+                } else {
+                    (0, "unknown".to_string())
+                };
+
+                let plain = format!(
+                    "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Status: not_found",
+                    pid, comm, ppid, parent_comm
+                );
+                let json = format!(
+                    "{{\"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"Status\": \"not_found\"}}",
+                    pid, comm, ppid, parent_comm
+                );
+
+                (plain, json)
+            } else {
+                let plain = format!("PID: {}, Comm: {}, Status: not_found", pid, comm);
+                let json = format!(
+                    "{{\"PID\": {}, \"Comm\": \"{}\", \"Status\": \"not_found\"}}",
+                    pid, comm
+                );
+
+                (plain, json)
+            };
 
             output_message(
                 http,

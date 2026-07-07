@@ -235,7 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // polling frequency variable for performance monitoring tasks
-    let mut polling_freq_seconds: u32 = 30;
+    let mut polling_freq_seconds: u32 = 30; // default interval is 30 seconds; if changed, be sure to reflect the change in input_config.rs
     if let Some(poll) = args.poll {
         polling_freq_seconds = poll;
     }

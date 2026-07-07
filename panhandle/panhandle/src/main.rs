@@ -1,10 +1,7 @@
 use std::{convert::TryInto, path::PathBuf};
 
 use aya::{
-    Btf,
-    maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
-    programs::{TracePoint, UProbe},
-    util::online_cpus,
+    Btf, maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray}, programs::{BtfTracePoint, TracePoint, UProbe}, util::online_cpus,
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
@@ -259,6 +256,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let busy_cpu_time = PerCpuArray::try_from(busy_cpu_time_map)?;
 
         let json_output = args.json;
+        let debug_mode = args.debug;
 
         // Clone necessary variables for the async task
         let url = global_url.clone();
@@ -269,23 +267,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Spawn CPU monitoring task
         cpu_handle = Some(tokio::spawn(async move {
-            if let Err(e) = monitor_cpu_usage(
-                pid_cpu_time,
-                busy_cpu_time,
-                pid_filter,
-                json_output,
-                polling_freq_seconds,
-                http_bool,
-                syslog_bool,
-                host,
-                syslog,
-                url,
-                client,
-                args.debug,
-            )
-            .await
-            {
-                error!("CPU monitoring error: {}", e);
+            use std::collections::HashMap as StdHashMap;
+            
+            let mut last_total_busy: u64 = 0;
+            let mut last_pid_times: StdHashMap<u32, u64> = StdHashMap::new();
+            let mut pid_stats: StdHashMap<u32, PidStats> = StdHashMap::new();
+            let mut sample_count = 0u64;
+
+            loop {
+                if let Err(e) = monitor_cpu_usage(
+                    &pid_cpu_time,
+                    &busy_cpu_time,
+                    &pid_filter,
+                    &json_output,
+                    &http_bool,
+                    &syslog_bool,
+                    &host,
+                    &syslog,
+                    &url,
+                    &client,
+                    &debug_mode,
+                    &mut last_total_busy,
+                    &mut last_pid_times,
+                    &mut pid_stats,
+                    &mut sample_count,
+                    polling_freq_seconds,
+                )
+                .await
+                {
+                    error!("CPU monitoring error: {}", e);
+                }
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
         }));
     }
@@ -331,7 +343,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Attach all network monitoring programs
         // TCP state transitions
-        attach_tracepoint(&mut ebpf, &btf, "inet_sock_set_state")?;
+        let program: &mut BtfTracePoint = ebpf
+            .program_mut("inet_sock_set_state")
+            .unwrap()
+            .try_into()?;
+        program.load("inet_sock_set_state", &btf)?;
+        program.attach()?;
 
         // Attach kprobes for data transfer tracking
         attach_kprobe(&mut ebpf, "tcp_sendmsg")?;

@@ -1,6 +1,5 @@
 use aya::maps::perf::AsyncPerfEventArrayBuffer;
 use aya::programs::{KProbe};
-use aya::{Btf, programs::BtfTracePoint};
 use procfs::process::Process;
 use tokio::{net::lookup_host, time::Duration};
 extern crate simplelog;
@@ -613,23 +612,6 @@ pub async fn output_message(
     } else {
         info!("{}", plain_string);
     }
-}
-
-/// Helper function to attach a single BTF tracepoint
-pub fn attach_tracepoint(
-    ebpf: &mut aya::Ebpf,
-    btf: &Btf,
-    program_name: &str,
-) -> Result<(), anyhow::Error> {
-    let program: &mut BtfTracePoint = ebpf
-        .program_mut(program_name)
-        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
-        .try_into()?;
-
-    program.load(program_name, btf)?;
-    program.attach()?;
-
-    Ok(())
 }
 
 /// Helper function to attach a single kprobe

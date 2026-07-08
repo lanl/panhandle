@@ -136,22 +136,18 @@ pub async fn monitor_cpu_usage(
             } else {
                 // Non-verbose: exclude parent info
                 let plain = format!(
-                    "PID: {}, Comm: {}, Total_Time_ms: {:.2}, Delta_Time_ms: {:.2}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
+                    "PID: {}, Comm: {}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
                     pid,
                     comm,
-                    cpu_time as f64 / 1_000_000.0,
-                    delta as f64 / 1_000_000.0,
                     cpu_percent,
                     stats.avg_cpu_percent,
                     stats.max_cpu_percent
                 );
 
                 let json = format!(
-                    "{{\"PID\": {}, \"Comm\": \"{}\", \"Total_Time_ms\": {:.2}, \"Delta_Time_ms\": {:.2}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
+                    "{{\"PID\": {}, \"Comm\": \"{}\", \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
                     pid,
                     comm,
-                    cpu_time as f64 / 1_000_000.0,
-                    delta as f64 / 1_000_000.0,
                     cpu_percent,
                     stats.avg_cpu_percent,
                     stats.max_cpu_percent

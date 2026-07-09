@@ -102,21 +102,38 @@ async fn report_network_stats(
     http_url: &Arc<String>,
     client: &Client,
 ) {
+    let bytes_sent_mb = stats.bytes_sent / (1024 * 1024);
+    let bytes_recv_mb = stats.bytes_recv / (1024 * 1024);
+
     // Build messages conditionally based on verbose flag
     let (plain_string, json_string) = if **verbose {
         // Verbose mode: include parent info
         let ppid = ppid.unwrap_or(0);
         let parent_comm = parent_comm.unwrap_or("unknown");
-        
+
         let plain = format!(
-            "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB:{}, SYN_RECV:{}, CLOSE_WAIT:{}, FIN_WAIT:{}, TIME_WAIT:{}, UDP:{}, Bytes_Sent:{}, Bytes_Recv:{}, Packets_Sent:{}, Packets_Recv:{}",
-            pid, comm, ppid, parent_comm, nic, ip, mac,
-            stats.tcp_established, stats.tcp_syn_recv, stats.tcp_close_wait,
-            stats.tcp_fin_wait, stats.tcp_time_wait, stats.udp_sockets,
-            stats.bytes_sent, stats.bytes_recv, stats.packets_sent, stats.packets_recv
+            "Type: sock, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+            pid,
+            comm,
+            ppid,
+            parent_comm,
+            nic,
+            ip,
+            mac,
+            stats.tcp_established,
+            stats.tcp_syn_recv,
+            stats.tcp_close_wait,
+            stats.tcp_fin_wait,
+            stats.tcp_time_wait,
+            stats.udp_sockets,
+            bytes_sent_mb,
+            bytes_recv_mb,
+            stats.packets_sent,
+            stats.packets_recv
         );
 
         let json_value = json!({
+            "Type": "sock",
             "PID": pid,
             "Comm": comm,
             "PPID": ppid,
@@ -130,8 +147,8 @@ async fn report_network_stats(
             "FIN_WAIT": stats.tcp_fin_wait,
             "TIME_WAIT": stats.tcp_time_wait,
             "UDP": stats.udp_sockets,
-            "Bytes_Sent": stats.bytes_sent,
-            "Bytes_Recv": stats.bytes_recv,
+            "MB_Sent": bytes_sent_mb,
+            "MB_Recv": bytes_recv_mb,
             "Packets_Sent": stats.packets_sent,
             "Packets_Recv": stats.packets_recv,
         });
@@ -140,14 +157,26 @@ async fn report_network_stats(
     } else {
         // Non-verbose mode: exclude parent info
         let plain = format!(
-            "PID: {}, Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB:{}, SYN_RECV:{}, CLOSE_WAIT:{}, FIN_WAIT:{}, TIME_WAIT:{}, UDP:{}, Bytes_Sent:{}, Bytes_Recv:{}, Packets_Sent:{}, Packets_Recv:{}",
-            pid, comm, nic, ip, mac,
-            stats.tcp_established, stats.tcp_syn_recv, stats.tcp_close_wait,
-            stats.tcp_fin_wait, stats.tcp_time_wait, stats.udp_sockets,
-            stats.bytes_sent, stats.bytes_recv, stats.packets_sent, stats.packets_recv
+            "Type: sock, PID: {}, Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+            pid,
+            comm,
+            nic,
+            ip,
+            mac,
+            stats.tcp_established,
+            stats.tcp_syn_recv,
+            stats.tcp_close_wait,
+            stats.tcp_fin_wait,
+            stats.tcp_time_wait,
+            stats.udp_sockets,
+            bytes_sent_mb,
+            bytes_recv_mb,
+            stats.packets_sent,
+            stats.packets_recv
         );
 
         let json_value = json!({
+            "Type": "sock",
             "PID": pid,
             "Comm": comm,
             "NIC": nic,
@@ -159,8 +188,8 @@ async fn report_network_stats(
             "FIN_WAIT": stats.tcp_fin_wait,
             "TIME_WAIT": stats.tcp_time_wait,
             "UDP": stats.udp_sockets,
-            "Bytes_Sent": stats.bytes_sent,
-            "Bytes_Recv": stats.bytes_recv,
+            "MB_Sent": bytes_sent_mb,
+            "MB_Recv": bytes_recv_mb,
             "Packets_Sent": stats.packets_sent,
             "Packets_Recv": stats.packets_recv,
         });

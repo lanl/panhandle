@@ -55,8 +55,8 @@ pub async fn monitor_gpu_usage(
             // Retrieve parent process info only if verbose flag is set
             let (ppid, parent_comm) = if *verbose {
                 if let Ok(parent_pid) = get_parent_pid(process.pid) {
-                    let parent_name = get_process_name(parent_pid)
-                        .unwrap_or_else(|| "unknown".to_string());
+                    let parent_name =
+                        get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
                     (Some(parent_pid), Some(parent_name))
                 } else {
                     (Some(0), Some("unknown".to_string()))
@@ -70,25 +70,49 @@ pub async fn monitor_gpu_usage(
                 let parent_comm_val = parent_comm.as_deref().unwrap_or("unknown");
 
                 let plain = format!(
-                    "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, GPU_ID: {}, VRAM%: {}, Encoder%: {}, Decoder%: {}",
-                    process.pid, comm, ppid_val, parent_comm_val, process.gpu, process.memory, process.encoder, process.decoder
+                    "Type: gpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
+                    process.pid,
+                    comm,
+                    ppid_val,
+                    parent_comm_val,
+                    process.gpu,
+                    process.memory,
+                    process.encoder,
+                    process.decoder
                 );
 
                 let json = format!(
-                    "{{\"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM%\": {}, \"Encoder%\": {}, \"Decoder%\": {}}}",
-                    process.pid, comm, ppid_val, parent_comm_val, process.gpu, process.memory, process.encoder, process.decoder
+                    "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+                    process.pid,
+                    comm,
+                    ppid_val,
+                    parent_comm_val,
+                    process.gpu,
+                    process.memory,
+                    process.encoder,
+                    process.decoder
                 );
 
                 (plain, json)
             } else {
                 let plain = format!(
-                    "PID: {}, Comm: {}, GPU_ID: {}, VRAM%: {}, Encoder%: {}, Decoder%: {}",
-                    process.pid, comm, process.gpu, process.memory, process.encoder, process.decoder
+                    "Type: gpu, PID: {}, Comm: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
+                    process.pid,
+                    comm,
+                    process.gpu,
+                    process.memory,
+                    process.encoder,
+                    process.decoder
                 );
 
                 let json = format!(
-                    "{{\"PID\": {}, \"Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM%\": {}, \"Encoder%\": {}, \"Decoder%\": {}}}",
-                    process.pid, comm, process.gpu, process.memory, process.encoder, process.decoder
+                    "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+                    process.pid,
+                    comm,
+                    process.gpu,
+                    process.memory,
+                    process.encoder,
+                    process.decoder
                 );
 
                 (plain, json)
@@ -110,25 +134,15 @@ pub async fn monitor_gpu_usage(
         }
 
         // construct the global (per gpu) messages
+        let vram_mb = gpu.memory_used / (1024 * 1024);
+
         let plain_string = format!(
-            "GPU_ID: {}, GPU%: {}, VRAM%: {}, VRAM_Bytes: {}, Encoder%: {}, Decoder%: {}, Temperature: {}°C",
-            gpu.id,
-            gpu.gpu,
-            gpu.memory_usage,
-            gpu.memory_used,
-            gpu.encoder,
-            gpu.decoder,
-            gpu.temperature
+            "Type: gpu, GPU_ID: {}, GPU_Percent: {}, VRAM_Percent: {}, VRAM_MB: {}, Encoder_Percent: {}, Decoder_Percent: {}, Temperature_C: {}",
+            gpu.id, gpu.gpu, gpu.memory_usage, vram_mb, gpu.encoder, gpu.decoder, gpu.temperature
         );
         let json_string = format!(
-            "{{\"GPU_ID\": {}, \"GPU%\": {}, \"VRAM%\": {}, \"VRAM_Bytes\": {}, \"Encoder%\": {}, \"Decoder%\": {}, \"Temperature\": \"{}°C\"}}",
-            gpu.id,
-            gpu.gpu,
-            gpu.memory_usage,
-            gpu.memory_used,
-            gpu.encoder,
-            gpu.decoder,
-            gpu.temperature
+            "{{\"Type\": \"gpu\", \"GPU_ID\": {}, \"GPU_Percent\": {}, \"VRAM_Percent\": {}, \"VRAM_MB\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}, \"Temperature_C\": {}}}",
+            gpu.id, gpu.gpu, gpu.memory_usage, vram_mb, gpu.encoder, gpu.decoder, gpu.temperature
         );
 
         output_message(

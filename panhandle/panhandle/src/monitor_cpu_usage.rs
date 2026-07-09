@@ -1,6 +1,4 @@
-use aya::{
-    maps::{HashMap, PerCpuArray}
-};
+use aya::maps::{HashMap, PerCpuArray};
 use reqwest::Client;
 extern crate simplelog;
 use std::sync::Arc;
@@ -43,7 +41,7 @@ pub async fn monitor_cpu_usage(
     if let Ok(values) = busy_cpu_time.get(&0, 0) {
         total_busy = values.iter().sum::<u64>();
     }
-    
+
     // Convert poll interval to nanoseconds for CPU percentage calculation
     let interval_ns = (poll_interval as u64) * 1_000_000_000;
 
@@ -52,10 +50,8 @@ pub async fn monitor_cpu_usage(
         filter.clone()
     } else {
         let mut all_pids = Vec::new();
-        for key in pid_cpu_time.keys() {
-            if let Ok(pid) = key {
-                all_pids.push(pid);
-            }
+        for pid in pid_cpu_time.keys().flatten() {
+            all_pids.push(pid);
         }
         all_pids
     };
@@ -65,7 +61,7 @@ pub async fn monitor_cpu_usage(
         if let Ok(cpu_time) = pid_cpu_time.get(&pid, 0) {
             let last_time = last_pid_times.get(&pid).copied().unwrap_or(0);
             let delta = cpu_time.saturating_sub(last_time);
-            
+
             // 100% = fully using one core, 200% = fully using two cores, etc.
             let cpu_percent = if interval_ns > 0 {
                 (delta as f64 / interval_ns as f64) * 100.0
@@ -77,9 +73,9 @@ pub async fn monitor_cpu_usage(
             stats.total_time = cpu_time;
             stats.sample_count += 1;
             stats.max_cpu_percent = stats.max_cpu_percent.max(cpu_percent);
-            stats.avg_cpu_percent =
-                (stats.avg_cpu_percent * (stats.sample_count - 1) as f64 + cpu_percent)
-                    / stats.sample_count as f64;
+            stats.avg_cpu_percent = (stats.avg_cpu_percent * (stats.sample_count - 1) as f64
+                + cpu_percent)
+                / stats.sample_count as f64;
 
             // Get the command name for this PID
             let comm = if pid > 0 {
@@ -91,8 +87,8 @@ pub async fn monitor_cpu_usage(
             // Only get parent info if verbose flag is set
             let (ppid, parent_comm) = if *verbose {
                 if let Ok(parent_pid) = get_parent_pid(pid) {
-                    let parent_name = get_process_name(parent_pid)
-                        .unwrap_or_else(|| "unknown".to_string());
+                    let parent_name =
+                        get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
                     (Some(parent_pid), Some(parent_name))
                 } else {
                     (Some(0), Some("unknown".to_string()))
@@ -105,9 +101,9 @@ pub async fn monitor_cpu_usage(
             let (plain_string, json_string) = if *verbose {
                 let ppid_val = ppid.unwrap_or(0);
                 let parent_comm_val = parent_comm.as_deref().unwrap_or("unknown");
-                
+
                 let plain = format!(
-                    "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Total_Time_ms: {:.2}, Delta_Time_ms: {:.2}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
+                    "Type: cpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Total_Time_ms: {:.2}, Delta_Time_ms: {:.2}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
                     pid,
                     comm,
                     ppid_val,
@@ -120,7 +116,7 @@ pub async fn monitor_cpu_usage(
                 );
 
                 let json = format!(
-                    "{{\"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"Total_Time_ms\": {:.2}, \"Delta_Time_ms\": {:.2}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
+                    "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"Total_Time_ms\": {:.2}, \"Delta_Time_ms\": {:.2}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
                     pid,
                     comm,
                     ppid_val,
@@ -136,21 +132,13 @@ pub async fn monitor_cpu_usage(
             } else {
                 // Non-verbose: exclude parent info
                 let plain = format!(
-                    "PID: {}, Comm: {}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
-                    pid,
-                    comm,
-                    cpu_percent,
-                    stats.avg_cpu_percent,
-                    stats.max_cpu_percent
+                    "Type: cpu, PID: {}, Comm: {}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
+                    pid, comm, cpu_percent, stats.avg_cpu_percent, stats.max_cpu_percent
                 );
 
                 let json = format!(
-                    "{{\"PID\": {}, \"Comm\": \"{}\", \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
-                    pid,
-                    comm,
-                    cpu_percent,
-                    stats.avg_cpu_percent,
-                    stats.max_cpu_percent
+                    "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": \"{}\", \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
+                    pid, comm, cpu_percent, stats.avg_cpu_percent, stats.max_cpu_percent
                 );
 
                 (plain, json)
@@ -181,27 +169,27 @@ pub async fn monitor_cpu_usage(
             // conditionally include parent info in not_found messages too
             let (plain_string, json_string) = if *verbose {
                 let (ppid, parent_comm) = if let Ok(parent_pid) = get_parent_pid(pid) {
-                    let parent_name = get_process_name(parent_pid)
-                        .unwrap_or_else(|| "unknown".to_string());
+                    let parent_name =
+                        get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
                     (parent_pid, parent_name)
                 } else {
                     (0, "unknown".to_string())
                 };
 
                 let plain = format!(
-                    "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Status: not_found",
+                    "Type: cpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Status: not_found",
                     pid, comm, ppid, parent_comm
                 );
                 let json = format!(
-                    "{{\"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"Status\": \"not_found\"}}",
+                    "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"Status\": \"not_found\"}}",
                     pid, comm, ppid, parent_comm
                 );
 
                 (plain, json)
             } else {
-                let plain = format!("PID: {}, Comm: {}, Status: not_found", pid, comm);
+                let plain = format!("cpu: PID: {}, Comm: {}, Status: not_found", pid, comm);
                 let json = format!(
-                    "{{\"PID\": {}, \"Comm\": \"{}\", \"Status\": \"not_found\"}}",
+                    "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": \"{}\", \"Status\": \"not_found\"}}",
                     pid, comm
                 );
 

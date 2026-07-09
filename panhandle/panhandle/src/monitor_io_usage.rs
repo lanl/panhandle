@@ -145,35 +145,37 @@ async fn report_io_and_inode_stats(
     http_url: &Arc<String>,
     client: &Client,
 ) {
+    let read_mb = read_bytes / (1024 * 1024);
+    let write_mb = write_bytes / (1024 * 1024);
+
     let (plain_string, json_string) = if *verbose {
         let ppid_val = ppid.unwrap_or(0);
         let parent_comm_val = parent_comm.unwrap_or("unknown");
 
         let plain = format!(
-            "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, \
-             Read_Count: {}, Write_Count: {}, Read_Bytes: {}, Write_Bytes: {}, \
-             Open_FDs: {}, Unique_Inodes: {}",
+            "Type: io, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
             pid,
             comm,
             ppid_val,
             parent_comm_val,
             read_count,
             write_count,
-            read_bytes,
-            write_bytes,
+            read_mb,
+            write_mb,
             open_fds,
             unique_inodes
         );
 
         let json_value = json!({
+            "Type": "io",
             "PID": pid,
             "Comm": comm,
             "PPID": ppid_val,
             "Parent_Comm": parent_comm_val,
             "Read_Count": read_count,
             "Write_Count": write_count,
-            "Read_Bytes": read_bytes,
-            "Write_Bytes": write_bytes,
+            "Read_MB": read_mb,
+            "Write_MB": write_mb,
             "Open_FDs": open_fds,
             "Unique_Inodes": unique_inodes,
         });
@@ -181,26 +183,18 @@ async fn report_io_and_inode_stats(
         (plain, json_value.to_string())
     } else {
         let plain = format!(
-            "PID: {}, Comm: {}, \
-             Read_Count: {}, Write_Count: {}, Read_Bytes: {}, Write_Bytes: {}, \
-             Open_FDs: {}, Unique_Inodes: {}",
-            pid,
-            comm,
-            read_count,
-            write_count,
-            read_bytes,
-            write_bytes,
-            open_fds,
-            unique_inodes
+            "Type: io, PID: {}, Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
+            pid, comm, read_count, write_count, read_mb, write_mb, open_fds, unique_inodes
         );
 
         let json_value = json!({
+            "Type": "io",
             "PID": pid,
             "Comm": comm,
             "Read_Count": read_count,
             "Write_Count": write_count,
-            "Read_Bytes": read_bytes,
-            "Write_Bytes": write_bytes,
+            "Read_MB": read_mb,
+            "Write_MB": write_mb,
             "Open_FDs": open_fds,
             "Unique_Inodes": unique_inodes,
         });

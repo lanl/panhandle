@@ -1,7 +1,10 @@
 use std::{convert::TryInto, path::PathBuf};
 
 use aya::{
-    Btf, maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray}, programs::{BtfTracePoint, TracePoint, UProbe}, util::online_cpus,
+    Btf,
+    maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
+    programs::{BtfTracePoint, TracePoint, UProbe},
+    util::online_cpus,
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
@@ -269,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Spawn CPU monitoring task
         cpu_handle = Some(tokio::spawn(async move {
             use std::collections::HashMap as StdHashMap;
-            
+
             let mut last_total_busy: u64 = 0;
             let mut last_pid_times: StdHashMap<u32, u64> = StdHashMap::new();
             let mut pid_stats: StdHashMap<u32, PidStats> = StdHashMap::new();
@@ -434,7 +437,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }));
     }
-    
+
     // set up the memory fault monitoring
     let mut memory_fault_handle: Option<JoinHandle<()>> = None;
 

@@ -29,8 +29,8 @@ pub async fn get_major_faults(
                 // Retrieve parent process info only if verbose flag is set
                 let (ppid, parent_comm) = if *verbose {
                     if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
-                        let parent_name = get_process_name(parent_pid)
-                            .unwrap_or_else(|| "unknown".to_string());
+                        let parent_name =
+                            get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
                         (Some(parent_pid), Some(parent_name))
                     } else {
                         (Some(0), Some("unknown".to_string()))
@@ -44,24 +44,24 @@ pub async fn get_major_faults(
                     let parent_comm_val = parent_comm.as_deref().unwrap_or("unknown");
 
                     let plain = format!(
-                        "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Major Faults: {}, Child Major Faults: {}",
+                        "Type: mem, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Maj_Faults: {}, Child_Maj_Faults: {}",
                         stat.pid, stat.comm, ppid_val, parent_comm_val, stat.majflt, stat.cmajflt
                     );
 
                     let json = format!(
-                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
+                        "{{\"Type\": \"fault\", \"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"Maj_Faults\": \"{}\", \"Child_Maj_Faults\": \"{}\"}}",
                         stat.pid, stat.comm, ppid_val, parent_comm_val, stat.majflt, stat.cmajflt
                     );
 
                     (plain, json)
                 } else {
                     let plain = format!(
-                        "PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {}",
+                        "Type: fault, PID: {}, Comm: {}, Maj_Faults: {}, Child_Maj_Faults: {}",
                         stat.pid, stat.comm, stat.majflt, stat.cmajflt
                     );
 
                     let json = format!(
-                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"Major Faults\": \"{}\", \"Child Major Faults\": \"{}\"}}",
+                        "{{\"Type\": \"fault\", \"PID\": \"{}\", \"Comm\": \"{}\", \"Maj_Faults\": \"{}\", \"Child_Maj_Faults\": \"{}\"}}",
                         stat.pid, stat.comm, stat.majflt, stat.cmajflt
                     );
 
@@ -98,7 +98,6 @@ pub async fn get_major_faults(
     - RSS (pages): Resident Set Size but in 4KB pages
     - Peak RSS (MB): maximum physical RAM the process has used since it started
     - VSize (MB): total virtual address space
-    - Resident (MB): number of pages in physical RAM, similar to RSS but from different /proc source
     - Shared (MB): Shared memory pages
     - Data+Stack (MB): Data + stack size: size of process heap and stack regions (excludes code/text segment)
     Takes the desired output formatting (json, boolean) and pid filter as input parameters.
@@ -134,7 +133,6 @@ pub async fn get_all_memory_usage(
                 let rss_mb = vm_rss.unwrap_or(0) / 1024;
                 let vsize_mb = stat.vsize / (1024 * 1024);
                 let vm_hwm_mb = vm_hwm.unwrap_or(0) / 1024;
-                let resident_mb = (statm.resident * 4) / 1024;
                 let shared_mb = (statm.shared * 4) / 1024;
                 let data_mb = (statm.data * 4) / 1024;
                 let rss_pages = stat.rss;
@@ -142,8 +140,8 @@ pub async fn get_all_memory_usage(
                 // Retrieve parent process info only if verbose flag is set
                 let (ppid, parent_comm) = if *verbose {
                     if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
-                        let parent_name = get_process_name(parent_pid)
-                            .unwrap_or_else(|| "unknown".to_string());
+                        let parent_name =
+                            get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
                         (Some(parent_pid), Some(parent_name))
                     } else {
                         (Some(0), Some("unknown".to_string()))
@@ -157,7 +155,7 @@ pub async fn get_all_memory_usage(
                     let parent_comm_val = parent_comm.as_deref().unwrap_or("unknown");
 
                     let plain = format!(
-                        "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, RSS: {} MB, RSS: {} pages, Peak RSS: {} MB, VSize: {} MB, Resident: {} MB, Shared: {} MB, Data+Stack: {} MB",
+                        "Type: mem, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, RSS_MB: {}, RSS_Pages: {}, Peak_RSS_MB: {}, VSize_MB: {}, Shared_MB: {}, Data_Stack_Size_MB: {}",
                         stat.pid,
                         stat.comm,
                         ppid_val,
@@ -166,13 +164,12 @@ pub async fn get_all_memory_usage(
                         rss_pages,
                         vm_hwm_mb,
                         vsize_mb,
-                        resident_mb,
                         shared_mb,
                         data_mb
                     );
 
                     let json = format!(
-                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Resident_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_MB\": \"{}\"}}",
+                        "{{\"Type\": \"mem\", \"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_Size_MB\": \"{}\"}}",
                         stat.pid,
                         stat.comm,
                         ppid_val,
@@ -181,7 +178,6 @@ pub async fn get_all_memory_usage(
                         rss_pages,
                         vm_hwm_mb,
                         vsize_mb,
-                        resident_mb,
                         shared_mb,
                         data_mb
                     );
@@ -189,27 +185,25 @@ pub async fn get_all_memory_usage(
                     (plain, json)
                 } else {
                     let plain = format!(
-                        "PID: {}, Comm: {}, RSS: {} MB, RSS: {} pages, Peak RSS: {} MB, VSize: {} MB, Resident: {} MB, Shared: {} MB, Data+Stack: {} MB",
+                        "Type: mem, PID: {}, Comm: {}, RSS_MB: {}, RSS_Pages: {}, Peak_RSS_MB: {}, VSize_MB: {}, Shared_MB: {}, Data_Stack_Size_MB: {}",
                         stat.pid,
                         stat.comm,
                         rss_mb,
                         rss_pages,
                         vm_hwm_mb,
                         vsize_mb,
-                        resident_mb,
                         shared_mb,
                         data_mb
                     );
 
                     let json = format!(
-                        "{{\"PID\": \"{}\", \"Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Resident_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_MB\": \"{}\"}}",
+                        "{{\"Type\": \"mem\", \"PID\": \"{}\", \"Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_Size_MB\": \"{}\"}}",
                         stat.pid,
                         stat.comm,
                         rss_mb,
                         rss_pages,
                         vm_hwm_mb,
                         vsize_mb,
-                        resident_mb,
                         shared_mb,
                         data_mb
                     );

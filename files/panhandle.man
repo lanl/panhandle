@@ -6,7 +6,7 @@ panhandle - User activity monitoring
 .SH DESCRIPTION
 \fBpanhandle\fP provides the ability to monitor execve syscalls to identify specific interesting user behavior, 
 as well as the ability to monitor specific shells (bash and zsh) on a linux host. Several optional filters 
-enable an administrator to selectively apply criterion to examine  desired user behavior. These include 
+enable an administrator to selectively apply criterion to examine desired user behavior. These include 
 UID filtering as well as filtering for the use of specific executables. Specified events are logged for 
 further reporting and/or analysis.
 .SS Options
@@ -15,7 +15,7 @@ further reporting and/or analysis.
 Monitor events from the bash shell using the readline function.
 .TP
 \fB-c, --config\fP
-Pass arguments from a config file in YAML or JSON, the default config file is located at \fI/opt/panhandle/panhandle.yaml\fP. Arguments provided in the config file will overwrite arguments provided over the command line.
+Pass arguments from a config file in YAML or JSON, the default config file is located at \fI/opt/panhandle/panhandle.yaml\fP. Arguments provided in the command line will overwrite those given in the config file.
 .TP
 \fB-d, --debug\fP
 Invalidates json option and returns output to help identify why the program might not pick up on desired events.
@@ -24,7 +24,7 @@ Invalidates json option and returns output to help identify why the program migh
 Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 10.
 .TP
 \fB--pid-list\fI <PIDS>\fR
-Specify a comma separated list of PIDs to monitor resource usage of.
+Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
 .TP
 \fB--exclude-min-uid\fI <EXCLUDE_MIN_UID>\fR
 Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 1.
@@ -36,13 +36,13 @@ Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. D
 Specify the absolute path to the desired log file.
 .TP
 \fB-m, --memory-faults <MEMORY_FAULTS>\fP
-Report the processes with memory faults greater than the specified threshold value.
+Report the processes with memory faults greater than the specified threshold value. Specify information polling interval with --poll.
 .TP
 \fB-h, --help\fP
 Print help
 .TP
 \fBoutput\fP
-Subcommand to specify the type of output desired, see the --syslog, --http, or --file options.
+Output options: --file, --http, --syslog.
 .TP
 \fB--http\fP
 Output events to the specified HTTP endpoint.
@@ -51,11 +51,11 @@ Output events to the specified HTTP endpoint.
 Omit logging stdout to the terminal.
 .TP
 \fB--syslog\fP
-Output events to syslog.
+Output events to syslog. Local or remote options are supported.
 .nf
-To send locally: --syslog unix or --syslog /dev/log or --syslog
-To send remotely: --syslog <hostname>:<port>/tcp or /udp
-Remote example: --syslog hpcsyslog.lanl.gov:514/tcp
+Local example: --syslog /dev/log or --syslog unix or --syslog
+Remote TCP example: --syslog hpcsyslog.lanl.gov:514/tcp
+Remote UDP example: --syslog hpcsyslog.lanl.gov:514/udp
 .fi
 .TP
 \fB--include-uid\fI <UID(s)>\fR
@@ -71,22 +71,22 @@ Monitor events from the execve syscall. This is the program default if no other 
 Output execve syscall events only from the shells: bash, tcsh, & zsh. This does not effect the output of the bash or zsh options.
 .TP
 \fB--socket\fP
-Report the numbers of sockets per process.
+Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll.
 .TP
 \fB--cpu\fP
-Turn on cpu usage monitoring and reporting.
+Receive a report of CPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
 .TP
 \fB--gpu\fP
-Turn on gpu usage monitoring and reporting.
+Receive a report of GPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
 .TP
 \fB--memory\fP
-Turn on memory usage monitoring and reporting.
+Receive a report of per-PID memory usage over time, such as RSS and stack usage. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
 .TP
 \fB--io\fP
-Turn on io usage monitoring and reporting.
+Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
 .TP
 \fB-v, --verbose\fP
-Verbose output
+Verbose output.
 .TP
 \fB-V, --Version\fP
 Print version
@@ -95,7 +95,7 @@ Print version
 Monitor events from the zsh shell using the zlentry function.
 .TP
 \fB--poll <POLLING_FREQUENCY_SECONDS>\fP
-Polling interval in seconds for monitoring information.
+Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to 30 seconds.
 .SH FILES
 .TP
 \fC/opt/panhandle/panhandle.yaml\fR

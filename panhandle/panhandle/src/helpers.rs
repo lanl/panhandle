@@ -1,6 +1,5 @@
 use aya::maps::perf::AsyncPerfEventArrayBuffer;
 use aya::programs::{KProbe};
-use aya::{Btf, programs::BtfTracePoint};
 use procfs::process::Process;
 use tokio::{net::lookup_host, time::Duration};
 extern crate simplelog;
@@ -615,23 +614,6 @@ pub async fn output_message(
     }
 }
 
-/// Helper function to attach a single BTF tracepoint
-pub fn attach_tracepoint(
-    ebpf: &mut aya::Ebpf,
-    btf: &Btf,
-    program_name: &str,
-) -> Result<(), anyhow::Error> {
-    let program: &mut BtfTracePoint = ebpf
-        .program_mut(program_name)
-        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
-        .try_into()?;
-
-    program.load(program_name, btf)?;
-    program.attach()?;
-
-    Ok(())
-}
-
 /// Helper function to attach a single kprobe
 pub fn attach_kprobe(
     ebpf: &mut aya::Ebpf,
@@ -654,4 +636,11 @@ pub fn get_process_name(pid: u32) -> Option<String> {
         .ok()
         .and_then(|proc| proc.stat().ok())
         .map(|stat| stat.comm)
+}
+
+/// Get the parent PID for a given PID
+pub fn get_parent_pid(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
+    let proc = Process::new(pid as i32)?;
+    let stat = proc.stat()?;
+    Ok(stat.ppid as u32)
 }

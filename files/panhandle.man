@@ -96,6 +96,15 @@ Monitor events from the zsh shell using the zlentry function.
 .TP
 \fB--poll <POLLING_FREQUENCY_SECONDS>\fP
 Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to 30 seconds.
+.TP
+\fB--syscalls\fI <SYSCALLS>\fR
+Specify a comma separated list of syscalls to be blocked. Provide pid_white or pid_black to control which processes are blocked when executing these syscalls.
+.TP
+\fB--pid-white\fI <PIDS>\fR
+Specify a comma separated list of PIDs that will be allowed to execute the syscalls specified in --syscalls.
+.TP
+\fB--pid-black\fI <PIDS>\fR
+Specify a comma separated list of PIDs that will be blocked from executing the syscalls specified in --syscalls.
 .SH FILES
 .TP
 \fC/opt/panhandle/panhandle.yaml\fR

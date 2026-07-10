@@ -3,7 +3,7 @@ use std::{convert::TryInto, path::PathBuf};
 use aya::{
     Btf,
     maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
-    programs::{BtfTracePoint, TracePoint, UProbe},
+    programs::{BtfTracePoint, TracePoint, UProbe, Lsm},
     util::online_cpus,
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
@@ -498,6 +498,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
+    // process syscall blocking
+    if let Some(syscalls) = &args.syscalls {
+        // Check if "open" is in the syscall list
+        if syscalls.iter().any(|s| s == "open" || s == "openat") {
+            let blocked_pids: Vec<u32> = if let Some(ref pids) = args.pid_black {
+                pids.clone()
+            } else {
+                info!("Syscall blocking enabled but no PIDs specified");
+                Vec::new()
+            };
+        
+            info!("Blocking file opens for PIDs: {:?}", blocked_pids);
+            
+            // Get the BLOCKED_PIDS map
+            let blocked_pids_map = ebpf.take_map("BLOCKED_PIDS").unwrap();
+            let mut pid_blacklist: aya::maps::HashMap<_, u32, u8> = 
+                aya::maps::HashMap::try_from(blocked_pids_map)?;
+            
+            // Populate the blacklist (this consumes blocked_pids)
+            for pid in blocked_pids {
+                pid_blacklist.insert(pid, 1, 0)?;
+            }
+            
+            // Load and attach the LSM program
+            let program: &mut Lsm = ebpf
+                .program_mut("block_open")
+                .unwrap()
+                .try_into()?;
+            let btf = Btf::from_sys_fs()?;
+            program.load("file_open", &btf)?;
+            program.attach()?;
+        }
+    }
+
     if args.bash {
         // canonicalize the path and then convert to string
         let file: PathBuf = canonicalize("/bin/bash").unwrap_or_default();
@@ -684,7 +718,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             && !args.memory
             && !args.cpu
             && !args.gpu
-            && !args.io)
+            && !args.io
+            && args.syscalls.is_none())
     {
         // this is the main program functionality
         // the default option if the other shells are not selected

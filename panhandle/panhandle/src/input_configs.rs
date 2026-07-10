@@ -121,6 +121,21 @@ pub struct RawArgs {
     /// Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to 30 seconds.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..), global = true)]
     pub poll: Option<u32>,
+
+    /// Specify a comma separated list of syscalls to be blocked. Provide pid_white or pid_black to control which processes are blocked when executing these syscalls.
+    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[serde(default)]
+    pub syscalls: Option<Vec<String>>,
+
+    /// Specify a comma separated list of PIDs that will be allowed to execute the syscalls specified in --syscalls
+    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[serde(default)]
+    pub pid_white: Option<Vec<u32>>,
+
+    /// Specify a comma separated list of PIDs that will be blocked from executing the syscalls specified in --syscalls
+    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[serde(default)]
+    pub pid_black: Option<Vec<u32>>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -205,6 +220,12 @@ pub struct ConfigArgs {
     pub pid_list: Option<Vec<u32>>,
 
     pub poll: Option<u32>,
+
+    pub syscalls: Option<Vec<String>>,
+
+    pub pid_white: Option<Vec<u32>>,
+
+    pub pid_black: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -257,6 +278,9 @@ impl From<ConfigArgs> for RawArgs {
             io: cfg.io,
             pid_list: cfg.pid_list,
             poll: cfg.poll,
+            syscalls: cfg.syscalls,
+            pid_white: cfg.pid_white,
+            pid_black: cfg.pid_black,
             // output subcommand
             output,
             config: None,
@@ -304,6 +328,15 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     }
     if cli_args.pid_list.is_some() {
         final_args.pid_list = cli_args.pid_list.clone();
+    }
+    if cli_args.syscalls.is_some() {
+        final_args.syscalls = cli_args.syscalls.clone();
+    }
+    if cli_args.pid_white.is_some() {
+        final_args.pid_white = cli_args.pid_white.clone();
+    }
+    if cli_args.pid_black.is_some() {
+        final_args.pid_black = cli_args.pid_black.clone();
     }
 
     // Merge CLI output into config output, or create it if missing

@@ -500,27 +500,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // process syscall blocking
     if let Some(syscalls) = &args.syscalls {
-        // Check if "open" is in the syscall list
-        if syscalls.iter().any(|s| s == "open" || s == "openat") {
-            let blocked_pids: Vec<u32> = if let Some(ref pids) = args.pid_black {
-                pids.clone()
-            } else {
-                info!("Syscall blocking enabled but no PIDs specified");
-                Vec::new()
-            };
-        
+        let blocked_pids: Vec<u32> = if let Some(ref pids) = args.pid_black {
+            pids.clone()
+        } else {
+            info!("Syscall blocking enabled but no PIDs specified");
+            Vec::new()
+        };
+        if args.debug {
             info!("Blocking file opens for PIDs: {:?}", blocked_pids);
-            
-            // Get the BLOCKED_PIDS map
-            let blocked_pids_map = ebpf.take_map("BLOCKED_PIDS").unwrap();
-            let mut pid_blacklist: aya::maps::HashMap<_, u32, u8> = 
-                aya::maps::HashMap::try_from(blocked_pids_map)?;
-            
-            // Populate the blacklist (this consumes blocked_pids)
-            for pid in blocked_pids {
-                pid_blacklist.insert(pid, 1, 0)?;
-            }
-            
+        }
+        // Get the BLOCKED_PIDS map
+        let blocked_pids_map = ebpf.take_map("BLOCKED_PIDS").unwrap();
+        let mut pid_blacklist: aya::maps::HashMap<_, u32, u8> = 
+            aya::maps::HashMap::try_from(blocked_pids_map)?;
+        
+        // Populate the blacklist, this consumes the blocked_pids vec
+        for pid in blocked_pids {
+            pid_blacklist.insert(pid, 1, 0)?;
+        }
+
+        // Check for open related syscalls - open, openat, creat
+        if syscalls.iter().any(|s| s == "open" || s == "openat" || s == "creat") {
             // Load and attach the LSM program
             let program: &mut Lsm = ebpf
                 .program_mut("block_open")
@@ -528,6 +528,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .try_into()?;
             let btf = Btf::from_sys_fs()?;
             program.load("file_open", &btf)?;
+            program.attach()?;
+        }
+        if syscalls.iter().any(|s| s == "execve") {
+            let program: &mut Lsm = ebpf.program_mut("block_execve").unwrap().try_into()?;
+            let btf = Btf::from_sys_fs()?;
+            program.load("bprm_check_security", &btf)?;
             program.attach()?;
         }
     }

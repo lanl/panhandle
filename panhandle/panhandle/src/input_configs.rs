@@ -3,13 +3,12 @@ use std::{fs, path::Path};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-//struct for the cli arguments / make them as layerable as possible
-///Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
-///    as well as the ability to monitor specific shells (bash and zsh) on a linux host.
-///    Several optional filters enable an administrator to selectively apply criterion to examine
-///    desired user behavior. These include UID filtering as well as filtering for the use of specific executables.
-///    Specified events are logged for further reporting and/or analysis. Logging options include file, http, syslog,
-///    or terminal output for selected events.
+/// Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
+/// as well as the ability to monitor specific shells (bash and zsh) on a linux host.
+/// Several optional filters enable an administrator to selectively apply criterion to examine
+/// desired user behavior. These include UID filtering as well as filtering for the use of specific executables.
+/// Specified events are logged for further reporting and/or analysis. Logging options include file, http, syslog,
+/// or terminal output for selected events.
 #[derive(Parser, Debug, Clone, Deserialize, PartialEq, Default)]
 #[command(
     version,
@@ -122,20 +121,20 @@ pub struct RawArgs {
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..), global = true)]
     pub poll: Option<u32>,
 
-    /// Specify a comma separated list of syscalls to be blocked. Provide pid_white or pid_black to control which processes are blocked when executing these syscalls.
+    /// Specify a comma separated list of syscalls to be blocked. Provide comm_white or comm_black to control which processes are blocked when executing these syscalls.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
     pub syscalls: Option<Vec<String>>,
 
-    /// Specify a comma separated list of PIDs that will be allowed to execute the syscalls specified in --syscalls
+    /// Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
-    pub pid_white: Option<Vec<u32>>,
+    pub comm_white: Option<Vec<String>>,
 
-    /// Specify a comma separated list of PIDs that will be blocked from executing the syscalls specified in --syscalls
+    /// Specify a comma separated list of process names (comm) that will be blocked from executing the syscalls specified in --syscalls
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
-    pub pid_black: Option<Vec<u32>>,
+    pub comm_black: Option<Vec<String>>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -223,9 +222,9 @@ pub struct ConfigArgs {
 
     pub syscalls: Option<Vec<String>>,
 
-    pub pid_white: Option<Vec<u32>>,
+    pub comm_white: Option<Vec<String>>,
 
-    pub pid_black: Option<Vec<u32>>,
+    pub comm_black: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -279,8 +278,8 @@ impl From<ConfigArgs> for RawArgs {
             pid_list: cfg.pid_list,
             poll: cfg.poll,
             syscalls: cfg.syscalls,
-            pid_white: cfg.pid_white,
-            pid_black: cfg.pid_black,
+            comm_white: cfg.comm_white,
+            comm_black: cfg.comm_black,
             // output subcommand
             output,
             config: None,
@@ -332,11 +331,11 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     if cli_args.syscalls.is_some() {
         final_args.syscalls = cli_args.syscalls.clone();
     }
-    if cli_args.pid_white.is_some() {
-        final_args.pid_white = cli_args.pid_white.clone();
+    if cli_args.comm_white.is_some() {
+        final_args.comm_white = cli_args.comm_white.clone();
     }
-    if cli_args.pid_black.is_some() {
-        final_args.pid_black = cli_args.pid_black.clone();
+    if cli_args.comm_black.is_some() {
+        final_args.comm_black = cli_args.comm_black.clone();
     }
 
     // Merge CLI output into config output, or create it if missing

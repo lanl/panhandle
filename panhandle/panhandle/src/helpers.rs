@@ -1,5 +1,6 @@
+use aya::Btf;
 use aya::maps::perf::AsyncPerfEventArrayBuffer;
-use aya::programs::{KProbe};
+use aya::programs::{KProbe, Lsm};
 use procfs::process::Process;
 use tokio::{net::lookup_host, time::Duration};
 extern crate simplelog;
@@ -627,6 +628,16 @@ pub fn attach_kprobe(
     program.load()?;
     program.attach(program_name, 0)?;
     
+    Ok(())
+}
+
+/// Helper function to attach a single LSM hook
+pub fn attach_lsm_hook(ebpf: &mut aya::Ebpf, hook_name: &str, program_name: &str) -> Result<(), anyhow::Error> {
+    let program: &mut Lsm = ebpf.program_mut(program_name).ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?.try_into()?;
+    let btf = Btf::from_sys_fs()?;
+    program.load(hook_name, &btf)?;
+    program.attach()?;
+
     Ok(())
 }
 

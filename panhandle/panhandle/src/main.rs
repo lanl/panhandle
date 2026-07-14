@@ -3,7 +3,7 @@ use std::{convert::TryInto, path::PathBuf};
 use aya::{
     Btf,
     maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
-    programs::{BtfTracePoint, TracePoint, UProbe, Lsm},
+    programs::{BtfTracePoint, TracePoint, UProbe},
     util::online_cpus,
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
@@ -500,41 +500,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // process syscall blocking
     if let Some(syscalls) = &args.syscalls {
-        let blocked_pids: Vec<u32> = if let Some(ref pids) = args.pid_black {
-            pids.clone()
+        let blocked_comms: Vec<String> = if let Some(ref comms) = args.comm_black {
+            comms.clone()
         } else {
-            info!("Syscall blocking enabled but no PIDs specified");
+            info!("Syscall blocking enabled but no comms specified");
             Vec::new()
         };
-        if args.debug {
-            info!("Blocking file opens for PIDs: {:?}", blocked_pids);
-        }
-        // Get the BLOCKED_PIDS map
-        let blocked_pids_map = ebpf.take_map("BLOCKED_PIDS").unwrap();
-        let mut pid_blacklist: aya::maps::HashMap<_, u32, u8> = 
-            aya::maps::HashMap::try_from(blocked_pids_map)?;
         
-        // Populate the blacklist, this consumes the blocked_pids vec
-        for pid in blocked_pids {
-            pid_blacklist.insert(pid, 1, 0)?;
+        if args.debug {
+            info!("Blocking file opens for comms: {:?}", blocked_comms);
+        }
+        
+        // Get the BLOCKED_COMMS map
+        let blocked_comms_map = ebpf.take_map("BLOCKED_COMMS").unwrap();
+        let mut comm_blacklist: aya::maps::HashMap<_, [u8; 16], u8> =
+            aya::maps::HashMap::try_from(blocked_comms_map)?;
+
+        // Populate the blacklist with initial comms
+        for comm_str in blocked_comms {
+            let mut comm = [0u8; 16];
+            let bytes = comm_str.as_bytes();
+            let len = bytes.len().min(15); // Max 15 chars + null terminator
+            comm[..len].copy_from_slice(&bytes[..len]);
+            comm_blacklist.insert(comm, 1, 0)?;
         }
 
         // Check for open related syscalls - open, openat, creat
-        if syscalls.iter().any(|s| s == "open" || s == "openat" || s == "creat") {
-            // Load and attach the LSM program
-            let program: &mut Lsm = ebpf
-                .program_mut("block_open")
-                .unwrap()
-                .try_into()?;
-            let btf = Btf::from_sys_fs()?;
-            program.load("file_open", &btf)?;
-            program.attach()?;
+        if syscalls
+            .iter()
+            .any(|s| s == "open" || s == "openat" || s == "creat")
+        {
+            attach_lsm_hook(&mut ebpf, "file_open", "block_open")
+                .expect("failed to attach file_open hook");
         }
+        
         if syscalls.iter().any(|s| s == "execve") {
-            let program: &mut Lsm = ebpf.program_mut("block_execve").unwrap().try_into()?;
-            let btf = Btf::from_sys_fs()?;
-            program.load("bprm_check_security", &btf)?;
-            program.attach()?;
+            attach_lsm_hook(&mut ebpf, "bprm_check_security", "block_execve")
+                .expect("failed to attach bprm_check_security hook");
         }
     }
 

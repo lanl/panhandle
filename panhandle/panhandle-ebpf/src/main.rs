@@ -9,19 +9,19 @@ use aya_ebpf::{
     bindings::BPF_F_RDONLY,
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
-        bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
+        bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes
     },
     macros::{map, tracepoint},
     maps::{HashMap, PerCpuArray, PerfEventArray},
     programs::TracePointContext,
 };
 use panhandle_common::*;
+mod blocker;
 mod cpu_usage;
 mod readline;
 mod socket;
 mod vanilla_execve;
 mod zlentry;
-mod blocker;
 
 #[map(name = "panhandle_execve_events")]
 static mut PANHANDLE_EVENTS: PerfEventArray<ExecveEvent> = PerfEventArray::new(0);

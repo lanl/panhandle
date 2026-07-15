@@ -22,6 +22,7 @@ mod readline;
 mod socket;
 mod vanilla_execve;
 mod zlentry;
+mod vmlinux;
 
 #[map(name = "panhandle_execve_events")]
 static mut PANHANDLE_EVENTS: PerfEventArray<ExecveEvent> = PerfEventArray::new(0);

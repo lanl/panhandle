@@ -6,7 +6,7 @@ use aya::{
     programs::{BtfTracePoint, TracePoint, UProbe},
     util::online_cpus,
 };
-// use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
+use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
 use tokio::{
     signal,
@@ -205,6 +205,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         env!("OUT_DIR"),
         "/panhandle"
     )))?;
+
+    if let Err(e) = EbpfLogger::init(&mut ebpf) {
+        // not fatal — just means you won't see ebpf-side logs
+        eprintln!("failed to initialize eBPF logger: {e}");
+    }
 
     // set up executable vars
     let mut canonical_executable_vec = Vec::new();

@@ -124,21 +124,14 @@ def main():
     print("  • execve   - Execute binary")
     print("\nWaiting 5 seconds (should see SUCCESS)...\n")
     
-    time.sleep(5)
-    
-    print(f"\n{'='*70}")
-    print(f"Starting Panhandle to block process 'python3'...")
-    print(f"{'='*70}\n")
+    time.sleep(3)
     
     try:
-        # Run panhandle with blocking parameters
-        subprocess.run([
-            "cargo", "run", "--",
-            "--syscalls", "open",
-            "--comm-black", "python3",
-        ])
+        print("\nRun panhandle\n")
+        while True:
+            time.sleep(0.1)
     except KeyboardInterrupt:
-        print("\nStopping Panhandle...")
+        print("\nStopping...")
     finally:
         # Kill child process
         try:

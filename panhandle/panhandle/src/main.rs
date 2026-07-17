@@ -2,7 +2,7 @@ use std::{convert::TryInto, path::PathBuf};
 
 use aya::{
     Btf,
-    maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
+    maps::{HashMap, PerCpuArray, perf::PerfEventArray},
     programs::{TracePoint, UProbe},
     util::online_cpus,
 };
@@ -521,7 +521,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let num_cpus: usize = cpus.len();
 
         // Process events from the perf buffer
-        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("readline_events").unwrap())?;
+        let mut events = PerfEventArray::try_from(ebpf.take_map("readline_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 
@@ -610,7 +610,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let num_cpus = cpus.len();
 
         // Process events from the perf buffer
-        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("zlentry_events").unwrap())?;
+        let mut events = PerfEventArray::try_from(ebpf.take_map("zlentry_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 
@@ -697,7 +697,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Process events from the perf buffer
         let mut events =
-            AsyncPerfEventArray::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
+            PerfEventArray::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 

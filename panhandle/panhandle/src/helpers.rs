@@ -1,4 +1,4 @@
-use aya::maps::perf::AsyncPerfEventArrayBuffer;
+use aya::maps::perf::PerfEventArrayBuffer;
 use aya::programs::{KProbe};
 use aya::{Btf, programs::BtfTracePoint};
 use procfs::process::Process;
@@ -20,7 +20,7 @@ use panhandle_common::*;
 /// this is a method to handle the display of the shell (bash, zsh) ebpf events
 pub async fn consume_shell_ebpf_map(
     client: &Client,
-    mut buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
+    mut buf: PerfEventArrayBuffer<aya::maps::MapData>,
     mut buffers: Vec<BytesMut>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
@@ -162,7 +162,7 @@ pub async fn consume_shell_ebpf_map(
 /// this is a method to handle the display of the execve ebpf events
 pub async fn consume_execve_ebpf_map(
     client: &Client,
-    mut buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
+    mut buf: PerfEventArrayBuffer<aya::maps::MapData>,
     mut buffers: Vec<BytesMut>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,

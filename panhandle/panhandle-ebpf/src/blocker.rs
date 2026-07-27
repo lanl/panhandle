@@ -65,7 +65,7 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     }
 
     // Deny the open.
-    Err(EPERM)
+    Ok(EPERM)
 }
 
 
@@ -82,7 +82,7 @@ unsafe fn try_block_execve(ctx: LsmContext) -> Result<i32, i32> {
     if !comm_is_blocked() {
         return Ok(0);
     }
-    Err(EPERM)
+    Ok(EPERM)
 }
 
 // Returns true if the current task's comm is in the blacklist.

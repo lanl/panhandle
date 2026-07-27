@@ -1,4 +1,4 @@
-use aya::maps::perf::PerfEventArrayBuffer;
+use aya::maps::perf::{PerfEvent, PerfEventArrayBuffer};
 use aya::programs::{KProbe};
 use aya::{Btf, programs::BtfTracePoint};
 use procfs::process::Process;
@@ -11,17 +11,15 @@ use reqwest::{Client, Error, Response, header::CONTENT_TYPE};
 use simplelog::{debug, error, info};
 use syslog::{Error as SyslogError, Facility, Formatter3164};
 use uzers::get_user_by_uid;
-use bytes::BytesMut;
 use chrono::prelude::*;
 
 // this is the local import section
 use panhandle_common::*;
 
 /// this is a method to handle the display of the shell (bash, zsh) ebpf events
-pub async fn consume_shell_ebpf_map(
+pub fn consume_shell_ebpf_map(
     client: &Client,
     mut buf: PerfEventArrayBuffer<aya::maps::MapData>,
-    mut buffers: Vec<BytesMut>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
     http: bool,
@@ -31,139 +29,168 @@ pub async fn consume_shell_ebpf_map(
     json: bool,
     debug: bool,
 ) {
-    // set up vecs needed internal to the loop because of no Copy trait implementation
     let executable_vec = ref_executable_vec;
+    let client = client.clone();
+    let global_url = global_url.clone();
+    let syslog_address = syslog_address.clone();
+    let hostname = hostname.clone();
 
-    // main cpu loop
-    loop {
-        let events: aya::maps::perf::Events = buf.read_events(&mut buffers).await.unwrap();
-        for buf in buffers.iter_mut().take(events.read) {
-            // read the event
-            let ptr: *const Readline = buf.as_ptr() as *const Readline;
-            // SAFETY: derefernce the pointer that we created in ebpf-land
-            // this is implemented by a shared struct and zero'd on the ebpf side for consistency
-            let data: &Readline = unsafe { &*ptr };
+    // Process each event using the new sync for_each API
+    buf.for_each(|event| {
+        let sample_bytes = match event {
+            PerfEvent::Sample { head, tail } => {
+                let mut bytes = head.to_vec();
+                bytes.extend_from_slice(tail);
+                bytes
+            }
+            PerfEvent::Lost { count } => {
+                error!("Lost {} shell events", count);
+                return;
+            }
+        };
+        
+        // read the event
+        let ptr: *const Readline = sample_bytes.as_ptr() as *const Readline;
+        // SAFETY: dereference the pointer that we created in ebpf-land
+        // this is implemented by a shared struct and zero'd on the ebpf side for consistency
+        let data: &Readline = unsafe { &*ptr };
 
-            // process the command to fix artifacts in the scratch
-            let mut command: &str = core::str::from_utf8(&data.command)
+        // process the command to fix artifacts in the scratch
+        let mut command: &str = core::str::from_utf8(&data.command)
                 .unwrap_or_default()
                 .trim_end_matches('\0');
-            if let Some((prefix, _)) = command.split_once("\0") {
-                command = prefix.trim();
-            }
+        if let Some((prefix, _)) = command.split_once("\0") {
+            command = prefix.trim();
+        }
 
-            // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.contains(&command.to_string()) {
-                debug!(
-                    "skipping event with path: '{}' not in the list to monitor: '{:?}'",
-                    command, &executable_vec
-                );
-                // escape iteration of events.read
-                break;
-            }
+        // escape if matching the list of binaries to exclude
+        if !executable_vec.is_empty() && !executable_vec.contains(&command.to_string()) {
+            debug!(
+                "skipping event with path: '{}' not in the list to monitor: '{:?}'",
+                command, &executable_vec
+            );
+            // escape iteration of events.read
+            return;
+        }
 
-            // get the moniker of the uid of the event
-            let user = get_user_by_uid(data.uid).unwrap();
+        // get the moniker of the uid of the event
+        let user = get_user_by_uid(data.uid).unwrap();
 
-            // timestamp
-            let utc: DateTime<Utc> = Utc::now();
-            let formatted_utc = utc.format("%Y-%m-%d_%H:%M:%S").to_string();
+        // timestamp
+        let utc: DateTime<Utc> = Utc::now();
+        let formatted_utc = utc.format("%Y-%m-%d_%H:%M:%S").to_string();
 
-            // if json string is desired
-            if json {
-                let json_string = format!(
-                    "{{\"application\": \"panhandle\", \"hostname\": \"{}\", \"moniker\": \"{}\", \"entry\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": \"{}\"}}",
-                    hostname,
-                    user.name().to_string_lossy(),
-                    core::str::from_utf8(&data.entry)
-                        .unwrap_or_default()
-                        .trim_end_matches("\0")
-                        .trim(),
-                    core::str::from_utf8(&data.command)
-                        .unwrap_or_default()
-                        .trim_end_matches("\0")
-                        .trim(),
-                    data.uid,
-                    data.pid,
-                    data.gid,
-                    data.tgid,
-                    formatted_utc
-                );
-                if http {
-                    let http_string = Arc::new(json_string.clone());
-                    let result =
-                        send_http_post(client, &global_url, &http_string, &json, &debug).await;
+        // if json string is desired
+        if json {
+            let json_string = format!(
+                "{{\"application\": \"panhandle\", \"hostname\": \"{}\", \"moniker\": \"{}\", \"entry\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": \"{}\"}}",
+                hostname,
+                user.name().to_string_lossy(),
+                core::str::from_utf8(&data.entry)
+                    .unwrap_or_default()
+                    .trim_end_matches("\0")
+                    .trim(),
+                core::str::from_utf8(&data.command)
+                    .unwrap_or_default()
+                    .trim_end_matches("\0")
+                    .trim(),
+                data.uid,
+                data.pid,
+                data.gid,
+                data.tgid,
+                formatted_utc
+            );
+            if http {
+                let http_string = Arc::new(json_string.clone());
+                let client_clone = client.clone();
+                let global_url_clone = global_url.clone();
+                let json_clone = json;
+                let debug_clone = debug;
+                tokio::spawn(async move {
+                    let result = send_http_post(&client_clone, &global_url_clone, &http_string, &json_clone, &debug_clone).await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
                             error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                }
+                });
+            }
 
-                if syslog {
-                    let syslog_string = Arc::new(json_string.clone());
-                    let result =
-                        send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
-                            .await;
+            if syslog {
+                let syslog_string = Arc::new(json_string.clone());
+                let hostname_clone = hostname.clone();
+                let syslog_address_clone = syslog_address.clone();
+                let json_clone = json;
+                let debug_clone = debug;
+                tokio::spawn(async move {
+                    let result = send_syslog(&hostname_clone, &syslog_string, &syslog_address_clone, &json_clone, &debug_clone).await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
                             error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
-                }
+                });
+            }
 
-                if debug {
-                    // this is an invalid json string, overriden by the debug
-                    info!("\\{:#?}\\", json_string);
-                } else {
-                    // this is a valid json string
-                    info!("{}", json_string);
-                }
+            if debug {
+                // this is an invalid json string, overriden by the debug
+                info!("\\{:#?}\\", json_string);
             } else {
-                let string = format!(
-                    "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
-                    hostname,
-                    user.name().to_string_lossy(),
-                    data,
-                    formatted_utc
-                );
-                if http {
-                    let http_string = Arc::new(string);
-                    let result =
-                        send_http_post(client, &global_url, &http_string, &json, &debug).await;
+                // this is a valid json string
+                info!("{}", json_string);
+            }
+        } else {
+            let string = format!(
+                "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
+                hostname,
+                user.name().to_string_lossy(),
+                data,
+                formatted_utc
+            );
+            if http {
+                let http_string = Arc::new(string.clone());
+                let client_clone = client.clone();
+                let global_url_clone = global_url.clone();
+                let json_clone = json;
+                let debug_clone = debug;
+                tokio::spawn(async move {
+                    let result = send_http_post(&client_clone, &global_url_clone, &http_string, &json_clone, &debug_clone).await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
                             error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                } else if syslog {
-                    let syslog_string = Arc::new(string);
-                    let result =
-                        send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
-                            .await;
+                });
+            } else if syslog {
+                let syslog_string = Arc::new(string.clone());
+                let hostname_clone = hostname.clone();
+                let syslog_address_clone = syslog_address.clone();
+                let json_clone = json;
+                let debug_clone = debug;
+                tokio::spawn(async move {
+                    let result = send_syslog(&hostname_clone, &syslog_string, &syslog_address_clone, &json_clone, &debug_clone).await;
                     match result {
                         Ok(()) => {}
                         Err(result) => {
                             error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
-                } else {
-                    // this is the human readable output
-                    info!("{}", string);
-                }
+                });
+            } else {
+                // this is the human readable output
+                info!("{}", string);
             }
         }
-    }
+    });
 }
 
 /// this is a method to handle the display of the execve ebpf events
-pub async fn consume_execve_ebpf_map(
+pub fn consume_execve_ebpf_map(
     client: &Client,
     mut buf: PerfEventArrayBuffer<aya::maps::MapData>,
-    mut buffers: Vec<BytesMut>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
     http: bool,
@@ -173,54 +200,67 @@ pub async fn consume_execve_ebpf_map(
     json: bool,
     debug: bool,
 ) {
-    // set up vecs needed internal to the loop because of no Copy trait implementation
     let executable_vec = ref_executable_vec;
+    let client = client.clone();
+    let global_url = global_url.clone();
+    let syslog_address = syslog_address.clone();
+    let hostname = hostname.clone();
 
-    // main cpu loop
-    loop {
-        let events: aya::maps::perf::Events = buf.read_events(&mut buffers).await.unwrap();
-        for buf in buffers.iter_mut().take(events.read) {
-            // read the event
-            let ptr: *const ExecveEvent = buf.as_ptr() as *const ExecveEvent;
-            // SAFETY: derefernce the pointer that we created in ebpf-land
-            // this is implemented by a shared struct and zero'd on the ebpf side for consistency
-            let data: &ExecveEvent = unsafe { &*ptr };
+    // Process each event using the new sync for_each API
+    buf.for_each(|event| {
+        let sample_bytes = match event {
+            PerfEvent::Sample { head, tail } => {
+                let mut bytes = head.to_vec();
+                bytes.extend_from_slice(tail);
+                bytes
+            }
+            PerfEvent::Lost { count } => {
+                error!("Lost {} execve events", count);
+                return;
+            }
+        };
+        
+        // read the event
+        let ptr: *const ExecveEvent = sample_bytes.as_ptr() as *const ExecveEvent;
+        // SAFETY: dereference the pointer that we created in ebpf-land
+        // this is implemented by a shared struct and zero'd on the ebpf side for consistency
+        let data: &ExecveEvent = unsafe { &*ptr };
 
-            // process the command to fix artifacts in the scratch
-            let mut command = core::str::from_utf8(&data.command)
+        // process the command to fix artifacts in the scratch
+        let mut command = core::str::from_utf8(&data.command)
                 .unwrap_or_default()
                 .trim_end_matches('\0');
-            if let Some((prefix, _)) = command.split_once("\0") {
-                command = prefix.trim();
-            }
+        if let Some((prefix, _)) = command.split_once("\0") {
+            command = prefix.trim();
+        }
 
-            // parse the filename and clean up any existence of artifacts
-            let mut filename = core::str::from_utf8(&data.filename)
+        // parse the filename and clean up any existence of artifacts
+        let mut filename = core::str::from_utf8(&data.filename)
                 .unwrap_or_default()
                 .trim_end_matches('\0');
-            if let Some((prefix, _)) = filename.split_once("\0") {
-                filename = prefix.trim();
-            }
+        if let Some((prefix, _)) = filename.split_once("\0") {
+            filename = prefix.trim();
+        }
 
-            // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.contains(&filename.to_string()) {
-                debug!(
-                    "skipping event with path: '{}' not in the list to monitor: '{:?}'",
-                    filename, &executable_vec
-                );
-                // escape iteration of events.read
-                break;
-            }
+        // escape if matching the list of binaries to exclude
+        if !executable_vec.is_empty() && !executable_vec.contains(&filename.to_string()) {
+            debug!(
+                "skipping event with path: '{}' not in the list to monitor: '{:?}'",
+                filename, &executable_vec
+            );
+            // skip to next event
+            return;
+        }
 
-            // get the moniker of the uid of the event
-            let user: uzers::User = get_user_by_uid(data.uid).unwrap();
+        // get the moniker of the uid of the event
+        let user: uzers::User = get_user_by_uid(data.uid).unwrap();
 
-            // timestamp
-            let utc: DateTime<Utc> = Utc::now();
-            let formatted_utc = utc.format("%Y-%m-%d_%H:%M:%S").to_string();
+        // timestamp
+        let utc: DateTime<Utc> = Utc::now();
+        let formatted_utc = utc.format("%Y-%m-%d_%H:%M:%S").to_string();
 
-            // log this event, the main thing!
-            if json {
+        // log this event, the main thing!
+        if json {
                 let mut envvec: Vec<&str> = Vec::new();
                 for env_ptr in &data.envp {
                     let mut env: &str = core::str::from_utf8(env_ptr).unwrap_or_default().trim();
@@ -257,34 +297,42 @@ pub async fn consume_execve_ebpf_map(
                 );
                 if http {
                     let http_string: Arc<String> = Arc::new(json_string.clone());
-                    let result: Result<(), Error> =
-                        send_http_post(client, &global_url.clone(), &http_string, &json, &debug)
-                            .await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("HTTP POST Failed: {:?}", result);
+                    let client_clone = client.clone();
+                    let global_url_clone = global_url.clone();
+                    let json_clone = json;
+                    let debug_clone = debug;
+                    tokio::spawn(async move {
+                        let result = send_http_post(&client_clone, &global_url_clone, &http_string, &json_clone, &debug_clone).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("HTTP POST Failed: {:?}", result);
+                            }
                         }
-                    }
+                    });
                 } 
                 if syslog {
                     let syslog_string: Arc<String> = Arc::new(json_string.clone());
-                    let result: Result<(), SyslogError> =
-                        send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
-                            .await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("SYSLOG SEND Failed: {:?}", result);
+                    let hostname_clone = hostname.clone();
+                    let syslog_address_clone = syslog_address.clone();
+                    let json_clone = json;
+                    let debug_clone = debug;
+                    tokio::spawn(async move {
+                        let result = send_syslog(&hostname_clone, &syslog_string, &syslog_address_clone, &json_clone, &debug_clone).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("SYSLOG SEND Failed: {:?}", result);
+                            }
                         }
-                    }
+                    });
                 }
                 if debug {
                     info!("\\{:#?}\\", json_string);
                 } else {
                     info!("{}", json_string);
                 }
-            } else {
+        } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
                     hostname,
@@ -294,34 +342,41 @@ pub async fn consume_execve_ebpf_map(
                 );
                 if http {
                     let http_string: Arc<String> = Arc::new(string.clone());
-                    let result: Result<(), Error> =
-                        send_http_post(client, &global_url, &http_string, &json, &debug).await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("HTTP POST Failed: {:?}", result);
+                    let client_clone = client.clone();
+                    let global_url_clone = global_url.clone();
+                    let json_clone = json;
+                    let debug_clone = debug;
+                    tokio::spawn(async move {
+                        let result = send_http_post(&client_clone, &global_url_clone, &http_string, &json_clone, &debug_clone).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("HTTP POST Failed: {:?}", result);
+                            }
                         }
-                    }
+                     });
                 } 
                 if syslog {
                     let syslog_string: Arc<String> = Arc::new(string.clone());
-                    let result: Result<(), SyslogError> =
-                        send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
-                            .await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("SYSLOG SEND Failed: {:?}", result);
-                        }
-                    }
-                } 
-                // this is the human readable output
-                info!("{}", string);
+                    let hostname_clone = hostname.clone();
+                    let syslog_address_clone = syslog_address.clone();
+                    let json_clone = json;
+                    let debug_clone = debug;
+                    tokio::spawn(async move {
+                        let result = send_syslog(&hostname_clone, &syslog_string, &syslog_address_clone, &json_clone, &debug_clone).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("SYSLOG SEND Failed: {:?}", result);
+                            }
+                     }
+                 }); 
+            } 
+                 // this is the human readable output
+                 info!("{}", string);
             }
-        }
-    }
+    });
 }
-
 /// send to specified syslog address.
 pub async fn send_syslog(
     hostname: &String, // hostname

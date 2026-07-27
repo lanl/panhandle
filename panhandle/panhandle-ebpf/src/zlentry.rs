@@ -36,7 +36,7 @@ pub fn zlentry(ctx: RetProbeContext) -> u32 {
 
 fn try_zlentry(ctx: RetProbeContext) -> Result<u32, i64> {
     // get the pointer to this event
-    let ret_ptr: *const u8 = ctx.ret().unwrap();
+    let ret_ptr: *const u8 = ctx.ret::<*const u8>();
     let initial_uid: u32 = bpf_get_current_uid_gid() as u32;
 
     // skip event if the uid is not in the range of UIDs

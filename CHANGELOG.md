@@ -1,5 +1,8 @@
 # CHANGELOG
 
+### v1.0.15
+ - added aya v0.14.0 compatibility
+
 ### v1.0.14
  - added io usage monitoring
 

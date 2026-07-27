@@ -23,7 +23,7 @@ use std::{
 use machine_info::Machine;
 use reqwest::Client;
 use simplelog::*;
-use uzers::get_current_uid; // for gpu monitoring
+use uzers::get_current_uid;
 
 #[rustfmt::skip]
 // this is the local import section
@@ -234,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // polling frequency variable for performance monitoring tasks
-    let mut polling_freq_seconds: u32 = 30;
+    let mut polling_freq_seconds: u32 = 30; // default interval is 30 seconds; if changed, be sure to reflect the change in input_config.rs
     if let Some(poll) = args.poll {
         polling_freq_seconds = poll;
     }
@@ -258,6 +258,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let busy_cpu_time = PerCpuArray::try_from(busy_cpu_time_map)?;
 
         let json_output = args.json;
+        let debug_mode = args.debug;
+        let verbose_mode = args.verbose;
 
         // Clone necessary variables for the async task
         let url = global_url.clone();
@@ -268,23 +270,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Spawn CPU monitoring task
         cpu_handle = Some(tokio::spawn(async move {
-            if let Err(e) = monitor_cpu_usage(
-                pid_cpu_time,
-                busy_cpu_time,
-                pid_filter,
-                json_output,
-                polling_freq_seconds,
-                http_bool,
-                syslog_bool,
-                host,
-                syslog,
-                url,
-                client,
-                args.debug,
-            )
-            .await
-            {
-                error!("CPU monitoring error: {}", e);
+            use std::collections::HashMap as StdHashMap;
+
+            let mut last_total_busy: u64 = 0;
+            let mut last_pid_times: StdHashMap<u32, u64> = StdHashMap::new();
+            let mut pid_stats: StdHashMap<u32, PidStats> = StdHashMap::new();
+            let mut sample_count = 0u64;
+
+            loop {
+                if let Err(e) = monitor_cpu_usage(
+                    &pid_cpu_time,
+                    &busy_cpu_time,
+                    &pid_filter,
+                    &json_output,
+                    &http_bool,
+                    &syslog_bool,
+                    &verbose_mode,
+                    &host,
+                    &syslog,
+                    &url,
+                    &client,
+                    &debug_mode,
+                    &mut last_total_busy,
+                    &mut last_pid_times,
+                    &mut pid_stats,
+                    &mut sample_count,
+                    polling_freq_seconds,
+                )
+                .await
+                {
+                    error!("CPU monitoring error: {}", e);
+                }
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
         }));
     }
@@ -294,12 +311,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.gpu {
         let json_output = args.json;
         let debug_mode = args.debug;
+        let verbose_mode = args.verbose;
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
         let client = Client::new();
         let pid_filter = args.pid_list.clone();
-        let machine = Machine::new(); // create machine representing the current computer (node) we are monitoring
+        let machine = Machine::new();
         gpu_handle = Some(tokio::spawn(async move {
             loop {
                 if let Err(e) = monitor_gpu_usage(
@@ -308,6 +326,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &http_bool,
                     &syslog_bool,
                     &debug_mode,
+                    &verbose_mode,
                     &host,
                     &syslog,
                     &url,
@@ -329,8 +348,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let btf = Btf::from_sys_fs()?;
 
         // Attach all network monitoring programs
-        // TCP state transitions
-        attach_tracepoint(&mut ebpf, &btf, "inet_sock_set_state")?;
+        let program: &mut BtfTracePoint = ebpf
+            .program_mut("inet_sock_set_state")
+            .unwrap()
+            .try_into()?;
+        program.load("inet_sock_set_state", &btf)?;
+        program.attach()?;
 
         // Attach kprobes for data transfer tracking
         attach_kprobe(&mut ebpf, "tcp_sendmsg")?;
@@ -344,6 +367,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let json_output = args.json;
         let debug_mode = args.debug;
+        let verbose_mode = args.verbose;
 
         // Clone necessary variables for the async task
         let url = global_url.clone();
@@ -361,6 +385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &http_bool,
                     &syslog_bool,
                     &debug_mode,
+                    &verbose_mode,
                     &host,
                     &syslog,
                     &url,
@@ -382,6 +407,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.io {
         let json_output = args.json;
         let debug_mode = args.debug;
+        let verbose_mode = args.verbose;
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
@@ -395,6 +421,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &http_bool,
                     &syslog_bool,
                     &debug_mode,
+                    &verbose_mode,
                     &host,
                     &syslog,
                     &url,
@@ -417,6 +444,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
+        let verbose_mode = args.verbose;
         let client = Client::new();
 
         memory_fault_handle = Some(tokio::task::spawn(async move {
@@ -426,6 +454,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &args.json,
                     &http_bool,
                     &syslog_bool,
+                    &verbose_mode,
                     &host,
                     &url,
                     &syslog,
@@ -444,6 +473,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
+        let verbose_mode = args.verbose;
         let pid_filter = args.pid_list.clone();
 
         let client = Client::new();
@@ -453,6 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &args.json,
                     &http_bool,
                     &syslog_bool,
+                    &verbose_mode,
                     &host,
                     &url,
                     &syslog,

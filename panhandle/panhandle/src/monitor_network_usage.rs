@@ -1,7 +1,7 @@
 use std::{convert::TryInto, sync::Arc};
 
 use aya::maps::HashMap;
-use network_interface::{NetworkInterface, NetworkInterfaceConfig}; // for getting nic information
+use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use panhandle_common::NetStats;
 use procfs::process::Process;
 use reqwest::Client;
@@ -10,15 +10,13 @@ use serde_json::json;
 use crate::helpers::*;
 
 /// Network monitoring main function
-/// This function runs continuously and reports network statistics for all processes
-/// takes `net_stats_map` - eBPF map containing network statistics per PID
-/// takes output formatting and location options (json, syslog, http)
 pub async fn monitor_network_usage(
     net_stats_map: &HashMap<aya::maps::MapData, u32, NetStats>,
     json_output: &bool,
     http: &bool,
     syslog: &bool,
     debug: &bool,
+    verbose: &bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
@@ -42,12 +40,18 @@ pub async fn monitor_network_usage(
             {
                 continue;
             }
-            // Get parent process pid and comm
-            let ppid = stat.ppid as u32;
-            let parent_comm = if ppid > 0 {
-                get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+
+            // Only get parent info if verbose flag is set
+            let (ppid, parent_comm) = if *verbose {
+                let ppid = stat.ppid as u32;
+                let parent_comm = if ppid > 0 {
+                    get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+                } else {
+                    "unknown".to_string()
+                };
+                (Some(ppid), Some(parent_comm))
             } else {
-                "unknown".to_string()
+                (None, None)
             };
 
             let (nic, ip, mac) = get_network_info(pid);
@@ -57,7 +61,7 @@ pub async fn monitor_network_usage(
                 pid,
                 &stat.comm,
                 ppid,
-                &parent_comm,
+                parent_comm.as_deref(),
                 &nic,
                 &ip,
                 &mac,
@@ -66,6 +70,7 @@ pub async fn monitor_network_usage(
                 &http,
                 &syslog,
                 &debug,
+                &verbose,
                 hostname,
                 syslog_address,
                 global_url,
@@ -81,8 +86,8 @@ pub async fn monitor_network_usage(
 async fn report_network_stats(
     pid: u32,
     comm: &str,
-    ppid: u32,
-    parent_comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
     nic: &str,
     ip: &str,
     mac: &str,
@@ -91,55 +96,106 @@ async fn report_network_stats(
     http: &&bool,
     syslog: &&bool,
     debug_mode: &&bool,
+    verbose: &&bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     http_url: &Arc<String>,
     client: &Client,
 ) {
-    // Plain text format
-    let plain_string = format!(
-        "PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB:{}, SYN_RECV:{}, CLOSE_WAIT:{}, FIN_WAIT:{}, TIME_WAIT:{}, UDP:{}, Bytes_Sent:{}, Bytes_Recv:{}, Packets_Sent:{}, Packets_Recv:{}",
-        pid,
-        comm,
-        ppid,
-        parent_comm,
-        nic,
-        ip,
-        mac,
-        stats.tcp_established,
-        stats.tcp_syn_recv,
-        stats.tcp_close_wait,
-        stats.tcp_fin_wait,
-        stats.tcp_time_wait,
-        stats.udp_sockets,
-        stats.bytes_sent,
-        stats.bytes_recv,
-        stats.packets_sent,
-        stats.packets_recv
-    );
+    let bytes_sent_mb = stats.bytes_sent / (1024 * 1024);
+    let bytes_recv_mb = stats.bytes_recv / (1024 * 1024);
 
-    // JSON format
-    let json_value = json!({
-        "PID": pid,
-        "Comm": comm,
-        "PPID": ppid,
-        "Parent_Comm": parent_comm,
-        "NIC": nic,
-        "IP": ip,
-        "MAC": mac,
-        "ESTAB": stats.tcp_established,
-        "SYN_RECV": stats.tcp_syn_recv,
-        "CLOSE_WAIT": stats.tcp_close_wait,
-        "FIN_WAIT": stats.tcp_fin_wait,
-        "TIME_WAIT": stats.tcp_time_wait,
-        "UDP": stats.udp_sockets,
-        "Bytes_Sent": stats.bytes_sent,
-        "Bytes_Recv": stats.bytes_recv,
-        "Packets_Sent": stats.packets_sent,
-        "Packets_Recv": stats.packets_recv,
-    });
+    // Build messages conditionally based on verbose flag
+    let (plain_string, json_string) = if **verbose {
+        // Verbose mode: include parent info
+        let ppid = ppid.unwrap_or(0);
+        let parent_comm = parent_comm.unwrap_or("unknown");
 
-    let json_string = json_value.to_string();
+        let plain = format!(
+            "Type: sock, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+            pid,
+            comm,
+            ppid,
+            parent_comm,
+            nic,
+            ip,
+            mac,
+            stats.tcp_established,
+            stats.tcp_syn_recv,
+            stats.tcp_close_wait,
+            stats.tcp_fin_wait,
+            stats.tcp_time_wait,
+            stats.udp_sockets,
+            bytes_sent_mb,
+            bytes_recv_mb,
+            stats.packets_sent,
+            stats.packets_recv
+        );
+
+        let json_value = json!({
+            "Type": "sock",
+            "PID": pid,
+            "Comm": comm,
+            "PPID": ppid,
+            "Parent_Comm": parent_comm,
+            "NIC": nic,
+            "IP": ip,
+            "MAC": mac,
+            "ESTAB": stats.tcp_established,
+            "SYN_RECV": stats.tcp_syn_recv,
+            "CLOSE_WAIT": stats.tcp_close_wait,
+            "FIN_WAIT": stats.tcp_fin_wait,
+            "TIME_WAIT": stats.tcp_time_wait,
+            "UDP": stats.udp_sockets,
+            "MB_Sent": bytes_sent_mb,
+            "MB_Recv": bytes_recv_mb,
+            "Packets_Sent": stats.packets_sent,
+            "Packets_Recv": stats.packets_recv,
+        });
+
+        (plain, json_value.to_string())
+    } else {
+        // Non-verbose mode: exclude parent info
+        let plain = format!(
+            "Type: sock, PID: {}, Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+            pid,
+            comm,
+            nic,
+            ip,
+            mac,
+            stats.tcp_established,
+            stats.tcp_syn_recv,
+            stats.tcp_close_wait,
+            stats.tcp_fin_wait,
+            stats.tcp_time_wait,
+            stats.udp_sockets,
+            bytes_sent_mb,
+            bytes_recv_mb,
+            stats.packets_sent,
+            stats.packets_recv
+        );
+
+        let json_value = json!({
+            "Type": "sock",
+            "PID": pid,
+            "Comm": comm,
+            "NIC": nic,
+            "IP": ip,
+            "MAC": mac,
+            "ESTAB": stats.tcp_established,
+            "SYN_RECV": stats.tcp_syn_recv,
+            "CLOSE_WAIT": stats.tcp_close_wait,
+            "FIN_WAIT": stats.tcp_fin_wait,
+            "TIME_WAIT": stats.tcp_time_wait,
+            "UDP": stats.udp_sockets,
+            "MB_Sent": bytes_sent_mb,
+            "MB_Recv": bytes_recv_mb,
+            "Packets_Sent": stats.packets_sent,
+            "Packets_Recv": stats.packets_recv,
+        });
+
+        (plain, json_value.to_string())
+    };
 
     // Output via configured channels
     output_message(
@@ -192,7 +248,7 @@ fn get_network_info(pid: u32) -> (String, String, String) {
     )
 }
 
-// Get interface name and IP from process connections. Read this info from procfs.
+// Get interface name and IP from process connections
 fn get_active_connection_info(pid: u32) -> Option<(String, String)> {
     for path in [
         format!("/proc/{}/net/tcp", pid),

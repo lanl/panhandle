@@ -4,19 +4,19 @@
  - added aya v0.14.0 compatibility
 
 ### v1.0.14
- - added io usage monitoring
+ - added io usage monitoring, displaying disk reads/writes and inode creation. Can be filtered by PIDs using --pid-list. The poll interval can be adjusted using --poll.
 
 ### v1.0.13
- - added gpu usage monitoring
+ - added gpu usage monitoring, displaying metrics like VRAM utilization. Can be filtered by PIDs using --pid-list. The poll interval can be adjusted using --poll.
 
 ### v1.0.12
- - added network usage monitoring
+ - added network usage monitoring, displaying connection counts and socket states. Can be filtered by PIDs using --pid-list. The poll interval can be adjusted using --poll.
 
 ### v1.0.11
- - added memory usage monitoring
+ - added memory usage monitoring, displaying RSS per PID. Can be filtered by PIDs using --pid-list. The poll interval can be adjusted using --poll.
 
 ### v1.0.10
- - added cpu usage monitoring
+ - added cpu usage monitoring, displaying utilization. Can be filtered by PIDs using --pid-list. The poll interval can be adjusted using --poll.
 
 ### v1.0.9
  - added monitoring for sockets and memory paging

@@ -54,7 +54,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     // Get the comm (process name)
     let command: [u8; 16] = match bpf_get_current_comm() {
         Ok(c) => c,
-        Err(ret) => return Err(ret),
+        Err(ret) => return Err(ret.into()),
     };
 
     // filter out commands if shells

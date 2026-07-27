@@ -1,6 +1,5 @@
-use std::path::PathBuf;
-
 use which::which;
+
 /// Building this crate has an undeclared dependency on the `bpf-linker` binary. This would be
 /// better expressed by [artifact-dependencies][bindeps] but issues such as
 /// https://github.com/rust-lang/cargo/issues/12385 make their use impractical for the time being.
@@ -13,8 +12,6 @@ use which::which;
 ///
 /// [bindeps]: https://doc.rust-lang.org/nightly/cargo/reference/unstable.html?highlight=feature#artifact-dependencies
 fn main() {
-    let mut defaultpath = PathBuf::new();
-    defaultpath.push("~/.cargo/bin/bpf-linker");
-    let bpf_linker = which("bpf-linker").unwrap_or(defaultpath);
+    let bpf_linker = which("bpf-linker").unwrap();
     println!("cargo:rerun-if-changed={}", bpf_linker.to_str().unwrap());
 }

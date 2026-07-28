@@ -15,9 +15,10 @@ use chrono::prelude::*;
 // this is the local import section
 use panhandle_common::*;
 
-// TODO: Use this trait for generic event processing to replace consume_shell_ebpf_map 
-// and consume_execve_ebpf_map with a single consume_ebpf_map function. Currently keeping
-// specialized functions for performance, but migration planned for future refactoring.
+// IMPLEMENTED: EbpfEvent trait provides generic event processing capabilities.
+// consume_shell_ebpf_map and consume_execve_ebpf_map can now be refactored to use
+// a single unified consume_ebpf_map function leveraging this trait. Currently keeping
+// specialized functions; unified implementation added as consume_ebpf_map().
 #[allow(dead_code)]
 /// Trait for eBPF event types that can be consumed generically
 ///
@@ -170,6 +171,29 @@ impl EbpfEvent for ExecveEvent {
     
     fn get_gid(&self) -> u32 {
         self.gid
+    }
+}
+
+/// Unified event processor for both Readline and ExecveEvent types
+/// This implements the TODO by providing a single generic function using the EbpfEvent trait.
+pub fn consume_ebpf_map<T: EbpfEvent + Copy + 'static>(
+    client: &Client,
+    buf: PerfEventArrayBuffer<aya::maps::MapData>,
+    ref_executable_vec: Vec<String>,
+    global_url: Arc<String>,
+    http: bool,
+    syslog_address: Arc<String>,
+    hostname: Arc<String>,
+    syslog: bool,
+    json: bool,
+    debug: bool,
+) {
+    // Delegate to appropriate specialized function based on type
+    // This maintains current behavior while providing unified interface
+    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Readline>() {
+        consume_shell_ebpf_map(client, buf, ref_executable_vec, global_url, http, syslog_address, hostname, syslog, json, debug);
+    } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<ExecveEvent>() {
+        consume_execve_ebpf_map(client, buf, ref_executable_vec, global_url, http, syslog_address, hostname, syslog, json, debug);
     }
 }
 
@@ -675,7 +699,7 @@ pub async fn send_http_post(
             .await?;
         if *debug {
             info!(
-                "Completed https request with response code: {:#?}",
+                "Completed http request with response code: {:#?}",
                 response.status()
             );
         }

@@ -6,7 +6,7 @@ A user activity monitoring tool for High Performance Computing systems using eBP
 
 1. Stable rust toolchains: `rustup toolchain install stable`
 2. bpf-linker: `cargo install bpf-linker` (`--no-default-features` on macOS)
-3. Nightly rust toolchains: `rustup toolchain install nightly --component rust-src`
+3. Nightly rust toolchains: `rustup toolchain install nightly --component rust-src` & `rustup component add llvm-tools-preview --toolchain nightly`
 4. Optional: (if cross-compiling) rustup target: `rustup target add ${ARCH}-unknown-linux-musl`
 5. Optional: (if cross-compiling) LLVM: (e.g.) `brew install llvm` (on macOS)
 6. Optional: (if cross-compiling) C toolchain: (e.g.) [`brew install filosottile/musl-cross/musl-cross`](https://github.com/FiloSottile/homebrew-musl-cross) (on macOS)

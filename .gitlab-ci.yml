@@ -15,6 +15,7 @@ build-job:
     - cd panhandle/
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
+    - rustup component add llvm-tools-preview --toolchain nightly
     - rustup component add clippy
     - rustup update
     - cargo install bpf-linker
@@ -35,6 +36,7 @@ lint-test-job:
     - cd panhandle/
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
+    - rustup component add llvm-tools-preview --toolchain nightly
     - rustup component add clippy
     - rustup update
     - cargo install bpf-linker
@@ -49,6 +51,7 @@ test-test-job:
     - cd panhandle/
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
+    - rustup component add llvm-tools-preview --toolchain nightly
     - rustup component add clippy
     - rustup update
     - cargo install bpf-linker
@@ -76,6 +79,7 @@ deny-test-job:
     - cd panhandle/
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
+    - rustup component add llvm-tools-preview --toolchain nightly
     - rustup update
     - cargo install bpf-linker 
     - cargo install --locked cargo-deny
@@ -105,6 +109,7 @@ build-rpm-el8_x86_64:
     - source ~/.cargo/env
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/rustup rustup component add llvm-tools-preview --toolchain nightly
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
     - ~/.cargo/bin/cargo install bpf-linker
@@ -136,6 +141,7 @@ build-rpm-el8_aarch64:
     - source ~/.cargo/env
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/rustup rustup component add llvm-tools-preview --toolchain nightly
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
     - ~/.cargo/bin/cargo install bpf-linker
@@ -171,6 +177,7 @@ build-rpm-el9_x86_64:
     - source ~/.cargo/env
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/rustup rustup component add llvm-tools-preview --toolchain nightly
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
     - ~/.cargo/bin/cargo install bpf-linker
@@ -202,6 +209,7 @@ build-rpm-el9_aarch64:
     - source ~/.cargo/env
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/rustup rustup component add llvm-tools-preview --toolchain nightly
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
     - ~/.cargo/bin/cargo install bpf-linker
@@ -237,6 +245,7 @@ build-rpm-el10_x86_64:
     - source ~/.cargo/env
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/rustup rustup component add llvm-tools-preview --toolchain nightly
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
     - ~/.cargo/bin/cargo install bpf-linker
@@ -268,6 +277,7 @@ build-rpm-el10_aarch64:
     - source ~/.cargo/env
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/rustup rustup component add llvm-tools-preview --toolchain nightly
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
     - ~/.cargo/bin/cargo install bpf-linker
@@ -304,6 +314,7 @@ build-rpm-suse-15.5_x86_64:
     - cd panhandle/
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/rustup rustup component add llvm-tools-preview --toolchain nightly
     - ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
     - ~/.cargo/bin/cargo update
   script:
@@ -335,6 +346,7 @@ build-rpm-suse-15.5_aarch64:
     - cd panhandle/
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/rustup rustup component add llvm-tools-preview --toolchain nightly
     - ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
     - ~/.cargo/bin/cargo update
   script:

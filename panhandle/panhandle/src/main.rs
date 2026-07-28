@@ -204,17 +204,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // This prevents errors later in execution due to invalid input parameters
 
     // INPUT VALIDATION: Validate UID range if both bounds are provided
-    if let Some(min_uid) = args.exclude_min_uid {
-        if let Some(max_uid) = args.exclude_max_uid {
-            if min_uid > max_uid {
-                error!(
-                    "Invalid UID range: exclude_min_uid ({}) cannot be greater than exclude_max_uid ({})",
-                    min_uid, max_uid
-                );
-                error!("Please ensure exclude_min_uid <= exclude_max_uid");
-                process::exit(1);
-            }
-        }
+    if let Some(min_uid) = args.exclude_min_uid
+        && let Some(max_uid) = args.exclude_max_uid
+        && min_uid > max_uid {
+        error!(
+            "Invalid UID range: exclude_min_uid ({}) cannot be greater than exclude_max_uid ({})",
+            min_uid, max_uid
+        );
+        error!("Please ensure exclude_min_uid <= exclude_max_uid");
+        process::exit(1);
     }
 
     // INPUT VALIDATION: Validate executable paths exist and are absolute

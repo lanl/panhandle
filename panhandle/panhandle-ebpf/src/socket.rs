@@ -45,19 +45,13 @@ pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> u32 {
 fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
     // SAFETY: BTF tracepoint argument access is safe
     // - ctx.arg(1) accesses the second argument (oldstate) of inet_sock_set_state
+    // - ctx.arg(2) accesses the third argument (newstate) of inet_sock_set_state
     // - BTF (BPF Type Format) ensures type safety and proper argument layout
     // - The kernel guarantees valid arguments for the inet_sock_set_state function
-    // - Argument index 1 corresponds to the oldstate parameter in the function signature
-    // - Validation: BTF tracepoint context guarantees argument exists and is properly typed
-    let oldstate: i32 = unsafe { ctx.arg(1) };
-
-    // SAFETY: BTF tracepoint argument access is safe
-    // - ctx.arg(2) accesses the third argument (newstate) of inet_sock_set_state
-    // - BTF ensures the argument is of type i32 as specified in kernel function signature
-    // - The kernel guarantees valid arguments for the function
-    // - Argument index 2 corresponds to the newstate parameter in the function signature
-    // - Validation: BTF tracepoint context guarantees argument exists and is properly typed
-    let newstate: i32 = unsafe { ctx.arg(2) };
+    // - Argument indices correspond to the function signature parameters
+    // - Validation: BTF tracepoint context guarantees arguments exist and are properly typed
+    let oldstate: i32 = ctx.arg(1);
+    let newstate: i32 = ctx.arg(2);
 
     // SAFETY: bpf_get_current_pid_tgid() returns u64 with TGID in lower 32 bits and PID in upper 32 bits
     // - The function never returns 0 or null for the PID portion in kernel context
@@ -65,14 +59,6 @@ fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
     // - Cast to u32 is safe as PIDs are 32-bit values on all supported architectures
     let pid_tgid = bpf_get_current_pid_tgid();
     let pid = (pid_tgid >> 32) as u32;
-
-    // SAFETY: PID validation - ensure we have a valid process ID
-    // - PID 0 is reserved for swapper/idle processes, but we still track it
-    // - The eBPF verifier ensures bpf_get_current_pid_tgid() always returns valid data
-    if pid == 0 {
-        // Even if pid is 0, we'll still process the event but note this in safety
-        // This should never happen in practice, but we handle it gracefully
-    }
 
     // SAFETY: HashMap lookup in eBPF context is safe
     // - NET_STATS is a properly initialized HashMap<u32, NetStats> with max_entries=1024

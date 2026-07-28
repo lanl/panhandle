@@ -4,6 +4,7 @@ use tokio::time;
 
 use procfs::process::Process;
 use procfs::process::all_processes;
+use reqwest::Client;
 
 // local imports
 use crate::helpers::output_message;
@@ -54,7 +55,7 @@ pub async fn get_major_faults(
     hostname: &Arc<String>,
     global_url: &Arc<String>,
     syslog_address: &Arc<String>,
-    use_https: bool,
+    client: &Client,
     debug: &bool,
 ) {
     // Get an iterator over all processes in /proc
@@ -63,7 +64,7 @@ pub async fn get_major_faults(
             // Fix TOCTOU issue: Implement retry logic with exponential backoff
             // The process may exit between all_processes() and stat() calls
             let stat = get_process_stat_with_retry(proc_res.pid(), MAX_RETRIES).await;
-            
+
             if let Some(stat) = stat
                 && (stat.majflt > maj_fault_threshold || stat.cmajflt > maj_fault_threshold)
             {
@@ -84,7 +85,7 @@ pub async fn get_major_faults(
                     use_json,
                     &plain_string,
                     &json_string,
-                    use_https,
+                    client,
                     debug,
                 )
                 .await;
@@ -115,7 +116,7 @@ pub async fn get_all_memory_usage(
     hostname: &Arc<String>,
     global_url: &Arc<String>,
     syslog_address: &Arc<String>,
-    use_https: bool,
+    client: &Client,
     debug: &bool,
     pid_filter: &Option<Vec<u32>>,
 ) {
@@ -123,12 +124,12 @@ pub async fn get_all_memory_usage(
     if let Ok(procs) = all_processes() {
         for proc_res in procs.flatten() {
             let pid = proc_res.pid();
-            
+
             // Fix TOCTOU issue: Implement retry logic with exponential backoff
             // The process may exit between all_processes() and individual stat/statm/status calls
             let stat = get_process_stat_with_retry(pid, MAX_RETRIES).await;
             let statm = get_process_statm_with_retry(pid, MAX_RETRIES).await;
-            
+
             if let (Some(stat), Some(statm)) = (stat, statm) {
                 // Apply PID filter if provided
                 if let Some(pids) = pid_filter
@@ -188,7 +189,7 @@ pub async fn get_all_memory_usage(
                     use_json,
                     &plain_string,
                     &json_string,
-                    use_https,
+                    client,
                     debug,
                 )
                 .await;
@@ -198,16 +199,16 @@ pub async fn get_all_memory_usage(
 }
 
 /// Helper function to get process stat with retry logic for TOCTOU protection
-/// 
+///
 /// # Arguments
 /// * `pid` - Process ID to get stat for
 /// * `max_retries` - Maximum number of retry attempts
-/// 
+///
 /// # Returns
 /// Option<Stat> - Some(stat) if successful, None if all retries failed
 async fn get_process_stat_with_retry(pid: i32, max_retries: u32) -> Option<procfs::process::Stat> {
     let mut retries = 0;
-    
+
     loop {
         match Process::new(pid) {
             Ok(proc) => {
@@ -217,12 +218,12 @@ async fn get_process_stat_with_retry(pid: i32, max_retries: u32) -> Option<procf
             }
             Err(_) => {}
         }
-        
+
         retries += 1;
         if retries >= max_retries {
             return None;
         }
-        
+
         // Exponential backoff: delay * 2^retries milliseconds
         let delay_ms = BASE_RETRY_DELAY_MS * 2u64.pow(retries - 1);
         time::sleep(Duration::from_millis(delay_ms)).await;
@@ -230,16 +231,19 @@ async fn get_process_stat_with_retry(pid: i32, max_retries: u32) -> Option<procf
 }
 
 /// Helper function to get process statm with retry logic for TOCTOU protection
-/// 
+///
 /// # Arguments
 /// * `pid` - Process ID to get statm for
 /// * `max_retries` - Maximum number of retry attempts
-/// 
+///
 /// # Returns
 /// Option<Statm> - Some(statm) if successful, None if all retries failed
-async fn get_process_statm_with_retry(pid: i32, max_retries: u32) -> Option<procfs::process::StatM> {
+async fn get_process_statm_with_retry(
+    pid: i32,
+    max_retries: u32,
+) -> Option<procfs::process::StatM> {
     let mut retries = 0;
-    
+
     loop {
         match Process::new(pid) {
             Ok(proc) => {
@@ -249,12 +253,12 @@ async fn get_process_statm_with_retry(pid: i32, max_retries: u32) -> Option<proc
             }
             Err(_) => {}
         }
-        
+
         retries += 1;
         if retries >= max_retries {
             return None;
         }
-        
+
         // Exponential backoff: delay * 2^retries milliseconds
         let delay_ms = BASE_RETRY_DELAY_MS * 2u64.pow(retries - 1);
         time::sleep(Duration::from_millis(delay_ms)).await;
@@ -262,16 +266,19 @@ async fn get_process_statm_with_retry(pid: i32, max_retries: u32) -> Option<proc
 }
 
 /// Helper function to get process status with retry logic for TOCTOU protection
-/// 
+///
 /// # Arguments
 /// * `pid` - Process ID to get status for
 /// * `max_retries` - Maximum number of retry attempts
-/// 
+///
 /// # Returns
 /// Option<Status> - Some(status) if successful, None if all retries failed
-async fn get_process_status_with_retry(pid: i32, max_retries: u32) -> Option<procfs::process::Status> {
+async fn get_process_status_with_retry(
+    pid: i32,
+    max_retries: u32,
+) -> Option<procfs::process::Status> {
     let mut retries = 0;
-    
+
     loop {
         match Process::new(pid) {
             Ok(proc) => {
@@ -281,12 +288,12 @@ async fn get_process_status_with_retry(pid: i32, max_retries: u32) -> Option<pro
             }
             Err(_) => {}
         }
-        
+
         retries += 1;
         if retries >= max_retries {
             return None;
         }
-        
+
         // Exponential backoff: delay * 2^retries milliseconds
         let delay_ms = BASE_RETRY_DELAY_MS * 2u64.pow(retries - 1);
         time::sleep(Duration::from_millis(delay_ms)).await;

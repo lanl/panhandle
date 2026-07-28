@@ -1,13 +1,27 @@
-use aya_build::{Package, Toolchain::Nightly};
+use anyhow::{Context as _, anyhow};
+use aya_build::Toolchain;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let features = ["all"];
-    let ebpf_package = Package {
-        name: "panhandle-ebpf",
-        root_dir: "../",
-        no_default_features: false,
-        features: &features[1..1],
+fn main() -> anyhow::Result<()> {
+    let cargo_metadata::Metadata { packages, .. } = cargo_metadata::MetadataCommand::new()
+        .no_deps()
+        .exec()
+        .context("MetadataCommand::exec")?;
+    let ebpf_package = packages
+        .into_iter()
+        .find(|cargo_metadata::Package { name, .. }| name.as_str() == "panhandle-ebpf")
+        .ok_or_else(|| anyhow!("panhandle-ebpf package not found"))?;
+    let cargo_metadata::Package {
+        name,
+        manifest_path,
+        ..
+    } = ebpf_package;
+    let ebpf_package = aya_build::Package {
+        name: name.as_str(),
+        root_dir: manifest_path
+            .parent()
+            .ok_or_else(|| anyhow!("no parent for {manifest_path}"))?
+            .as_str(),
+        ..Default::default()
     };
-
-    Ok(aya_build::build_ebpf([ebpf_package], Nightly)?)
+    aya_build::build_ebpf([ebpf_package], Toolchain::default())
 }

@@ -51,12 +51,12 @@ pub struct RawArgs {
     #[arg(short, long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     pub executables: Option<Vec<String>>,
 
-    /// Report the numbers of sockets per process.
+    /// Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub socket: bool,
 
-    /// Report the processes with memory faults greater than the specified threshold value.
+    /// Report the processes with memory faults greater than the specified threshold value. Specify information polling interval with --poll.
     #[arg(short, long, value_parser(clap::value_parser!(u64)), global = true)]
     pub memory_faults: Option<u64>,
 
@@ -98,22 +98,32 @@ pub struct RawArgs {
     #[serde(default)]
     pub zsh: bool,
 
-    /// Receive a report of CPU usage over time. Filter by pid using --pid-list <PIDs>.
+    /// Receive a report of CPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub cpu: bool,
 
-    /// Receive a report of memory usage over time. Filter by pid using --pid-list <PIDs>.
+    /// Receive a report of GPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub gpu: bool,
+
+    /// Receive a report of per-PID memory usage over time, such as RSS and stack usage. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub memory: bool,
 
-    /// Specify a list of PIDs to track CPU and memory usage of. Leaving empty defaults to showing global usage.
+    /// Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub io: bool,
+
+    /// Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
     pub pid_list: Option<Vec<u32>>,
 
-    /// Polling interval in seconds for monitoring information.
+    /// Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to 30 seconds.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..), global = true)]
     pub poll: Option<u32>,
 }
@@ -187,7 +197,13 @@ pub struct ConfigArgs {
     pub cpu: bool,
 
     #[serde(default)]
+    pub gpu: bool,
+
+    #[serde(default)]
     pub memory: bool,
+
+    #[serde(default)]
+    pub io: bool,
 
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
@@ -245,7 +261,9 @@ impl From<ConfigArgs> for RawArgs {
             executables: cfg.executables,
             include_uid: cfg.include_uid,
             cpu: cfg.cpu,
+            gpu: cfg.gpu,
             memory: cfg.memory,
+            io: cfg.io,
             pid_list: cfg.pid_list,
             poll: cfg.poll,
             // output subcommand
@@ -271,7 +289,9 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.socket = cli_args.socket || config_args.socket;
     final_args.syscall_execve = cli_args.syscall_execve || config_args.syscall_execve;
     final_args.cpu = cli_args.cpu || config_args.cpu;
+    final_args.gpu = cli_args.gpu || config_args.gpu;
     final_args.memory = cli_args.memory || config_args.memory;
+    final_args.io = cli_args.io || config_args.io;
 
     // Override non-bools with CLI args if present
     if cli_args.exclude_min_uid.is_some() {

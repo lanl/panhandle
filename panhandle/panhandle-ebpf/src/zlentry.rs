@@ -2,6 +2,7 @@
 use core::u8;
 
 use aya_ebpf::{
+    EbpfContext,
     helpers::{
         bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_boot_ns,
         bpf_probe_read_user_str_bytes,
@@ -9,7 +10,6 @@ use aya_ebpf::{
     macros::{map, uretprobe},
     maps::{HashMap, PerCpuArray, PerfEventArray},
     programs::RetProbeContext,
-    EbpfContext,
 };
 use panhandle_common::Readline;
 
@@ -36,12 +36,10 @@ pub fn zlentry(ctx: RetProbeContext) -> u32 {
 
 fn try_zlentry(ctx: RetProbeContext) -> Result<u32, i64> {
     // get the pointer to this event
-    // SAFETY: ctx.ret() validation ensures we have a valid return pointer
-    // - ok_or(0) handles None case by returning error 0 (EPERM equivalent)
-    // - ? operator propagates error if ret() returns None (invalid context)
-    // - In eBPF uretprobe context, ret() should always return Some for valid probes
-    // - Null pointer would cause verifier rejection, so this ensures non-null
-    let ret_ptr: *const u8 = ctx.ret().ok_or(0)?;
+    // SAFETY: ctx.ret() returns the return value from the probed function
+    // - For zlentry, this is a pointer to the input string
+    // - In eBPF uretprobe context, this should be a valid pointer or null
+    let ret_ptr: *const u8 = ctx.ret();
     // Null pointer check: ret_ptr must not be null for valid zlentry return
     if ret_ptr.is_null() {
         return Ok(0);

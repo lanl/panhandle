@@ -1,6 +1,6 @@
 [package]
 name = "panhandle"
-version = "1.0.10"
+version = "1.0.15"
 edition = "2024"
 homepage = "https://github.com/lanl/panhandle"
 license = "MIT"
@@ -31,12 +31,16 @@ serde = "1.0.228"
 uzers = "0.12.2"
 serde_yaml = "0.9.34"
 procfs = "0.18.0"
-anyhow = "1.0.102"
 aya-ebpf.workspace = true
 network-interface = "2.0.5"
+machine-info = "1.0.9"
+anyhow = { workspace = true }
 
 [build-dependencies]
 aya-build = { workspace = true }
+anyhow = { workspace = true }
+cargo_metadata = { workspace = true }
+panhandle-ebpf = { path = "../panhandle-ebpf" }
 
 [[bin]]
 name = "panhandle"

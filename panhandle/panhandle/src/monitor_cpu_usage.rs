@@ -2,6 +2,7 @@ use aya::{
     maps::{HashMap, PerCpuArray},
     util::online_cpus,
 };
+use reqwest::Client;
 use serde_json::json;
 use tokio::signal;
 extern crate simplelog;
@@ -41,7 +42,7 @@ pub async fn monitor_cpu_usage(
     hostname: Arc<String>,
     syslog_address: Arc<String>,
     global_url: Arc<String>,
-    use_https: bool,
+    client: &Client,
     debug: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::collections::HashMap as StdHashMap;
@@ -78,7 +79,7 @@ pub async fn monitor_cpu_usage(
                 // or counter resets. If total_busy < last_total_busy (shouldn't happen normally),
                 // saturating_sub returns 0 instead of wrapping around, preventing false CPU usage spikes.
                 let busy_delta = total_busy.saturating_sub(last_total_busy);
-                
+
                 // OVERFLOW PROTECTION: poll_interval is validated as > 0 earlier, so cast is safe
                 // using as f64 for floating-point arithmetic to prevent integer overflow
                 let interval_sec = poll_interval as f64;
@@ -93,7 +94,7 @@ pub async fn monitor_cpu_usage(
                              // CPU time counters that don't always monotonically increase). Returns 0 instead
                              // of wrapping around, which is safer than showing erroneous negative usage.
                              let delta = cpu_time.saturating_sub(last_time);
-                             
+
                              // OVERFLOW PROTECTION: Use f64 for CPU percentage calculation to handle large
                              // delta values without integer overflow. Division by large constants (1B ns/sec)
                              // is safe in floating-point arithmetic.
@@ -102,14 +103,14 @@ pub async fn monitor_cpu_usage(
                             let stats = pid_stats.entry(*pid).or_default();
                             // OVERFLOW PROTECTION: Direct assignment from eBPF map, no arithmetic needed
                             stats.total_time = cpu_time;
-                            
+
                             // OVERFLOW PROTECTION: sample_count is a u64, addition cannot overflow in practice
                             // (would require billions of samples per PID, which is unrealistic)
                             stats.sample_count += 1;
-                            
+
                             // OVERFLOW PROTECTION: max operation on f64 is safe, no overflow possible
                             stats.max_cpu_percent = stats.max_cpu_percent.max(cpu_percent);
-                            
+
                             // OVERFLOW PROTECTION: Weighted average calculation using f64 arithmetic
                             // (sample_count - 1) is safe because sample_count >= 1 here
                             // Multiplication and division are safe in floating-point
@@ -156,7 +157,7 @@ pub async fn monitor_cpu_usage(
                                 &json_output,
                                 &plain_string,
                                 &json_string,
-                                use_https,
+                                client,
                                 &debug,
                             ).await;
 
@@ -187,7 +188,7 @@ pub async fn monitor_cpu_usage(
                                 &json_output,
                                 &plain_string,
                                 &json_string,
-                                use_https,
+                                client,
                                 &debug,
                             ).await;
                         }
@@ -206,7 +207,7 @@ pub async fn monitor_cpu_usage(
                        } else {
                            0u64
                        };
-                       
+
                        // OVERFLOW PROTECTION: Division is safe in floating-point, prevent divide by zero
                        let cpu_utilization = if total_cpu_time_available > 0 {
                            (busy_delta as f64 / total_cpu_time_available as f64) * 100.0
@@ -217,14 +218,14 @@ pub async fn monitor_cpu_usage(
                       // Track global statistics with overflow protection
                       // OVERFLOW PROTECTION: Direct assignment, no arithmetic
                      global_stats.total_busy_time = total_busy;
-                      
+
                       // OVERFLOW PROTECTION: max operation on f64 is safe
                      global_stats.max_utilization = global_stats.max_utilization.max(cpu_utilization);
-                      
+
                       // OVERFLOW PROTECTION: min operation on f64 is safe, but handle initial case
                      // f64::MAX is the initial value, so first min will set it to actual utilization
                      global_stats.min_utilization = global_stats.min_utilization.min(cpu_utilization);
-                      
+
                       // OVERFLOW PROTECTION: weighted average using f64 arithmetic
                       // (sample_count - 1) is safe because sample_count >= 1
                      global_stats.avg_utilization =
@@ -267,7 +268,7 @@ pub async fn monitor_cpu_usage(
                         &json_output,
                         &plain_string,
                         &json_string,
-                        use_https,
+                        client,
                         &debug,
                     ).await;
 
@@ -325,7 +326,7 @@ pub async fn monitor_cpu_usage(
                         &json_output,
                         &plain_string,
                         &json_string,
-                        use_https,
+                        client,
                         &debug,
                     ).await;
                  } else {
@@ -369,7 +370,7 @@ pub async fn monitor_cpu_usage(
                         &json_output,
                         &plain_string,
                         &json_string,
-                        use_https,
+                        client,
                         &debug,
                     ).await;
                 }

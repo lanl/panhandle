@@ -2,8 +2,8 @@ use std::{convert::TryInto, path::PathBuf};
 
 use aya::{
     Btf,
-    maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
-    programs::{TracePoint, UProbe},
+    maps::{HashMap, PerCpuArray, perf::PerfEventArray},
+    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
     util::online_cpus,
 };
 // use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
@@ -20,7 +20,6 @@ use std::{
     sync::Arc,
 };
 
-use bytes::BytesMut;
 use reqwest::Client;
 use simplelog::*;
 use uzers::get_current_uid;
@@ -203,12 +202,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // INPUT VALIDATION: Validate all user inputs before proceeding
     // This prevents errors later in execution due to invalid input parameters
-    
+
     // INPUT VALIDATION: Validate UID range if both bounds are provided
     if let Some(min_uid) = args.exclude_min_uid {
         if let Some(max_uid) = args.exclude_max_uid {
             if min_uid > max_uid {
-                error!("Invalid UID range: exclude_min_uid ({}) cannot be greater than exclude_max_uid ({})", min_uid, max_uid);
+                error!(
+                    "Invalid UID range: exclude_min_uid ({}) cannot be greater than exclude_max_uid ({})",
+                    min_uid, max_uid
+                );
                 error!("Please ensure exclude_min_uid <= exclude_max_uid");
                 process::exit(1);
             }
@@ -329,9 +331,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 syslog_bool,
                 host,
                 syslog,
-                 url,
-                 args.https,
-                 args.debug,
+                url,
+                &client,
+                args.debug,
             )
             .await
             {
@@ -350,7 +352,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Attach all network monitoring programs
         // TCP state transitions
-        attach_tracepoint(&mut ebpf, &btf, "inet_sock_set_state")?;
+        let program: &mut BtfTracePoint = ebpf
+            .program_mut("inet_sock_set_state")
+            .unwrap()
+            .try_into()?;
+        program.load("inet_sock_set_state", &btf)?;
+        program.attach()?;
 
         // Attach kprobes for data transfer tracking
         attach_kprobe(&mut ebpf, "tcp_sendmsg")?;
@@ -364,6 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let json_output = args.json;
         let debug_mode = args.debug;
+        let verbose_mode = args.verbose;
 
         // Clone necessary variables for the async task
         let url = global_url.clone();
@@ -375,17 +383,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Spawn network monitoring task
         socket_handle = Some(tokio::spawn(async move {
             loop {
-                 if let Err(e) = monitor_network_usage(
-                     &net_stats_map,
-                     &json_output,
-                     &http_bool,
-                     &syslog_bool,
-                     args.https,
-                     &debug_mode,
-                     &host,
-                     &syslog,
-                     &url,
-                     &pid_filter,
+                if let Err(e) = monitor_network_usage(
+                    &net_stats_map,
+                    &json_output,
+                    &http_bool,
+                    &syslog_bool,
+                    &debug_mode,
+                    &verbose_mode,
+                    &host,
+                    &syslog,
+                    &url,
+                    &client,
+                    &pid_filter,
                 )
                 .await
                 {
@@ -407,16 +416,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         memory_fault_handle = Some(tokio::task::spawn(async move {
             loop {
-                 let _ = procfs_helpers::get_major_faults(
-                     threshold_fault_count,
-                     &args.json,
-                     &http_bool,
-                     &syslog_bool,
-                     &host,
-                     &url,
-                     &syslog,
-                     args.https,
-                     &args.debug,
+                let _ = procfs_helpers::get_major_faults(
+                    threshold_fault_count,
+                    &args.json,
+                    &http_bool,
+                    &syslog_bool,
+                    &host,
+                    &url,
+                    &syslog,
+                    &client,
+                    &args.debug,
                 )
                 .await;
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
@@ -435,16 +444,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new();
         memory_usage_handle = Some(tokio::task::spawn(async move {
             loop {
-                 let _ = procfs_helpers::get_all_memory_usage(
-                     &args.json,
-                     &http_bool,
-                     &syslog_bool,
-                     &host,
-                     &url,
-                     &syslog,
-                     args.https,
-                     &args.debug,
-                     &pid_filter,
+                let _ = procfs_helpers::get_all_memory_usage(
+                    &args.json,
+                    &http_bool,
+                    &syslog_bool,
+                    &host,
+                    &url,
+                    &syslog,
+                    &client,
+                    &args.debug,
+                    &pid_filter,
                 )
                 .await;
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
@@ -469,7 +478,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // readline stuff
         let program: &mut UProbe = ebpf.program_mut("readline").unwrap().try_into()?;
         program.load()?;
-        program.attach(Some("readline_internal_teardown"), 0, file_string, None)?;
+        program.attach(
+            "readline_internal_teardown",
+            file_string,
+            UProbeScope::AllProcesses,
+        )?;
 
         // get the uid_options map from ebpf land
         let readline_uid_options_map = ebpf.take_map("readline_uid_options").unwrap();
@@ -503,10 +516,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         readline_uid_list_map.insert(0, zeroed_array, 0)?;
 
         let cpus: Vec<u32> = online_cpus().unwrap();
-        let num_cpus: usize = cpus.len();
 
         // Process events from the perf buffer
-        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("readline_events").unwrap())?;
+        let mut events = PerfEventArray::try_from(ebpf.take_map("readline_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 
@@ -519,26 +531,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // now spawn the async stuff
             tokio::task::spawn(async move {
-                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
-                let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(2048))
-                    .collect::<Vec<_>>();
-
                 consume_shell_ebpf_map(
                     &client,
                     buf,
-                    buffers,
                     ref_executable_vec,
                     ref_global_url,
                     http_bool,
-                    args.https,
                     ref_syslog_address,
                     ref_hostname,
                     syslog_bool,
                     args.json,
                     args.debug,
-                )
-                .await;
+                );
             });
         }
     }
@@ -559,7 +563,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // zlentry stuff
         let program: &mut UProbe = ebpf.program_mut("zlentry").unwrap().try_into()?;
         program.load()?;
-        program.attach(Some("zleentry"), 0, file_string, None)?;
+        program.attach("zleentry", file_string, UProbeScope::AllProcesses)?;
 
         // get the uid_options map from ebpf land
         let zlentry_uid_options_map = ebpf.take_map("zlentry_uid_options").unwrap();
@@ -593,10 +597,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zlentry_uid_list_map.insert(0, zeroed_array, 0)?;
 
         let cpus = online_cpus().unwrap();
-        let num_cpus = cpus.len();
 
         // Process events from the perf buffer
-        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("zlentry_events").unwrap())?;
+        let mut events = PerfEventArray::try_from(ebpf.take_map("zlentry_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 
@@ -609,26 +612,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // now spawn the async stuff
             tokio::task::spawn(async move {
-                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
-                let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(2048))
-                    .collect::<Vec<_>>();
-
                 consume_shell_ebpf_map(
                     &client,
                     buf,
-                    buffers,
                     ref_executable_vec,
                     ref_global_url,
                     http_bool,
-                    args.https,
                     ref_syslog_address,
                     ref_hostname,
                     syslog_bool,
                     args.json,
                     args.debug,
-                )
-                .await;
+                );
             });
         }
     }
@@ -678,11 +673,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         uid_list_map.insert(0, zeroed_array, 0)?;
 
         let cpus: Vec<u32> = online_cpus().unwrap();
-        let num_cpus = cpus.len();
 
         // Process events from the perf buffer
         let mut events =
-            AsyncPerfEventArray::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
+            PerfEventArray::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 
@@ -695,26 +689,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // now spawn the async stuff
             tokio::task::spawn(async move {
-                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
-                let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(2048))
-                    .collect::<Vec<_>>();
-
-                consume_shell_ebpf_map(
+                consume_execve_ebpf_map(
                     &client,
                     buf,
-                    buffers,
                     ref_executable_vec,
                     ref_global_url,
                     http_bool,
-                    args.https,
                     ref_syslog_address,
                     ref_hostname,
                     syslog_bool,
                     args.json,
                     args.debug,
-                )
-                .await;
+                );
             });
         }
     }
@@ -722,9 +708,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // await the escape signal - this may need to change based on the method of running the program
     signal::ctrl_c().await?;
     debug!("cleanly exiting program as requested");
-    
+
     // PROPER RESOURCE CLEANUP: Abort all Tokio monitoring tasks
-    // IMPLEMENTATION NOTE: The eBPF programs are automatically cleaned up when the `ebpf` 
+    // IMPLEMENTATION NOTE: The eBPF programs are automatically cleaned up when the `ebpf`
     // object goes out of scope at the end of main(). However, we explicitly abort all
     // monitoring tasks to ensure clean shutdown and prevent resource leaks.
     if let Some(handle_ref) = memory_fault_handle {

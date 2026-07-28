@@ -1,6 +1,6 @@
-use aya::maps::perf::AsyncPerfEventArrayBuffer;
-use aya::programs::KProbe;
-use aya::{Btf, programs::BtfTracePoint};
+use aya::maps::perf::{PerfEvent, PerfEventArrayBuffer};
+use aya::programs::{KProbe};
+use procfs::process::Process;
 use tokio::{net::lookup_host, time::Duration};
 extern crate simplelog;
 use port_check::*;
@@ -10,60 +10,74 @@ use reqwest::{Client, Error, Response, header::CONTENT_TYPE};
 use simplelog::{debug, error, info};
 use syslog::{Error as SyslogError, Facility, Formatter3164};
 use uzers::get_user_by_uid;
-use bytes::BytesMut;
 use chrono::prelude::*;
-use serde::Serialize;
 
 // this is the local import section
 use panhandle_common::*;
 
+#[allow(dead_code)]
 /// Trait for eBPF event types that can be consumed generically
-/// This enables code reuse between consume_shell_ebpf_map and consume_execve_ebpf_map
+///
+/// This trait enables unified handling of different eBPF event types (Readline, ExecveEvent, etc.)
+/// through a common interface, allowing for code reuse between `consume_shell_ebpf_map` and
+/// `consume_execve_ebpf_map` while maintaining type safety.
+///
+/// The trait provides methods to extract common event data for filtering, display, and processing.
+///
+/// # Examples
+///
+/// ```no_run
+/// use panhandle::helpers::EbpfEvent;
+/// use panhandle_common::Readline;
+///
+/// let event: Readline = /* ... */;
+/// let filter_key = event.get_filter_key();
+/// let command = event.get_command();
+/// let uid = event.get_uid();
+/// ```
 pub trait EbpfEvent: Sized + std::fmt::Debug + std::fmt::Display {
-    /// Extract the command or filename from the event for filtering
+    /// Extract the command or filename from the event for filtering purposes.
+    ///
+    /// For Readline events: returns the command string
+    /// For ExecveEvent events: returns the filename string
     fn get_filter_key(&self) -> &str;
     
-    /// Extract the command for display/output
+    /// Extract the command for display/output.
+    ///
+    /// Returns the command string associated with the event.
     fn get_command(&self) -> &str;
     
-    /// Extract filename if available, returns None for shell events
+    /// Extract filename if available, returns None for shell events.
+    ///
+    /// Only implemented for ExecveEvent; Readline returns None.
     fn get_filename(&self) -> Option<&str> {
         None
     }
     
-    /// Extract arguments if available, returns empty string for shell events
-    fn get_args(&self) -> &str {
-        ""
+    /// Extract arguments if available, returns empty string for shell events.
+    ///
+    /// For ExecveEvent: returns command-line arguments as a joined string
+    /// For Readline: returns empty string
+    fn get_args(&self) -> String {
+        String::new()
     }
     
-    /// Get the UID of the process
+    /// Get the UID of the process that generated this event.
     fn get_uid(&self) -> u32;
     
-    /// Get the PID of the process
+    /// Get the PID of the process that generated this event.
     fn get_pid(&self) -> u32;
     
-    /// Get the timestamp of the event
-    fn get_timestamp(&self) -> u64;
-}
-
-/// Structure to hold processed event data for generic output formatting
-#[derive(Serialize)]
-pub struct ProcessedEvent {
-    pub event_type: &'static str,
-    pub hostname: String,
-    pub timestamp: String,
-    pub user: String,
-    pub pid: u32,
-    pub uid: u32,
-    pub command: String,
-    pub filename: Option<String>,
-    pub args: Option<String>,
+    /// Get the TGID (thread group ID) of the process that generated this event.
+    fn get_tgid(&self) -> u32;
+    
+    /// Get the GID of the process that generated this event.
+    fn get_gid(&self) -> u32;
 }
 
 // Implement EbpfEvent trait for Readline from panhandle-common
 impl EbpfEvent for Readline {
     fn get_filter_key(&self) -> &str {
-        // For shell events, use the command for filtering
         core::str::from_utf8(&self.command)
             .unwrap_or_default()
             .trim_end_matches('\0')
@@ -85,15 +99,18 @@ impl EbpfEvent for Readline {
         self.pid
     }
     
-    fn get_timestamp(&self) -> u64 {
-        self.timestamp
+    fn get_tgid(&self) -> u32 {
+        self.tgid
+    }
+    
+    fn get_gid(&self) -> u32 {
+        self.gid
     }
 }
 
 // Implement EbpfEvent trait for ExecveEvent from panhandle-common
 impl EbpfEvent for ExecveEvent {
     fn get_filter_key(&self) -> &str {
-        // For execve events, use the filename for filtering
         core::str::from_utf8(&self.filename)
             .unwrap_or_default()
             .trim_end_matches('\0')
@@ -119,9 +136,7 @@ impl EbpfEvent for ExecveEvent {
         }
     }
     
-    fn get_args(&self) -> &str {
-        // Extract arguments as a single string for now
-        // This could be enhanced to handle individual args
+    fn get_args(&self) -> String {
         let mut args = String::new();
         for arg in &self.argv {
             let arg_str = core::str::from_utf8(arg)
@@ -146,226 +161,261 @@ impl EbpfEvent for ExecveEvent {
         self.pid
     }
     
-    fn get_timestamp(&self) -> u64 {
-        self.timestamp
+    fn get_tgid(&self) -> u32 {
+        self.tgid
+    }
+    
+    fn get_gid(&self) -> u32 {
+        self.gid
     }
 }
 
-/// Generic function to handle consumption of eBPF events
-/// This refactors consume_shell_ebpf_map and consume_execve_ebpf_map into a single generic function
-pub async fn consume_ebpf_map<T: EbpfEvent + std::fmt::Display + std::fmt::Debug + Clone + Copy>(
-    _ref_client: &Client,
-    mut buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
-    mut buffers: Vec<BytesMut>,
-    ref_executable_vec: Vec<String>,
-    global_url: Arc<String>,
-    http: bool,
-    use_https: bool,
-    syslog_address: Arc<String>,
-    hostname: Arc<String>,
-    syslog: bool,
-    json: bool,
-    debug: bool,
-    event_processor: impl Fn(&T) -> ProcessedEvent,
-) {
-    // set up vecs needed internal to the loop because of no Copy trait implementation
-    let executable_vec = ref_executable_vec;
-
-    // main cpu loop
-    loop {
-        let events: aya::maps::perf::Events = buf.read_events(&mut buffers).await.unwrap();
-        for buf in buffers.iter_mut().take(events.read) {
-            // read the event - this uses the generic type T
-            let ptr: *const T = buf.as_ptr() as *const T;
-            // SAFETY: dereference the pointer that we created in ebpf-land
-            // this is implemented by a shared struct and zero'd on the ebpf side for consistency
-            let data: &T = unsafe { &*ptr };
-
-            // Get the filter key from the event (command for Readline, filename for ExecveEvent)
-            let filter_key = data.get_filter_key();
-            
-            // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.contains(&filter_key.to_string()) {
-                if debug {
-                    debug!(
-                        "skipping event with path: '{}' not in the list to monitor: '{:?}'",
-                        filter_key, &executable_vec
-                    );
-                }
-                // escape iteration of events.read
-                continue;
-            }
-
-            // get the moniker of the uid of the event
-            let user = get_user_by_uid(data.get_uid()).unwrap();
-            
-            // timestamp
-            let timestamp = Utc::now().to_rfc3339();
-
-            // Process the event using the provided processor function
-            let processed_event = event_processor(data);
-            
-            // Create output based on the processed event
-            let user_name = user.name().to_string_lossy();
-            let plain_string = format!(
-                "{} hostname={} timestamp={} user={} pid={} uid={} event_type={} command={}",
-                processed_event.event_type,
-                processed_event.hostname,
-                processed_event.timestamp,
-                user_name,
-                processed_event.pid,
-                processed_event.uid,
-                processed_event.event_type,
-                processed_event.command
-            );
-
-            let json_string = serde_json::to_string(&processed_event).unwrap();
-
-            // Output the event (this part needs to be refactored to use output_message)
-            output_message(
-                &http,
-                &syslog,
-                &hostname,
-                &syslog_address,
-                &global_url,
-                &json,
-                &plain_string,
-                &json_string,
-                use_https,
-                &debug,
-            ).await;
-        }
-    }
-}
-
-/// Event processor for Readline events
-fn process_readline_event(data: &Readline, hostname: &str) -> ProcessedEvent {
-    ProcessedEvent {
-        event_type: "readline",
-        hostname: hostname.to_string(),
-        timestamp: Utc::now().to_rfc3339(),
-        user: get_user_by_uid(data.uid).unwrap_or_default(),
-        pid: data.pid,
-        uid: data.uid,
-        command: data.get_command().to_string(),
-        filename: None,
-        args: None,
-    }
-}
-
-/// Event processor for ExecveEvent events
-fn process_execve_event(data: &ExecveEvent, hostname: &str) -> ProcessedEvent {
-    ProcessedEvent {
-        event_type: "execve",
-        hostname: hostname.to_string(),
-        timestamp: Utc::now().to_rfc3339(),
-        user: get_user_by_uid(data.uid).unwrap_or_default(),
-        pid: data.pid,
-        uid: data.uid,
-        command: data.get_command().to_string(),
-        filename: data.get_filename().map(|s| s.to_string()),
-        args: Some(data.get_args().to_string()),
-    }
-}
 
 /// this is a method to handle the display of the shell (bash, zsh) ebpf events
-/// REFACTORED: Now uses the generic consume_ebpf_map function with Readline-specific processor
-pub async fn consume_shell_ebpf_map(
-    ref_client: &Client,
-    buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
-    buffers: Vec<BytesMut>,
+pub fn consume_shell_ebpf_map(
+    client: &Client,
+    mut buf: PerfEventArrayBuffer<aya::maps::MapData>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
     http: bool,
-    use_https: bool,
     syslog_address: Arc<String>,
     hostname: Arc<String>,
     syslog: bool,
     json: bool,
     debug: bool,
 ) {
-    // REFACTORED: Use the generic consume_ebpf_map function with Readline event type
-    let hostname_clone = hostname.clone();
-    consume_ebpf_map(
-        ref_client,
-        buf,
-        buffers,
-        ref_executable_vec,
-        global_url,
-        http,
-        use_https,
-        syslog_address,
-        hostname,
-        syslog,
-        json,
-        debug,
-        move |data: &Readline| process_readline_event(data, &hostname_clone),
-    ).await
+    let executable_vec = ref_executable_vec;
+    let client = client.clone();
+    let global_url = global_url.clone();
+    let syslog_address = syslog_address.clone();
+    let hostname = hostname.clone();
+
+    // Process each event using the new sync for_each API
+    buf.for_each(|event| {
+        let sample_bytes = match event {
+            PerfEvent::Sample { head, tail } => {
+                let mut bytes = head.to_vec();
+                bytes.extend_from_slice(tail);
+                bytes
+            }
+            PerfEvent::Lost { count } => {
+                error!("Lost {} shell events", count);
+                return;
+            }
+        };
+        
+        // read the event
+        let ptr: *const Readline = sample_bytes.as_ptr() as *const Readline;
+        // SAFETY: dereference the pointer that we created in ebpf-land
+        // this is implemented by a shared struct and zero'd on the ebpf side for consistency
+        let data: &Readline = unsafe { &*ptr };
+
+        // process the command to fix artifacts in the scratch
+        let mut command: &str = core::str::from_utf8(&data.command)
+                .unwrap_or_default()
+                .trim_end_matches('\0');
+        if let Some((prefix, _)) = command.split_once("\0") {
+            command = prefix.trim();
+        }
+
+        // escape if matching the list of binaries to exclude
+        if !executable_vec.is_empty() && !executable_vec.contains(&command.to_string()) {
+            debug!(
+                "skipping event with path: '{}' not in the list to monitor: '{:?}'",
+                command, &executable_vec
+            );
+            // escape iteration of events.read
+            return;
+        }
+
+        // get the moniker of the uid of the event
+        let user = get_user_by_uid(data.uid).unwrap();
+
+        // timestamp
+        let utc: DateTime<Utc> = Utc::now();
+        let formatted_utc = utc.format("%Y-%m-%d_%H:%M:%S").to_string();
+
+        // if json string is desired
+        if json {
+            let json_string = format!(
+                "{{\"application\": \"panhandle\", \"hostname\": \"{}\", \"moniker\": \"{}\", \"entry\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": \"{}\"}}",
+                hostname,
+                user.name().to_string_lossy(),
+                core::str::from_utf8(&data.entry)
+                    .unwrap_or_default()
+                    .trim_end_matches("\0")
+                    .trim(),
+                core::str::from_utf8(&data.command)
+                    .unwrap_or_default()
+                    .trim_end_matches("\0")
+                    .trim(),
+                data.uid,
+                data.pid,
+                data.gid,
+                data.tgid,
+                formatted_utc
+            );
+            if http {
+                let http_string = Arc::new(json_string.clone());
+                let client_clone = client.clone();
+                let global_url_clone = global_url.clone();
+                let json_clone = json;
+                let debug_clone = debug;
+                tokio::spawn(async move {
+                    let result = send_http_post(&client_clone, &global_url_clone, &http_string, &json_clone, &debug_clone).await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("HTTP POST Failed: {:?}", result);
+                        }
+                    }
+                });
+            }
+
+            if syslog {
+                let syslog_string = Arc::new(json_string.clone());
+                let hostname_clone = hostname.clone();
+                let syslog_address_clone = syslog_address.clone();
+                let json_clone = json;
+                let debug_clone = debug;
+                tokio::spawn(async move {
+                    let result = send_syslog(&hostname_clone, &syslog_string, &syslog_address_clone, &json_clone, &debug_clone).await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("SYSLOG SEND Failed: {:?}", result);
+                        }
+                    }
+                });
+            }
+
+            if debug {
+                // this is an invalid json string, overriden by the debug
+                info!("\\{:#?}\\", json_string);
+            } else {
+                // this is a valid json string
+                info!("{}", json_string);
+            }
+        } else {
+            let string = format!(
+                "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
+                hostname,
+                user.name().to_string_lossy(),
+                data,
+                formatted_utc
+            );
+            if http {
+                let http_string = Arc::new(string.clone());
+                let client_clone = client.clone();
+                let global_url_clone = global_url.clone();
+                let json_clone = json;
+                let debug_clone = debug;
+                tokio::spawn(async move {
+                    let result = send_http_post(&client_clone, &global_url_clone, &http_string, &json_clone, &debug_clone).await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("HTTP POST Failed: {:?}", result);
+                        }
+                    }
+                });
+            } else if syslog {
+                let syslog_string = Arc::new(string.clone());
+                let hostname_clone = hostname.clone();
+                let syslog_address_clone = syslog_address.clone();
+                let json_clone = json;
+                let debug_clone = debug;
+                tokio::spawn(async move {
+                    let result = send_syslog(&hostname_clone, &syslog_string, &syslog_address_clone, &json_clone, &debug_clone).await;
+                    match result {
+                        Ok(()) => {}
+                        Err(result) => {
+                            error!("SYSLOG SEND Failed: {:?}", result);
+                        }
+                    }
+                });
+            } else {
+                // this is the human readable output
+                info!("{}", string);
+            }
+        }
+    });
 }
 
 /// this is a method to handle the display of the execve ebpf events
-pub async fn consume_execve_ebpf_map(
-    ref_client: &Client,
-    mut buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
-    mut buffers: Vec<BytesMut>,
+pub fn consume_execve_ebpf_map(
+    client: &Client,
+    mut buf: PerfEventArrayBuffer<aya::maps::MapData>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
     http: bool,
-    use_https: bool,
     syslog_address: Arc<String>,
     hostname: Arc<String>,
     syslog: bool,
     json: bool,
     debug: bool,
 ) {
-    // set up vecs needed internal to the loop because of no Copy trait implementation
     let executable_vec = ref_executable_vec;
+    let client = client.clone();
+    let global_url = global_url.clone();
+    let syslog_address = syslog_address.clone();
+    let hostname = hostname.clone();
 
-    // main cpu loop
-    loop {
-        let events: aya::maps::perf::Events = buf.read_events(&mut buffers).await.unwrap();
-        for buf in buffers.iter_mut().take(events.read) {
-            // read the event
-            let ptr: *const ExecveEvent = buf.as_ptr() as *const ExecveEvent;
-            // SAFETY: derefernce the pointer that we created in ebpf-land
-            // this is implemented by a shared struct and zero'd on the ebpf side for consistency
-            let data: &ExecveEvent = unsafe { &*ptr };
+    // Process each event using the new sync for_each API
+    buf.for_each(|event| {
+        let sample_bytes = match event {
+            PerfEvent::Sample { head, tail } => {
+                let mut bytes = head.to_vec();
+                bytes.extend_from_slice(tail);
+                bytes
+            }
+            PerfEvent::Lost { count } => {
+                error!("Lost {} execve events", count);
+                return;
+            }
+        };
+        
+        // read the event
+        let ptr: *const ExecveEvent = sample_bytes.as_ptr() as *const ExecveEvent;
+        // SAFETY: dereference the pointer that we created in ebpf-land
+        // this is implemented by a shared struct and zero'd on the ebpf side for consistency
+        let data: &ExecveEvent = unsafe { &*ptr };
 
-            // process the command to fix artifacts in the scratch
-            let mut command = core::str::from_utf8(&data.command)
+        // process the command to fix artifacts in the scratch
+        let mut command = core::str::from_utf8(&data.command)
                 .unwrap_or_default()
                 .trim_end_matches('\0');
-            if let Some((prefix, _)) = command.split_once("\0") {
-                command = prefix.trim();
-            }
+        if let Some((prefix, _)) = command.split_once("\0") {
+            command = prefix.trim();
+        }
 
-            // parse the filename and clean up any existence of artifacts
-            let mut filename = core::str::from_utf8(&data.filename)
+        // parse the filename and clean up any existence of artifacts
+        let mut filename = core::str::from_utf8(&data.filename)
                 .unwrap_or_default()
                 .trim_end_matches('\0');
-            if let Some((prefix, _)) = filename.split_once("\0") {
-                filename = prefix.trim();
-            }
+        if let Some((prefix, _)) = filename.split_once("\0") {
+            filename = prefix.trim();
+        }
 
-            // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.contains(&filename.to_string()) {
-                debug!(
-                    "skipping event with path: '{}' not in the list to monitor: '{:?}'",
-                    filename, &executable_vec
-                );
-                // escape iteration of events.read
-                break;
-            }
+        // escape if matching the list of binaries to exclude
+        if !executable_vec.is_empty() && !executable_vec.contains(&filename.to_string()) {
+            debug!(
+                "skipping event with path: '{}' not in the list to monitor: '{:?}'",
+                filename, &executable_vec
+            );
+            // skip to next event
+            return;
+        }
 
-            // get the moniker of the uid of the event
-            let user: uzers::User = get_user_by_uid(data.uid).unwrap();
+        // get the moniker of the uid of the event
+        let user: uzers::User = get_user_by_uid(data.uid).unwrap();
 
-            // timestamp
-            let utc: DateTime<Utc> = Utc::now();
-            let formatted_utc = utc.format("%Y-%m-%d_%H:%M:%S").to_string();
+        // timestamp
+        let utc: DateTime<Utc> = Utc::now();
+        let formatted_utc = utc.format("%Y-%m-%d_%H:%M:%S").to_string();
 
-            // log this event, the main thing!
-            if json {
+        // log this event, the main thing!
+        if json {
                 let mut envvec: Vec<&str> = Vec::new();
                 for env_ptr in &data.envp {
                     let mut env: &str = core::str::from_utf8(env_ptr).unwrap_or_default().trim();
@@ -402,34 +452,42 @@ pub async fn consume_execve_ebpf_map(
                 );
                 if http {
                     let http_string: Arc<String> = Arc::new(json_string.clone());
-                    let result: Result<(), Error> =
-                        send_http_post(&global_url.clone(), &http_string, &json, &debug, use_https)
-                            .await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("HTTP POST Failed: {:?}", result);
+                    let client_clone = client.clone();
+                    let global_url_clone = global_url.clone();
+                    let json_clone = json;
+                    let debug_clone = debug;
+                    tokio::spawn(async move {
+                        let result = send_http_post(&client_clone, &global_url_clone, &http_string, &json_clone, &debug_clone).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("HTTP POST Failed: {:?}", result);
+                            }
                         }
-                    }
+                    });
                 } 
                 if syslog {
                     let syslog_string: Arc<String> = Arc::new(json_string.clone());
-                    let result: Result<(), SyslogError> =
-                        send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
-                            .await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("SYSLOG SEND Failed: {:?}", result);
+                    let hostname_clone = hostname.clone();
+                    let syslog_address_clone = syslog_address.clone();
+                    let json_clone = json;
+                    let debug_clone = debug;
+                    tokio::spawn(async move {
+                        let result = send_syslog(&hostname_clone, &syslog_string, &syslog_address_clone, &json_clone, &debug_clone).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("SYSLOG SEND Failed: {:?}", result);
+                            }
                         }
-                    }
+                    });
                 }
                 if debug {
                     info!("\\{:#?}\\", json_string);
                 } else {
                     info!("{}", json_string);
                 }
-            } else {
+        } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
                     hostname,
@@ -439,34 +497,41 @@ pub async fn consume_execve_ebpf_map(
                 );
                 if http {
                     let http_string: Arc<String> = Arc::new(string.clone());
-                    let result: Result<(), Error> =
-                        send_http_post(&global_url, &http_string, &json, &debug, use_https).await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("HTTP POST Failed: {:?}", result);
+                    let client_clone = client.clone();
+                    let global_url_clone = global_url.clone();
+                    let json_clone = json;
+                    let debug_clone = debug;
+                    tokio::spawn(async move {
+                        let result = send_http_post(&client_clone, &global_url_clone, &http_string, &json_clone, &debug_clone).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("HTTP POST Failed: {:?}", result);
+                            }
                         }
-                    }
+                     });
                 } 
                 if syslog {
                     let syslog_string: Arc<String> = Arc::new(string.clone());
-                    let result: Result<(), SyslogError> =
-                        send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
-                            .await;
-                    match result {
-                        Ok(()) => {}
-                        Err(result) => {
-                            error!("SYSLOG SEND Failed: {:?}", result);
-                        }
-                    }
-                } 
-                // this is the human readable output
-                info!("{}", string);
+                    let hostname_clone = hostname.clone();
+                    let syslog_address_clone = syslog_address.clone();
+                    let json_clone = json;
+                    let debug_clone = debug;
+                    tokio::spawn(async move {
+                        let result = send_syslog(&hostname_clone, &syslog_string, &syslog_address_clone, &json_clone, &debug_clone).await;
+                        match result {
+                            Ok(()) => {}
+                            Err(result) => {
+                                error!("SYSLOG SEND Failed: {:?}", result);
+                            }
+                     }
+                 }); 
+            } 
+                 // this is the human readable output
+                 info!("{}", string);
             }
-        }
-    }
+    });
 }
-
 /// send to specified syslog address.
 pub async fn send_syslog(
     hostname: &String, // hostname
@@ -566,73 +631,50 @@ pub async fn send_syslog(
     Ok(())
 }
 
-/// send a http post to a specified url (HTTP or HTTPS based on use_https flag)
+/// send a http post to a specified http url
 pub async fn send_http_post(
+    client: &Client,
     url: &Arc<String>,
     arc_string: &Arc<String>,
     json: &bool,
     debug: &bool,
-    use_https: bool,
 ) -> Result<(), Error> {
     let mut content_type: &str = "text/plain";
 
-    // Parse and validate the URL
-    let mut target_url = url.to_string();
-    
-    // If use_https is true and the URL doesn't start with https://, convert it
-    if use_https && !target_url.to_lowercase().starts_with("https://") {
-        // If it starts with http://, replace with https://
-        if target_url.to_lowercase().starts_with("http://") {
-            target_url = "https://".to_string() + &target_url[7..];
-        } else {
-            // If no protocol is specified, add https://
-            target_url = "https://".to_string() + &target_url;
+    if *json {
+        //send json post
+        let to_json_message: String = arc_string.to_string();
+        content_type = "application/json";
+        match serde_json::from_str::<serde_json::Value>(to_json_message.as_str()) {
+            Ok(val) => {
+                let message = val.to_string();
+                let _response: Response = client
+                    .post(url.to_string().as_str())
+                    .timeout(Duration::from_millis(200))
+                    .header(CONTENT_TYPE, content_type)
+                    .body(message)
+                    .send()
+                    .await?;
+            }
+            Err(val) => {
+                error!("{:?}", val);
+            }
         }
-    } else if !use_https && target_url.to_lowercase().starts_with("https://") {
-        // If use_https is false but URL is https://, fall back to http
-        // Note: This maintains HTTP as the default behavior when --https flag is not used
-        target_url = "http://".to_string() + &target_url[8..];
-    }
-
-    // Create client with appropriate TLS configuration
-    let client = Client::builder()
-        .timeout(Duration::from_millis(200))
-        .build()?;
-
-     if *json {
-         //send json post
-         let to_json_message: String = arc_string.to_string();
-         content_type = "application/json";
-         match serde_json::from_str::<serde_json::Value>(to_json_message.as_str()) {
-             Ok(val) => {
-                 let message = val.to_string();
-                 let _response: Response = client
-                     .post(target_url.as_str())
-                     .header(CONTENT_TYPE, content_type)
-                     .body(message)
-                     .send()
-                     .await?;
-             }
-             Err(val) => {
-                 error!("{:?}", val);
-             }
-         }
-     } else {
-         // send text post
-         let message: String = arc_string.to_string();
-         let response: Response = client
-             .post(target_url.as_str())
-             .header(CONTENT_TYPE, content_type)
-             .body(message)
-             .send()
-             .await?;
-         if *debug {
-             let protocol = if target_url.starts_with("https://") { "HTTPS" } else { "HTTP" };
-             info!(
-                 "Completed {} request with response code: {:#?}",
-                 protocol,
-                 response.status()
-             );
+    } else {
+        // send text post
+        let message: String = arc_string.to_string();
+        let response: Response = client
+            .post(url.to_string().as_str())
+            .timeout(Duration::from_millis(200))
+            .header(CONTENT_TYPE, content_type)
+            .body(message)
+            .send()
+            .await?;
+        if *debug {
+            info!(
+                "Completed https request with response code: {:#?}",
+                response.status()
+            );
         }
         match response.status() {
             reqwest::StatusCode::OK => {}
@@ -706,22 +748,12 @@ pub async fn validate_syslog(addr: &str) -> Result<&str, String> {
     }
 }
 
-pub async fn validate_url(url: &str) -> Result<String, String> {
+pub async fn validate_url(url: &str) -> Result<&str, String> {
     // validate given URL
-    match Url::parse(url) {
-        Ok(parsed_url) => {
-            let scheme = parsed_url.scheme();
-            // Accept both http and https URLs
-            if scheme == "http" || scheme == "https" {
-                Ok(url.to_string())
-            } else if scheme.is_empty() {
-                // If no scheme is provided, default to http
-                Ok(format!("http://{}", url.trim_start_matches("://")))
-            } else {
-                Err(format!("\nUnsupported URL scheme '{}'. Only http:// and https:// are supported.", scheme))
-            }
-        }
-        Err(_) => Err(format!("\nInvalid URL '{}' provided", url)),
+    if Url::parse(url).is_err() {
+        Err(format!("\nInvalid URL '{}' provided", url))
+    } else {
+        Ok(url) // URL found valid
     }
 }
 
@@ -735,14 +767,14 @@ pub async fn output_message(
     use_json: &bool, 
     plain_string: &String, 
     json_string: &String, 
-    use_https: bool,
+    client: &Client, 
     debug: &bool
 ) {
     if *http {
         if *use_json {
             let arc_string = Arc::new(json_string.clone().to_string());
             let result =
-                send_http_post(global_url, &arc_string, use_json, debug, use_https).await;
+                send_http_post(client, global_url, &arc_string, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -752,7 +784,7 @@ pub async fn output_message(
         } else {
             let arc_string = Arc::new(plain_string.clone().to_string());
             let result =
-                send_http_post(global_url, &arc_string, use_json, debug, use_https).await;
+                send_http_post(client, global_url, &arc_string, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -793,23 +825,6 @@ pub async fn output_message(
     }
 }
 
-/// Helper function to attach a single BTF tracepoint
-pub fn attach_tracepoint(
-    ebpf: &mut aya::Ebpf,
-    btf: &Btf,
-    program_name: &str,
-) -> Result<(), anyhow::Error> {
-    let program: &mut BtfTracePoint = ebpf
-        .program_mut(program_name)
-        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
-        .try_into()?;
-
-    program.load(program_name, btf)?;
-    program.attach()?;
-
-    Ok(())
-}
-
 /// Helper function to attach a single kprobe
 pub fn attach_kprobe(
     ebpf: &mut aya::Ebpf,
@@ -824,4 +839,20 @@ pub fn attach_kprobe(
     program.attach(program_name, 0)?;
     
     Ok(())
+}
+
+/// Get process name from PID
+pub fn get_process_name(pid: u32) -> Option<String> {
+    Process::new(pid as i32)
+        .ok()
+        .and_then(|proc| proc.stat().ok())
+        .map(|stat| stat.comm)
+}
+
+#[allow(dead_code)]
+/// Get the parent PID for a given PID
+pub fn get_parent_pid(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
+    let proc = Process::new(pid as i32)?;
+    let stat = proc.stat()?;
+    Ok(stat.ppid as u32)
 }

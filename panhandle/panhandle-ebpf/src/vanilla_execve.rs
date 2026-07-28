@@ -44,7 +44,7 @@ fn try_monitor_execve(ctx: TracePointContext) -> Result<u32, i64> {
         event.pid = bpf_get_current_pid_tgid() as u32;
         event.tgid = (bpf_get_current_pid_tgid() >> 32) as u32;
         event.gid = (bpf_get_current_uid_gid() >> 32) as u32;
-        
+
         // SAFETY: bpf_ktime_get_boot_ns is a verified eBPF helper function
         // - Returns monotonically increasing nanoseconds since boot
         // - No error conditions as it's a simple time read

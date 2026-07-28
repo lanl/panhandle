@@ -18,7 +18,9 @@ mod tests {
             quiet: true,
             shells: true,
             socket: true,
+            io: true,
             cpu: true,
+            gpu: true,
             memory: true,
             ..Default::default()
         };

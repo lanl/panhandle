@@ -26,7 +26,7 @@ pub const MAX_POSSIBLE_UID: u32 = 4294967294;
 // structs used for consuming or presenting the desired data
 // this readline struct is used by the zlentry and readline methods
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Readline {
     pub timestamp: u64,
     pub uid: u32,

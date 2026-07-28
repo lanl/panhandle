@@ -44,7 +44,7 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
     // - The kernel guarantees the context data layout matches the tracepoint struct
     // - sched_switch tracepoint is stable across kernel versions
     let tp: *const trace_event_raw_sched_switch = ctx.as_ptr().cast();
-    
+
     // SAFETY: Pointer dereferencing is safe in tracepoint context
     // - tp points to valid, kernel-provided memory for the sched_switch tracepoint
     // - prev_pid field exists in trace_event_raw_sched_switch struct
@@ -80,62 +80,62 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
         // This gracefully handles edge cases while maintaining correctness
         let delta = now.saturating_sub(prev_start);
 
-         if prev_pid != 0 {
-             // update the per PID total
-             match PID_CPU_TIME.get_ptr_mut(&prev_pid) {
-                  Some(entry) => {
-                      // SAFETY: HashMap pointer dereferencing is safe
-                      // - entry is a valid pointer returned from PID_CPU_TIME.get_ptr_mut(&prev_pid)
-                      // - The Some variant indicates the key exists and pointer is valid
-                      // - PID_CPU_TIME is a HashMap<u32, u64> with max_entries=1024
-                      // - prev_pid is a valid process ID from the kernel
-                      // - The pointer is guaranteed to point to a valid u64 value
-                      // - Atomic addition is safe in eBPF context (no data races due to per-CPU nature)
-                      // Use checked_add to prevent overflow - return error if it would overflow
-                      let current = unsafe { *entry };
-                      unsafe { 
-                          *entry = current.checked_add(delta).ok_or_else(|| {
-                              info!(&ctx, "CPU time overflow for PID {}", prev_pid);
-                              4i64
-                          })?;
-                      }
-                 }
-                 None => {
-                     PID_CPU_TIME
-                         .insert(&prev_pid, &delta, 0)
-                         .map_err(|_e| 2i64)?;
-                 }
-             }
+        if prev_pid != 0 {
+            // update the per PID total
+            match PID_CPU_TIME.get_ptr_mut(&prev_pid) {
+                Some(entry) => {
+                    // SAFETY: HashMap pointer dereferencing is safe
+                    // - entry is a valid pointer returned from PID_CPU_TIME.get_ptr_mut(&prev_pid)
+                    // - The Some variant indicates the key exists and pointer is valid
+                    // - PID_CPU_TIME is a HashMap<u32, u64> with max_entries=1024
+                    // - prev_pid is a valid process ID from the kernel
+                    // - The pointer is guaranteed to point to a valid u64 value
+                    // - Atomic addition is safe in eBPF context (no data races due to per-CPU nature)
+                    // Use checked_add to prevent overflow - return error if it would overflow
+                    let current = unsafe { *entry };
+                    unsafe {
+                        *entry = current.checked_add(delta).ok_or_else(|| {
+                            info!(&ctx, "CPU time overflow for PID {}", prev_pid);
+                            4i64
+                        })?;
+                    }
+                }
+                None => {
+                    PID_CPU_TIME
+                        .insert(&prev_pid, &delta, 0)
+                        .map_err(|_e| 2i64)?;
+                }
+            }
 
-             // update busy CPU time for this CPU
-             let busy_slot = BUSY_CPU_TIME.get_ptr_mut(0).ok_or_else(|| {
-                 info!(&ctx, "Failed to get busy_cpu_time slot");
-                 3i64
-             })?;
-              // SAFETY: PerCpuArray pointer dereferencing is safe
-              // - busy_slot is a valid pointer returned from BUSY_CPU_TIME.get_ptr_mut(0)
-              // - The Some variant indicates the pointer is valid and properly aligned
-              // - BUSY_CPU_TIME is a PerCpuArray<u64> with max_entries=1, created at load time
-              // - CPU 0's slot is always accessible in a running system
-              // - The pointer is guaranteed to point to a valid u64 value
-              // - Would have returned error on earlier line if busy_slot was None
-              // Use checked_add to prevent overflow - return error if it would overflow
-              let current_busy = unsafe { *busy_slot };
-              unsafe { 
-                  *busy_slot = current_busy.checked_add(delta).ok_or_else(|| {
-                      info!(&ctx, "Busy CPU time overflow");
-                      5i64
-                  })?;
-              }
-         }
-     }
+            // update busy CPU time for this CPU
+            let busy_slot = BUSY_CPU_TIME.get_ptr_mut(0).ok_or_else(|| {
+                info!(&ctx, "Failed to get busy_cpu_time slot");
+                3i64
+            })?;
+            // SAFETY: PerCpuArray pointer dereferencing is safe
+            // - busy_slot is a valid pointer returned from BUSY_CPU_TIME.get_ptr_mut(0)
+            // - The Some variant indicates the pointer is valid and properly aligned
+            // - BUSY_CPU_TIME is a PerCpuArray<u64> with max_entries=1, created at load time
+            // - CPU 0's slot is always accessible in a running system
+            // - The pointer is guaranteed to point to a valid u64 value
+            // - Would have returned error on earlier line if busy_slot was None
+            // Use checked_add to prevent overflow - return error if it would overflow
+            let current_busy = unsafe { *busy_slot };
+            unsafe {
+                *busy_slot = current_busy.checked_add(delta).ok_or_else(|| {
+                    info!(&ctx, "Busy CPU time overflow");
+                    5i64
+                })?;
+            }
+        }
+    }
 
-     // SAFETY: PerCpuArray pointer dereferencing is safe
-     // - start_time_slot is still a valid pointer (hasn't been invalidated)
-     // - The pointer points to a valid u64 value in the PerCpuArray
-     // - now is a valid u64 timestamp from bpf_ktime_get_ns()
-     // - This updates the start time for the incoming task
-     unsafe { *start_time_slot = now };
+    // SAFETY: PerCpuArray pointer dereferencing is safe
+    // - start_time_slot is still a valid pointer (hasn't been invalidated)
+    // - The pointer points to a valid u64 value in the PerCpuArray
+    // - now is a valid u64 timestamp from bpf_ktime_get_ns()
+    // - This updates the start time for the incoming task
+    unsafe { *start_time_slot = now };
 
     Ok(0)
 }

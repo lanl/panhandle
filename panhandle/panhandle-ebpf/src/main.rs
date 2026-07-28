@@ -52,7 +52,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     // Get the comm (process name)
     let command: [u8; 16] = match bpf_get_current_comm() {
         Ok(c) => c,
-        Err(ret) => return Err(ret),
+        Err(ret) => return Err(ret.into()),
     };
 
     // filter out commands if shells
@@ -83,8 +83,8 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     // - The eBPF verifier ensures the read operation stays within bounds of the tracepoint data
     let data: SysEnterExecve = unsafe { ctx.read_at(0).map_err(|_| -1)? };
 
-     // iterate over the argv info and copy to struct in the map
-     if !data.argv.is_null() {
+    // iterate over the argv info and copy to struct in the map
+    if !data.argv.is_null() {
         // SAFETY: PerCpuArray pointer dereferencing is safe in eBPF context
         // - PANHANDLE_SCRATCH is a PerCpuArray<ExecveEvent> with max_entries=4096, created at program load
         // - get_ptr_mut(0) accesses the PerCpu slot for the current CPU (index 0 in the array)
@@ -102,7 +102,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
         // - This provides a clean slate before populating event data, preventing data leakage
         // - The struct size is known at compile time and properly handled by core::mem::zeroed
         *event_data = unsafe { core::mem::zeroed::<ExecveEvent>() };
-        
+
         // SAFETY: Reading user space memory via bpf_probe_read_user_str_bytes is safe
         // - FILENAME_OFFSET (16) points to the filename pointer in the SysEnterExecve struct
         // - ctx.read_at::<*const u8>(FILENAME_OFFSET) safely reads the pointer from tracepoint data
@@ -118,7 +118,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
             )
             .unwrap_or(b"")
         };
-        
+
         // SAFETY: Kernel time function is safe to call from eBPF context
         // - bpf_ktime_get_boot_ns is a verified eBPF helper function (helper ID 25)
         // - Returns monotonically increasing nanoseconds since boot as u64

@@ -210,13 +210,10 @@ async fn get_process_stat_with_retry(pid: i32, max_retries: u32) -> Option<procf
     let mut retries = 0;
 
     loop {
-        match Process::new(pid) {
-            Ok(proc) => {
-                if let Ok(stat) = proc.stat() {
-                    return Some(stat);
-                }
+        if let Ok(proc) = Process::new(pid) {
+            if let Ok(stat) = proc.stat() {
+                return Some(stat);
             }
-            Err(_) => {}
         }
 
         retries += 1;
@@ -245,13 +242,10 @@ async fn get_process_statm_with_retry(
     let mut retries = 0;
 
     loop {
-        match Process::new(pid) {
-            Ok(proc) => {
-                if let Ok(statm) = proc.statm() {
-                    return Some(statm);
-                }
+        if let Ok(proc) = Process::new(pid) {
+            if let Ok(statm) = proc.statm() {
+                return Some(statm);
             }
-            Err(_) => {}
         }
 
         retries += 1;
@@ -280,13 +274,10 @@ async fn get_process_status_with_retry(
     let mut retries = 0;
 
     loop {
-        match Process::new(pid) {
-            Ok(proc) => {
-                if let Ok(status) = proc.status() {
-                    return Some(status);
-                }
+        if let Ok(proc) = Process::new(pid) {
+            if let Ok(status) = proc.status() {
+                return Some(status);
             }
-            Err(_) => {}
         }
 
         retries += 1;

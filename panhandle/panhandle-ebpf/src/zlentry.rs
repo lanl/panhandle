@@ -19,7 +19,7 @@ use crate::*;
 #[map(name = "zlentry_events")]
 static mut ZLENTRY_EVENTS: PerfEventArray<Readline> = PerfEventArray::new(0);
 #[map(name = "zlentry_scratch")]
-pub static ZLENTRY_SCRATCH: PerCpuArray<Readline> = PerCpuArray::with_max_entries(4096, 0);
+pub static ZLENTRY_SCRATCH: PerCpuArray<Readline> = PerCpuArray::with_max_entries(1024, 0);
 #[map(name = "zlentry_uid_options")]
 static ZLENTRY_UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
 #[map(name = "zlentry_uid_include_list")]

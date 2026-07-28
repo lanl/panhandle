@@ -110,6 +110,7 @@ jobs:
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
           rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
+          rustup rustup component add llvm-tools-preview --toolchain nightly
           cargo install cargo-generate-rpm bpf-linker
 
       - name: Build Binary & Generate RPM

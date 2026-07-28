@@ -6,7 +6,7 @@
       "description": "Panhandle project - eBPF user activity monitoring for HPC"
     },
     "aya-github": {
-      "path": "/home/dmcgee/.local/share/opencode/repos/github.com/aya-rs/aya",
+      "path": "~/.local/share/opencode/repos/github.com/aya-rs/aya",
       "description": "Official Aya library GitHub repository - latest eBPF development in Rust"
     }
   },
@@ -16,10 +16,18 @@
       "cargo *": "allow",
       "git *": "allow",
       "make *": "allow",
+      "grep *": "allow",
+      "find *": "allow",
       "wc *": "allow",
       "sed *": "allow",
       "head *": "allow",
       "tail *": "allow",
+      "ls *": "allow",
+      "mkdir *": "allow",
+      "touch *": "allow",
+      "cat *": "allow",
+      "du *": "allow",
+      "df *": "allow",
       "rustc *": "allow",
       "clippy *": "allow",
       "fmt *": "allow",
@@ -52,10 +60,10 @@
       "/usr/include/**": "allow",
       "/usr/bin/**": "allow",
       "/opt/**": "allow",
-      "/var/log/panhandle/**": "allow",
-      "/etc/panhandle/**": "allow",
-      "/etc/logrotate.d/panhandle": "allow",
-      "/usr/lib/systemd/system/panhandle.service": "allow",
+      "/tmp/**": "allow",
+      "/proc/**": "allow",
+      "/sys/**": "allow",
+      "./**": "allow",
       "*": "ask"
     }
   },
@@ -65,6 +73,6 @@
   },
   "experimental": {
     "primary_tools": ["edit", "read", "glob", "grep", "bash", "lsp_diagnostics"],
-    "mcp_timeout": 120000
+    "mcp_timeout": 300000
   }
 }

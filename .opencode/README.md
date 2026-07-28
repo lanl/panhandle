@@ -1,4 +1,4 @@
-# Panhandle OpenCode Configuration v2.0
+# Panhandle OpenCode Configuration
 
 This directory contains the comprehensive OpenCode configuration tailored specifically for the **panhandle** project - an eBPF-based user activity monitoring system for HPC environments using the Aya library.
 
@@ -82,31 +82,36 @@ Domain-specific expertise:
 The configuration includes comprehensive access to all panhandle project directories:
 
 **Workspace Roots:**
-- `/home/dmcgee/panhandle` - Main project directory
-- `/home/dmcgee/panhandle/panhandle` - Rust workspace
+- `.` - Main project directory
+- `./panhandle` - Rust workspace
 
 **Source Directories:**
-- `/home/dmcgee/panhandle/panhandle/panhandle/src` - Main application
-- `/home/dmcgee/panhandle/panhandle/panhandle-ebpf/src` - eBPF programs
-- `/home/dmcgee/panhandle/panhandle/panhandle-common/src` - Shared code
-- `/home/dmcgee/panhandle/panhandle/panhandle/tests` - Test suite
+- `./panhandle/panhandle/src` - Main application
+- `./panhandle/panhandle-ebpf/src` - eBPF programs
+- `./panhandle/panhandle-common/src` - Shared code
+- `./panhandle/panhandle/tests` - Test suite
 
 **Build and Output:**
-- `/home/dmcgee/panhandle/panhandle/target` - Build artifacts
-- `/home/dmcgee/panhandle/rpmbuild` - RPM packaging
-- `/home/dmcgee/panhandle/files` - Packaging files
+- `./panhandle/target` - Build artifacts
+- `./rpmbuild` - RPM packaging
+- `./files` - Packaging files
 
 **Configuration and Documentation:**
-- `/home/dmcgee/panhandle/test-configs` - Test configurations
-- `/home/dmcgee/panhandle/scripts` - Utility scripts
-- `/home/dmcgee/panhandle/.dist` - Distribution files
-- `/home/dmcgee/panhandle/archive` - Archived results
+- `./test-configs` - Test configurations
+- `./scripts` - Utility scripts
+- `./.dist` - Distribution files
+- `./archive` - Archived results
+
+**Note**: All paths are relative to the project root directory containing the `.opencode/` folder.
 
 ## Usage
 
 ### Start OpenCode with Panhandle Configuration
 ```bash
-cd /home/dmcgee/panhandle
+# Navigate to your panhandle project directory
+cd /path/to/panhandle
+# or simply:
+cd .
 opencode
 ```
 
@@ -165,8 +170,8 @@ opencode
 ## References
 
 ### Integrated References (accessible via @ mentions)
-- `aya-github`: Official Aya library GitHub (aya-rs/aya) at `/home/dmcgee/.local/share/opencode/repos/github.com/aya-rs/aya`
-- `panhandle`: Local panhandle project at `/home/dmcgee/panhandle`
+- `aya-github`: Official Aya library GitHub (aya-rs/aya) at `~/.local/share/opencode/repos/github.com/aya-rs/aya`
+- `panhandle`: Local panhandle project at the current directory
 
 ### External Resources
 - [Aya GitHub](https://github.com/aya-rs/aya)
@@ -269,19 +274,3 @@ When adding new accesses:
 - Performance impact should be minimized for monitoring systems
 - The Aya expert agent stays current with the latest GitHub developments
 - Security is paramount - only necessary accesses should be granted
-
-## Changelog
-
-### v2.0.0
-- Added comprehensive permission configuration
-- Updated package.json with project metadata
-- Enhanced README with detailed documentation
-- Added GitHub reference to aya-rs/aya
-- Increased tool output limits
-- Added recommended tools and agents
-- Improved security restrictions
-
-### v1.0.0
-- Initial configuration
-- Basic permissions for cargo, git, make
-- RHEL compatibility optimizations

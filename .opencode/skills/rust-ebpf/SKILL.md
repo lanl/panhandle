@@ -30,18 +30,29 @@ Use this skill when:
 
 ## Panhandle-Specific Rust Patterns
 
-### Project Structure
+### Updated Project Structure
 ```
-panhandle/
-├── src/
-│   ├── main.rs          # Userspace main entry
-│   ├── ebpf/            # eBPF programs
-│   │   ├── mod.rs       # eBPF module
-│   │   └── programs.rs  # Program definitions
-│   └── userspace/       # Userspace logic
-├── xtask/               # Build tasks
-└── build.rs             # Build script
+panhandle/                              # Workspace root
+├── Cargo.toml                          # Workspace manifest
+├── panhandle/                          # Main application crate
+│   ├── Cargo.toml                      # Application manifest
+│   ├── src/                            # Userspace main entry
+│   │   ├── main.rs                     # Main entry point
+│   │   ├── helpers.rs                  # Event processing
+│   │   ├── monitor_*.rs                # Monitoring modules
+│   │   └── input_configs.rs           # CLI parsing
+│   └── build.rs                        # Build script
+├── panhandle-common/                   # Shared definitions
+│   └── src/lib.rs                      # Common types
+└── panhandle-ebpf/                     # eBPF programs
+    └── src/                            # eBPF source files
+        ├── main.rs
+        ├── readline.rs               # Shell monitoring
+        ├── socket.rs                 # Network monitoring
+        └── zlentry.rs                # Zsh monitoring
 ```
+
+**Note**: This is a Cargo workspace with three crates: main application, common types, and eBPF programs.
 
 ### Build Configuration
 - Use `cargo` with appropriate features
@@ -54,6 +65,53 @@ panhandle/
 - Implement proper error propagation
 - Handle eBPF-specific errors (verifier, loader, etc.)
 - Provide meaningful error messages
+
+### Generic Event Processing Patterns
+For unified handling of different eBPF event types (from the panhandle merge resolution):
+
+```rust
+// Define a common trait for all event types
+pub trait EbpfEvent: Sized + std::fmt::Debug + std::fmt::Display {
+    fn get_filter_key(&self) -> &str;
+    fn get_command(&self) -> &str;
+    fn get_filename(&self) -> Option<&str>;
+    fn get_args(&self) -> String;
+    fn get_uid(&self) -> u32;
+    fn get_pid(&self) -> u32;
+    fn get_tgid(&self) -> u32;
+    fn get_gid(&self) -> u32;
+}
+
+// Implement for Readline
+hash[derive(Clone, Copy, Debug)]
+pub struct Readline {
+    /* fields */
+}
+
+impl EbpfEvent for Readline {
+    fn get_filter_key(&self) -> &str {
+        // Extract from self.command
+    }
+    // ... implement other methods
+}
+
+// Generic event processor
+pub fn consume_ebpf_map<T: EbpfEvent + Copy>(
+    client: &Client,
+    buf: PerfEventArrayBuffer<aya::maps::MapData>,
+    process_event: impl Fn(&T) + Copy,
+) {
+    buf.for_each(|event| {
+        // Generic processing logic
+    });
+}
+
+// Type-specific processors
+fn process_readline(data: &Readline) { /* ... */ }
+fn process_execve(data: &ExecveEvent) { /* ... */ }
+```
+
+**Best Practice**: Implement `Debug` trait on all event structs to enable compatibility with generic code.
 
 ## Common Rust Patterns in eBPF
 

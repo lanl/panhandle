@@ -59,6 +59,39 @@ Use this skill when:
 3. Use `Btf::from_kernel()` for CO-RE support
 4. Load and attach programs using `Bpf::load()` and appropriate attach methods
 
+### Aya v0.14.0 Specific Patterns
+Panhandle currently uses **Aya v0.14.0** which introduced a synchronous API for perf event arrays:
+
+**PerfEventArray (Synchronous API):**
+```rust
+use aya::maps::perf::{PerfEventArray, PerfEventArrayBuffer};
+
+// Create perf event array from map
+let events = PerfEventArray::try_from(ebpf.take_map("events").unwrap())?;
+
+// Open buffer for a specific CPU
+let buf = events.open(cpu_id, page_count)?;  // Returns PerfEventArrayBuffer
+
+// Process events synchronously
+buf.for_each(|event| {
+    match event {
+        PerfEvent::Sample { head, tail } => {
+            let bytes = [head.to_vec(), tail.to_vec()].concat();
+            // Parse event data...
+        }
+        PerfEvent::Lost { count } => {
+            // Handle lost events
+        }
+    }
+});
+```
+
+**Key Differences from Previous Versions:**
+- `PerfEventArray` replaces `AsyncPerfEventArray`
+- `.open()` returns `PerfEventArrayBuffer` (not async)
+- `.for_each()` replaces `.read_events().await`
+- No need for `async` context in basic usage
+
 ### Testing and Debugging
 - Use `cargo xtask` for building and testing
 - Check verifier logs with `RUST_LOG=debug`
@@ -77,6 +110,34 @@ fn trace_execve(ctx: TracepointContext) -> i32 {
     0
 }
 ```
+
+### Userspace Event Data Structures
+When implementing event processing, ensure your data structures have the necessary traits:
+
+```rust
+use panhandle_common::Readline;
+
+// Readline now implements Debug trait for compatibility with EbpfEvent trait
+#[derive(Clone, Copy, Debug)]  // Debug added for trait compatibility
+#[repr(C)]
+pub struct Readline {
+    pub timestamp: u64,
+    pub uid: u32,
+    pub gid: u32,
+    pub pid: u32,
+    pub tgid: u32,
+    pub command: [u8; 16],
+    pub entry: [u8; ARG_SIZE],
+}
+
+// ExecveEvent already has Debug implemented
+#[derive(Debug, Clone, Copy)]
+pub struct ExecveEvent {
+    // ... fields
+}
+```
+
+**Trail Implementation Note**: When adding new data structures for eBPF events, implement both `Debug` and `Display` traits to enable full compatibility with the generic `EbpfEvent` trait system.
 
 ### Data Collection
 - Use `RingBuf` for efficient kernel-to-userspace data transfer

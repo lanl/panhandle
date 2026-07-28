@@ -31,7 +31,12 @@ This guide provides comprehensive documentation for the OpenCode configuration t
 ### Starting OpenCode
 
 ```bash
-cd /home/dmcgee/panhandle
+# Navigate to your panhandle project directory
+cd /path/to/panhandle
+# or if already in the project:
+cd .
+
+# Start OpenCode
 opencode
 ```
 
@@ -64,7 +69,7 @@ The main configuration file contains all OpenCode settings for the panhandle pro
       "description": "Panhandle project - eBPF user activity monitoring for HPC"
     },
     "aya-github": {
-      "path": "/home/dmcgee/.local/share/opencode/repos/github.com/aya-rs/aya",
+      "path": "~/.local/share/opencode/repos/github.com/aya-rs/aya",
       "description": "Official Aya library GitHub repository"
     }
   }
@@ -124,20 +129,22 @@ Enhanced package.json with panhandle-specific configuration.
 ```json
 {
   "panhandle": {
-    "project_root": "/home/dmcgee/panhandle",
-    "rust_workspace": "/home/dmcgee/panhandle/panhandle",
-    "ebpf_sources": "/home/dmcgee/panhandle/panhandle/panhandle-ebpf/src",
-    "common_sources": "/home/dmcgee/panhandle/panhandle/panhandle-common/src",
-    "main_sources": "/home/dmcgee/panhandle/panhandle/panhandle/src",
-    "test_directory": "/home/dmcgee/panhandle/panhandle/panhandle/tests",
-    "config_directory": "/home/dmcgee/panhandle/panhandle",
-    "build_artifacts": "/home/dmcgee/panhandle/rpmbuild",
-    "test_configs": "/home/dmcgee/panhandle/test-configs",
-    "scripts": "/home/dmcgee/panhandle/scripts",
-    "files": "/home/dmcgee/panhandle/files"
+    "project_root": ".",
+    "rust_workspace": "./panhandle",
+    "ebpf_sources": "./panhandle/panhandle-ebpf/src",
+    "common_sources": "./panhandle/panhandle-common/src",
+    "main_sources": "./panhandle/panhandle/src",
+    "test_directory": "./panhandle/panhandle/tests",
+    "config_directory": "./panhandle/panhandle",
+    "build_artifacts": "./rpmbuild",
+    "test_configs": "./test-configs",
+    "scripts": "./scripts",
+    "files": "./files"
   }
 }
 ```
+
+**Note**: All paths are relative to the project root directory where `.opencode/opencode.json` is located.
 
 **OpenCode Configuration:**
 ```json
@@ -249,10 +256,12 @@ Controls access to directories outside the project root.
 - `/opt/**` - Optional software
 
 **Panhandle-Specific Paths:**
-- `/var/log/panhandle/**` - Panhandle logs
-- `/etc/panhandle/**` - Panhandle configuration
-- `/etc/logrotate.d/panhandle` - Logrotate configuration
-- `/usr/lib/systemd/system/panhandle.service` - Systemd service
+- `/var/log/panhandle/**` - Panhandle logs (if installed system-wide)
+- `/etc/panhandle/**` - Panhandle configuration (if installed system-wide)
+- `/etc/logrotate.d/panhandle` - Logrotate configuration (if installed system-wide)
+- `/usr/lib/systemd/system/panhandle.service` - Systemd service (if installed system-wide)
+
+**Note**: These system paths are only accessible if panhandle is installed system-wide. During development, these paths are accessed via `ask` mode to allow user confirmation.
 
 **Ask Mode Paths:**
 - `*` - All other external directories require confirmation
@@ -303,7 +312,9 @@ skill(name="panhandle")
 
 1. **Start OpenCode**:
    ```bash
-   cd /home/dmcgee/panhandle
+   cd /path/to/panhandle
+   # or simply:
+   cd .
    opencode
    ```
 

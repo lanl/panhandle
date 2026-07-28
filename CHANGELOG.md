@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## v1.0.16
+- added opencode configurations and project tailoring
+
 ## v1.0.15
  - added aya v0.14.0 compatibility
 

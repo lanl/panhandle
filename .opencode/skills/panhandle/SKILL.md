@@ -50,54 +50,84 @@ Panhandle provides **user activity monitoring for High Performance Computing sys
 
 ## Project Structure
 
-### Directory Layout
+### Workspace Layout (Cargo Workspace)
 ```
-panhandle/
-├── src/                    # Main source code
-│   ├── main.rs             # Userspace main entry point
-│   ├── ebpf/               # eBPF program definitions
-│   │   ├── mod.rs          # eBPF module exports
-│   │   ├── programs.rs     # eBPF program implementations
-│   │   └── maps.rs         # eBPF map definitions
-│   ├── userspace/          # Userspace components
-│   │   ├── output/         # Output handlers
-│   │   │   ├── http.rs     # HTTP output
-│   │   │   ├── syslog.rs   # Syslog output
-│   │   │   ├── file.rs     # File output
-│   │   │   └── console.rs  # Console output
-│   │   ├── config.rs       # Configuration parsing
-│   │   └── event.rs        # Event processing
-│   └── error.rs            # Error types and handling
-├── xtask/                  # Build tasks and utilities
-│   └── main.rs             # Custom build tasks
-├── files/                  # Packaging files
-│   ├── panhandle.service   # Systemd service file
-│   ├── panhandle.yaml      # Default configuration
-│   └── panhandle.log       # Example log file
-├── build.rs                # Cargo build script
-├── Cargo.toml              # Project dependencies
-└── README.md               # Project documentation
+panhandle/                          # Root workspace directory
+├── Cargo.toml                      # Workspace manifest
+├── panhandle/                      # Main binary crate
+│   ├── Cargo.toml                  # Binary crate manifest
+│   ├── src/                        # Main source code
+│   │   ├── main.rs                 # Entry point (userspace)
+│   │   ├── helpers.rs              # Event processing helpers
+│   │   ├── input_configs.rs        # CLI argument parsing
+│   │   ├── monitor_cpu_usage.rs    # CPU monitoring
+│   │   ├── monitor_gpu_usage.rs    # GPU monitoring
+│   │   ├── monitor_io_usage.rs     # I/O monitoring
+│   │   ├── monitor_network_usage.rs # Network monitoring
+│   │   ├── procfs_helpers.rs       # procfs-based monitoring
+│   │   ├── unit_tests.rs           # Unit tests
+│   │   └── lib.rs                   # Library exports
+│   ├── build.rs                    # Build script
+│   └── tests/                      # Integration tests
+├── panhandle-common/               # Shared types and constants
+│   ├── Cargo.toml                  # Common crate manifest
+│   └── src/lib.rs                  # Common definitions (Readline, ExecveEvent, etc.)
+├── panhandle-ebpf/                 # eBPF programs crate
+│   ├── Cargo.toml                  # eBPF crate manifest
+│   └── src/                        # eBPF source files
+│       ├── main.rs                 # eBPF program entry
+│       ├── cpu_usage.rs            # CPU monitoring eBPF
+│       ├── readline.rs             # Shell command monitoring
+│       ├── socket.rs               # Socket state monitoring
+│       ├── vanilla_execve.rs       # Process execution monitoring
+│       └── zlentry.rs              # Zsh command monitoring
+├── files/                          # Packaging files
+│   ├── panhandle.man               # Man page
+│   ├── panhandle.service           # Systemd service file
+│   ├── panhandle.yaml              # Default configuration
+│   └── logrotate-panhandle         # Logrotate configuration
+├── rpmbuild/                       # RPM build directory
+├── scripts/                        # Utility scripts
+│   ├── pre-install-rpm.sh         # Pre-install script
+│   └── test_cpu_monitoring.sh      # Test script
+├── test-configs/                   # Test configuration files
+│   ├── all-bools.json
+│   └── all-bools.yaml
+└── CHANGELOG.md                    # Project changelog
 ```
+
+### Aya v0.14.0 Specific Structure
+- **Synchronous API**: Uses `PerfEventArray::open().for_each()` pattern
+- **Generic Traits**: `EbpfEvent` trait for unified event processing
+- **Map Types**: `PerfEventArray`, `HashMap`, `PerCpuArray` for different data
+- **Program Types**: `UProbe`, `TracePoint`, `BtfTracePoint` for kernel hooks
 
 ## Build System
 
-### Dependencies
-- **Rust**: 1.70+ with nightly features for eBPF
-- **Clang**: For BTF generation
-- **LLVM**: For eBPF compilation
-- **libelf**: For ELF file handling
-- **zlib**: For compression (if needed)
+### Dependencies (Verified for Aya v0.14.0)
+- **Rust**: nightly toolchain with `--component rust-src` for eBPF compilation
+- **Stable Rust**: For standard compilation
+- **Clang**: 12+ for BTF generation
+- **LLVM**: 12+ for eBPF compilation
+- **libelf**: Development package for ELF handling
+- **bpf-linker**: `cargo install bpf-linker` (use `--no-default-features` on macOS)
 
 ### Build Process
 1. **Standard Build**: `cargo build --release`
 2. **Debug Build**: `cargo build`
-3. **Cross-Compile**: Use `--target` flag for different architectures
+3. **Cross-Compile**: `CC=${ARCH}-linux-musl-gcc cargo build --target ${ARCH}-unknown-linux-musl`
 4. **BTF Generation**: Automatic with Aya library
+5. **eBPF Compilation**: Automatic via build.rs using aya-build
 
 ### Build Features
-- `bpf`: Enable eBPF program compilation (default)
-- `userspace`: Enable userspace components (default)
-- `static`: Build static binaries
+- `user`: Enable userspace features (default for panhandle-common)
+- All eBPF compilation handled automatically via Aya build system
+
+### Current Version Compatibility
+- **Aya**: v0.14.0 (synchronous PerfEventArray API)
+- **aya-ebpf**: v0.2.1
+- **aya-log**: v0.3.0 + aya-log-ebpf v0.2.0
+- **Rust nightly**: Required for eBPF compilation
 
 ### Build Troubleshooting
 - **Missing LLVM**: Install llvm-tools-preview
@@ -166,8 +196,114 @@ panhandle/
 
 ### Configuration
 - **Main Config**: `/opt/panhandle/panhandle.yaml`
-- **Environment Variables**: `PANHANDLE_*` for runtime overrides
-- **Command Line**: Flags override configuration file
+  - **Environment Variables**: `PANHANDLE_*` for runtime overrides
+  - **Command Line**: Flags override configuration file
+
+## Aya v0.14.0 Development Patterns
+
+### Synchronous API Usage
+After merging main and opencode-tailoring branches, panhandle now uses the **synchronous API** from Aya v0.14.0:
+
+```rust
+// ✅ CORRECT: Synchronous API (Aya v0.14.0)
+use aya::maps::perf::{PerfEventArray, PerfEventArrayBuffer}; 
+
+// Open perf event array and process synchronously
+let mut events = PerfEventArray::try_from(ebpf.take_map("events").unwrap())?;
+for cpu in online_cpus().unwrap() {
+    let buf = events.open(cpu, Some(32))?;
+    
+    // Use for_each for synchronous processing
+    buf.for_each(|event| {
+        match event {
+            PerfEvent::Sample { head, tail } => {
+                let bytes = [head.to_vec(), tail.to_vec()].concat();
+                // Process event data...
+            }
+            PerfEvent::Lost { count } => {
+                error!("Lost {} events", count);
+            }
+        }
+    });
+}
+```
+
+### Generic Event Processing
+The project now includes a unified `EbpfEvent` trait for generic event handling:
+
+```rust
+use panhandle::helpers::EbpfEvent;
+
+pub trait EbpfEvent: Sized + Debug + Display {
+    fn get_filter_key(&self) -> &str;    // For exclusion filtering
+    fn get_command(&self) -> &str;       // Command/process name
+    fn get_filename(&self) -> Option<&str>; // Execve filename
+    fn get_args(&self) -> String;       // Command arguments
+    fn get_uid(&self) -> u32;           // Process UID
+    fn get_pid(&self) -> u32;           // Process PID
+    fn get_tgid(&self) -> u32;          // Thread group ID
+    fn get_gid(&self) -> u32;           // Group ID
+}
+
+// Implemented for Readline and ExecveEvent
+impl EbpfEvent for Readline { /* ... */ }
+impl EbpfEvent for ExecveEvent { /* ... */ }
+
+// Generic event processor
+pub fn consume_ebpf_map<T: EbpfEvent + Copy>(
+    client: &Client,
+    buf: PerfEventArrayBuffer<aya::maps::MapData>,
+    // ... other parameters
+) {
+    // Generic event processing logic
+}
+```
+
+### UProbe Attachment (Aya v0.14.0 API)
+```rust
+use aya::programs::{UProbe, uprobe::UProbeScope};
+
+// ✅ CORRECT: New Aya v0.14.0 API
+let program: &mut UProbe = ebpf.program_mut("readline").unwrap().try_into()?;
+program.load()?;
+program.attach(
+    "readline_internal_teardown",  // Function to attach to
+    file_path,                       // Path to the target binary
+    UProbeScope::AllProcesses,       // Scope of attachment
+)?;
+
+// ❌ avoid: Old API (pre-v0.14.0)
+// program.attach(Some("function"), offset, path, None)?;
+```
+
+### Common Aya v0.14.0 Patterns
+1. **PerfEventArray** for synchronous event processing
+2. **PerfEventArrayBuffer** returned from `.open()`
+3. **`.for_each()`** method for event iteration
+4. **No async/await** in basic event processing
+5. **UProbeScope** enum for attachment scope
+
+## Merge Conflict Resolution Patterns
+
+### Handling Aya Version Differences
+After the merge between main and opencode-tailoring branches:
+
+**Problem**: Main branch used async API, opencode-tailoring used sync API  
+**Solution**: Standardized on synchronous API for Aya v0.14.0 compatibility
+
+**Key Changes:**
+- Replace `AsyncPerfEventArray` with `PerfEventArray`
+- Replace `.read_events().await` with `.for_each()`
+- Update `attach()` method calls to use new signature
+- Add Debug trait to types used in generic functions
+
+### Import Fixes
+```rust
+// ✅ Correct imports for Aya v0.14.0
+use aya::maps::perf::{PerfEvent, PerfEventArray, PerfEventArrayBuffer};
+use aya::programs::{BtfTracePoint, KProbe, TracePoint, UProbe, uprobe::UProbeScope};
+use aya::{Btf, Ebpf}; // Note: Bpf is deprecated, use Ebpf
+```
 
 ## Monitoring and Maintenance
 

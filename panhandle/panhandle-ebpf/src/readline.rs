@@ -20,7 +20,7 @@ use crate::*;
 #[map(name = "readline_events")]
 static mut READLINE_EVENTS: PerfEventArray<Readline> = PerfEventArray::new(0);
 #[map(name = "readline_scratch")]
-pub static READLINE_SCRATCH: PerCpuArray<Readline> = PerCpuArray::with_max_entries(1024, 0);
+pub static READLINE_SCRATCH: PerCpuArray<Readline> = PerCpuArray::with_max_entries(256, 0);
 #[map(name = "readline_uid_options")]
 static READLINE_UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
 #[map(name = "readline_uid_include_list")]

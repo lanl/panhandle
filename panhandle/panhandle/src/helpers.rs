@@ -15,6 +15,9 @@ use chrono::prelude::*;
 // this is the local import section
 use panhandle_common::*;
 
+// TODO: Use this trait for generic event processing to replace consume_shell_ebpf_map 
+// and consume_execve_ebpf_map with a single consume_ebpf_map function. Currently keeping
+// specialized functions for performance, but migration planned for future refactoring.
 #[allow(dead_code)]
 /// Trait for eBPF event types that can be consumed generically
 ///
@@ -849,6 +852,8 @@ pub fn get_process_name(pid: u32) -> Option<String> {
         .map(|stat| stat.comm)
 }
 
+// TODO: This function is not currently used but may be needed for future monitoring features
+// such as process tree analysis or parent-child relationship tracking.
 #[allow(dead_code)]
 /// Get the parent PID for a given PID
 pub fn get_parent_pid(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {

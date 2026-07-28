@@ -15,7 +15,7 @@ use aya_ebpf::{
 use panhandle_common::*;
 
 #[map]
-pub static EXECVE_SCRATCH: PerCpuArray<ExecveEvent> = PerCpuArray::with_max_entries(1024, 0);
+pub static EXECVE_SCRATCH: PerCpuArray<ExecveEvent> = PerCpuArray::with_max_entries(256, 0);
 #[map(name = "vanilla_execve_events")]
 static mut EXECVE_EVENTS: PerfEventArray<ExecveEvent> = PerfEventArray::new(0);
 

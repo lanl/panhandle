@@ -9,7 +9,7 @@ pub type pid_t = i32;
 
 // put all the desired shared constants here / enables not adding them to the ebpf
 // memory-limited application and also re-use in the userland application.
-pub const ARG_SIZE: usize = 400;
+pub const ARG_SIZE: usize = 200;
 pub const ARG_COUNT: usize = 20;
 pub const UID_COUNT: usize = 10;
 pub const ENV_SIZE: usize = 120;

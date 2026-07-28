@@ -16,9 +16,9 @@ use panhandle_common::*;
 #[map(name = "start_times")]
 static START_TIMES: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
 
-// hash map that stores total accumulated CPU time per process ID. 1024 is max amount of processes
+// hash map that stores total accumulated CPU time per process ID. 256 is max amount of processes
 #[map(name = "per_cpu_time")]
-static PID_CPU_TIME: HashMap<u32, u64> = HashMap::with_max_entries(1024, 0);
+static PID_CPU_TIME: HashMap<u32, u64> = HashMap::with_max_entries(256, 0);
 
 // keep total busy time per CPU. Summing all CPUs gives the system-wide total CPU busy time
 #[map(name = "busy_cpu_time")]

@@ -26,7 +26,7 @@ mod zlentry;
 static mut PANHANDLE_EVENTS: PerfEventArray<ExecveEvent> = PerfEventArray::new(0);
 #[map(name = "panhandle_scratch")]
 pub static PANHANDLE_SCRATCH: PerCpuArray<ExecveEvent> =
-    PerCpuArray::with_max_entries(1024, BPF_F_RDONLY);
+    PerCpuArray::with_max_entries(256, BPF_F_RDONLY);
 #[map(name = "uid_options")]
 static UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
 #[map(name = "uid_include_list")]

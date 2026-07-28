@@ -24,10 +24,15 @@ pub struct PathBuf {
 #[map(name = "path_scratch")]
 static PATH_SCRATCH: PerCpuArray<PathBuf> = PerCpuArray::with_max_entries(1, 0);
 
-// Blacklist of process names ("comm"), populated from userspace.
-// Key = 16-byte comm, Value = 1 (present == blocked).
+// Denylist of process names ("comm"), populated from userspace.
+// Key = 16-byte comm, Value = 1
 #[map(name = "BLOCKED_COMMS")]
 static BLOCKED_COMMS: HashMap<[u8; 16], u8> = HashMap::with_max_entries(64, 0);
+
+// List of filepaths to blocked the execution of syscalls on
+// Key = 256 byte filepath, Value = 1
+#[map(name = "BLOCKED_PATHS")]
+static BLOCKED_PATHS: HashMap<[u8; 256], u8> = HashMap::with_max_entries(64,0);
 
 #[lsm(hook = "file_open")]
 pub fn block_open(ctx: LsmContext) -> i32 {
@@ -38,12 +43,12 @@ pub fn block_open(ctx: LsmContext) -> i32 {
 }
 
 fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
-    // Only act on blacklisted processes.
+    // Only act on denylisted processes.
     if !comm_is_blocked() {
         return Ok(0);
     }
 
-    let f: *const file = unsafe { ctx.arg(0) };
+    let f: *const file = ctx.arg(0);
 
     let ptr = PATH_SCRATCH.get_ptr_mut(0).ok_or(0i32)?;
     let scratch = unsafe { &mut *ptr };
@@ -61,7 +66,9 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     if ret > 0 {
         let len = (ret as usize) & PATH_MASK;
         let path_str = unsafe { core::str::from_utf8_unchecked(&scratch.buf[..len]) };
-        info!(&ctx, "BLOCKED file_open: {}", path_str);
+        if !path_is_blocked(&path_str) {
+            return Ok(0); // comm is blocked, but path isn't, so return Ok
+        }
     }
 
     // Deny the open.
@@ -85,10 +92,19 @@ unsafe fn try_block_execve(ctx: LsmContext) -> Result<i32, i32> {
     Ok(EPERM)
 }
 
-// Returns true if the current task's comm is in the blacklist.
+// Returns true if the current task's comm is in the denylist.
 fn comm_is_blocked() -> bool {
     match bpf_get_current_comm() {
         Ok(comm) => unsafe { BLOCKED_COMMS.get(&comm).is_some() },
         Err(_) => false,
     }
+}
+
+// Returns true if the provided file path is in the forbidden file list
+fn path_is_blocked(filepath: &str) -> bool {
+    let mut key: [u8; 256] = [0u8; 256];
+    let path_bytes = filepath.as_bytes();
+    let len = path_bytes.len().min(256);
+    key[..len].copy_from_slice(&path_bytes[..len]);
+    unsafe { BLOCKED_PATHS.get(&key).is_some() }
 }

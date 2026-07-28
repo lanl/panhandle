@@ -3,6 +3,12 @@ use std::{fs, path::Path};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
+// process blocking
+const MAX_PATH_LENGTH: usize = 255;
+const MAX_COMM_LENGTH: usize = 15;
+const MAX_BLOCKED_PATHS: usize = 64;
+const MAX_BLOCKED_COMMS: usize = 64;
+
 /// Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
 /// as well as the ability to monitor specific shells (bash and zsh) on a linux host.
 /// Several optional filters enable an administrator to selectively apply criterion to examine
@@ -121,20 +127,28 @@ pub struct RawArgs {
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..), global = true)]
     pub poll: Option<u32>,
 
-    /// Specify a comma separated list of syscalls to be blocked. Provide comm_white or comm_black to control which processes are blocked when executing these syscalls.
+    /// Specify a comma separated list of syscalls to be blocked. Provide comm_allow or comm_deny to control which processes are blocked when executing these syscalls.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
     pub syscalls: Option<Vec<String>>,
 
-    /// Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    /// Specify a comma separated list of file paths to be blocked when blocking processes using -syscalls. 
+    /// Provide comm_allow or comm_deny to control which processes are blocked. Maximum paths defined by MAX_BLOCKED_PATHS.
+    #[arg(long, value_parser = validate_path_length, num_args = 1..=MAX_BLOCKED_PATHS, value_delimiter = ',', global = true)]
     #[serde(default)]
-    pub comm_white: Option<Vec<String>>,
+    pub block_paths: Option<Vec<String>>,
 
-    /// Specify a comma separated list of process names (comm) that will be blocked from executing the syscalls specified in --syscalls
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    /// Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls. 
+    /// Maximum 64 process names, 15 characters each.
+    #[arg(long, value_parser = validate_comm_length, num_args = 1..=MAX_BLOCKED_COMMS, value_delimiter = ',', global = true)]
     #[serde(default)]
-    pub comm_black: Option<Vec<String>>,
+    pub comm_allow: Option<Vec<String>>,
+
+    /// Specify a comma separated list of process names (comm) that will be denied from executing the syscalls specified in --syscalls.
+    /// Maximum 64 process names, 15 characters each.
+    #[arg(long, value_parser = validate_comm_length, num_args = 1..=MAX_BLOCKED_COMMS, value_delimiter = ',', global = true)]
+    #[serde(default)]
+    pub comm_deny: Option<Vec<String>>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -222,9 +236,11 @@ pub struct ConfigArgs {
 
     pub syscalls: Option<Vec<String>>,
 
-    pub comm_white: Option<Vec<String>>,
+    pub block_paths: Option<Vec<String>>,
 
-    pub comm_black: Option<Vec<String>>,
+    pub comm_allow: Option<Vec<String>>,
+
+    pub comm_deny: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -278,8 +294,9 @@ impl From<ConfigArgs> for RawArgs {
             pid_list: cfg.pid_list,
             poll: cfg.poll,
             syscalls: cfg.syscalls,
-            comm_white: cfg.comm_white,
-            comm_black: cfg.comm_black,
+            block_paths: cfg.block_paths,
+            comm_allow: cfg.comm_allow,
+            comm_deny: cfg.comm_deny,
             // output subcommand
             output,
             config: None,
@@ -331,11 +348,14 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     if cli_args.syscalls.is_some() {
         final_args.syscalls = cli_args.syscalls.clone();
     }
-    if cli_args.comm_white.is_some() {
-        final_args.comm_white = cli_args.comm_white.clone();
+    if cli_args.block_paths.is_some() {
+        final_args.block_paths = cli_args.block_paths.clone();
     }
-    if cli_args.comm_black.is_some() {
-        final_args.comm_black = cli_args.comm_black.clone();
+    if cli_args.comm_allow.is_some() {
+        final_args.comm_allow = cli_args.comm_allow.clone();
+    }
+    if cli_args.comm_deny.is_some() {
+        final_args.comm_deny = cli_args.comm_deny.clone();
     }
 
     // Merge CLI output into config output, or create it if missing
@@ -410,5 +430,32 @@ pub async fn load_config_args(config_path: String) -> Result<ConfigArgs, String>
         Some("yaml") | Some("yml") => serde_yaml::from_str(&contents)
             .map_err(|e| format!("Invalid YAML config {}: {}", path, e)),
         other => Err(format!("Unsupported config type {:?}", other)),
+    }
+}
+
+// Clap validation functions for comm and path lengths for process blocking feature
+fn validate_path_length(s: &str) -> Result<String, String> {
+    if s.len() > MAX_PATH_LENGTH {
+        Err(format!(
+            "Path exceeds maximum length of {} bytes (got {} bytes): {}",
+            MAX_PATH_LENGTH,
+            s.len(),
+            s
+        ))
+    } else {
+        Ok(s.to_string())
+    }
+}
+
+fn validate_comm_length(s: &str) -> Result<String, String> {
+    if s.len() > MAX_COMM_LENGTH {
+        Err(format!(
+            "Process name (comm) exceeds maximum length of {} bytes (got {} bytes): {}",
+            MAX_COMM_LENGTH,
+            s.len(),
+            s
+        ))
+    } else {
+        Ok(s.to_string())
     }
 }

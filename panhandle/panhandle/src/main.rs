@@ -296,6 +296,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // CPU monitoring
     let mut cpu_handle: Option<JoinHandle<()>> = None;
+    
+    // Shell monitoring handles
+    let mut bash_handles: Vec<JoinHandle<()>> = Vec::new();
+    let mut zsh_handles: Vec<JoinHandle<()>> = Vec::new();
+    
+    // Execve monitoring handles
+    let mut execve_handles: Vec<JoinHandle<()>> = Vec::new();
+    
     if args.cpu {
         // Load and attach the sched_switch tracepoint
         let program: &mut TracePoint = ebpf.program_mut("sched_switch").unwrap().try_into()?;
@@ -616,8 +624,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let client = Client::new();
             let ref_hostname = hostname.clone();
 
-            // now spawn the async stuff
-            tokio::task::spawn(async move {
+            // now spawn the async stuff and store the handle
+            let handle = tokio::task::spawn(async move {
                 consume_shell_ebpf_map(
                     &client,
                     buf,
@@ -631,6 +639,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     args.debug,
                 );
             });
+            bash_handles.push(handle);
         }
     }
     if args.zsh {
@@ -697,8 +706,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let client = Client::new();
             let ref_hostname = hostname.clone();
 
-            // now spawn the async stuff
-            tokio::task::spawn(async move {
+            // now spawn the async stuff and store the handle
+            let handle = tokio::task::spawn(async move {
                 consume_shell_ebpf_map(
                     &client,
                     buf,
@@ -712,6 +721,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     args.debug,
                 );
             });
+            zsh_handles.push(handle);
         }
     }
     if args.syscall_execve
@@ -774,8 +784,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let client = Client::new();
             let ref_hostname = hostname.clone();
 
-            // now spawn the async stuff
-            tokio::task::spawn(async move {
+            // now spawn the async stuff and store the handle
+            let handle = tokio::task::spawn(async move {
                 consume_execve_ebpf_map(
                     &client,
                     buf,
@@ -789,6 +799,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     args.debug,
                 );
             });
+            execve_handles.push(handle);
         }
     }
     debug!("monitoring for events in ebpf-land...");
@@ -811,6 +822,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(handle_ref) = cpu_handle {
         handle_ref.abort();
+    }
+    // Abort shell monitoring tasks
+    for handle in bash_handles {
+        handle.abort();
+    }
+    for handle in zsh_handles {
+        handle.abort();
+    }
+    // Abort execve monitoring tasks
+    for handle in execve_handles {
+        handle.abort();
     }
     // PROPER ERROR HANDLING: All eBPF program resources are cleaned up automatically
     // when the `ebpf` variable (defined earlier) is dropped at the end of main().

@@ -1,10 +1,8 @@
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::time;
+use std::{sync::Arc, time::Duration};
 
-use procfs::process::Process;
-use procfs::process::all_processes;
+use procfs::process::{Process, all_processes};
 use reqwest::Client;
+use tokio::time;
 
 // local imports
 use crate::helpers::output_message;
@@ -211,7 +209,8 @@ async fn get_process_stat_with_retry(pid: i32, max_retries: u32) -> Option<procf
 
     loop {
         if let Ok(proc) = Process::new(pid)
-            && let Ok(stat) = proc.stat() {
+            && let Ok(stat) = proc.stat()
+        {
             return Some(stat);
         }
 
@@ -242,7 +241,8 @@ async fn get_process_statm_with_retry(
 
     loop {
         if let Ok(proc) = Process::new(pid)
-            && let Ok(statm) = proc.statm() {
+            && let Ok(statm) = proc.statm()
+        {
             return Some(statm);
         }
 
@@ -273,7 +273,8 @@ async fn get_process_status_with_retry(
 
     loop {
         if let Ok(proc) = Process::new(pid)
-            && let Ok(status) = proc.status() {
+            && let Ok(status) = proc.status()
+        {
             return Some(status);
         }
 

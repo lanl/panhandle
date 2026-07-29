@@ -1,4 +1,4 @@
-use std::{convert::TryInto, path::PathBuf};
+use std::{collections::HashMap as StdHashMap, convert::TryInto, path::PathBuf};
 
 use aya::{
     Btf,
@@ -206,7 +206,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // INPUT VALIDATION: Validate UID range if both bounds are provided
     if let Some(min_uid) = args.exclude_min_uid
         && let Some(max_uid) = args.exclude_max_uid
-        && min_uid > max_uid {
+        && min_uid > max_uid
+    {
         error!(
             "Invalid UID range: exclude_min_uid ({}) cannot be greater than exclude_max_uid ({})",
             min_uid, max_uid
@@ -316,26 +317,114 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let syslog = syslog_address.clone();
         let client = Client::new();
         let pid_filter = args.pid_list.clone();
+        let debug_mode = args.debug;
+
+        // State variables for CPU monitoring (moved to external management)
+        let mut sample_count: u64 = 0;
+        let mut last_total_busy: u64 = 0;
+        let mut last_pid_times: StdHashMap<u32, u64> = StdHashMap::new();
+        let mut pid_stats: StdHashMap<u32, PidStats> = StdHashMap::new();
+        let mut global_stats = GlobalStats {
+            min_utilization: f64::MAX,
+            ..Default::default()
+        };
 
         // Spawn CPU monitoring task
         cpu_handle = Some(tokio::spawn(async move {
-            if let Err(e) = monitor_cpu_usage(
-                pid_cpu_time,
-                busy_cpu_time,
-                pid_filter,
-                json_output,
-                polling_freq_seconds,
-                http_bool,
-                syslog_bool,
-                host,
-                syslog,
-                url,
-                &client,
-                args.debug,
-            )
-            .await
-            {
-                error!("CPU monitoring error: {}", e);
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                polling_freq_seconds.into(),
+            ));
+            let num_cpus = aya::util::online_cpus()
+                .map_err(|(msg, err)| format!("{}: {}", msg, err))
+                .unwrap_or_default()
+                .len();
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        // Update global stats before each sample
+                        let mut total_busy: u64 = 0;
+                        if let Ok(values) = busy_cpu_time.get(&0, 0) {
+                            total_busy = values.iter().sum::<u64>();
+                        }
+                        let busy_delta = total_busy.saturating_sub(last_total_busy);
+                        let _interval_sec = polling_freq_seconds as f64;
+
+                        if pid_filter.is_some() {
+                            // Per-PID mode - stats tracked per-PID
+                        } else {
+                            // Global mode - update global stats
+                            let total_cpu_time_available = if polling_freq_seconds > 0 && num_cpus > 0 {
+                                let interval_ns = (polling_freq_seconds as u64).saturating_mul(1_000_000_000);
+                                interval_ns.saturating_mul(num_cpus as u64)
+                            } else {
+                                0u64
+                            };
+
+                            let cpu_utilization = if total_cpu_time_available > 0 {
+                                (busy_delta as f64 / total_cpu_time_available as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+
+                            global_stats.total_busy_time = total_busy;
+                            global_stats.max_utilization = global_stats.max_utilization.max(cpu_utilization);
+                            global_stats.min_utilization = global_stats.min_utilization.min(cpu_utilization);
+                            global_stats.avg_utilization =
+                                (global_stats.avg_utilization * (sample_count) as f64 + cpu_utilization)
+                                / (sample_count + 1) as f64;
+                        }
+
+                        // Call single-sample monitoring function
+                        if let Err(e) = monitor_cpu_usage(
+                            &pid_cpu_time,
+                            &busy_cpu_time,
+                            &pid_filter,
+                            &json_output,
+                            &http_bool,
+                            &syslog_bool,
+                            &host,
+                            &syslog,
+                            &url,
+                            &client,
+                            &debug_mode,
+                            &mut last_total_busy,
+                            &mut last_pid_times,
+                            &mut pid_stats,
+                            &mut sample_count,
+                            polling_freq_seconds,
+                        )
+                        .await
+                        {
+                            error!("CPU monitoring error: {}", e);
+                        }
+
+                        last_total_busy = total_busy;
+                        sample_count += 1;
+                    }
+
+                    _ = tokio::signal::ctrl_c() => {
+                        // Print summary on Ctrl+C
+                        print_cpu_summary(
+                            &pid_filter,
+                            num_cpus,
+                            sample_count,
+                            polling_freq_seconds,
+                            &host,
+                            &syslog,
+                            &url,
+                            &client,
+                            &http_bool,
+                            &syslog_bool,
+                            &json_output,
+                            &debug_mode,
+                            &pid_stats,
+                            &mut global_stats,
+                            last_total_busy,
+                        ).await;
+                        break;
+                    }
+                }
             }
         }));
     }

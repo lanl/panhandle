@@ -87,7 +87,7 @@ fn try_sched_switch(ctx: TracePointContext) -> Result<u32, i64> {
                     // SAFETY: HashMap pointer dereferencing is safe
                     // - entry is a valid pointer returned from PID_CPU_TIME.get_ptr_mut(&prev_pid)
                     // - The Some variant indicates the key exists and pointer is valid
-                    // - PID_CPU_TIME is a HashMap<u32, u64> with max_entries=1024
+                    // - PID_CPU_TIME is a HashMap<u32, u64> with max_entries=1024runa ll tests and lint check
                     // - prev_pid is a valid process ID from the kernel
                     // - The pointer is guaranteed to point to a valid u64 value
                     // - Atomic addition is safe in eBPF context (no data races due to per-CPU nature)

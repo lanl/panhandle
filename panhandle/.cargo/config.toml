@@ -1,4 +1,23 @@
+# Configuration for panhandle project
+# Allows all standard cargo commands to work properly
+
 [target.'cfg(test)']
 
 [target."cfg(all())"]
 runner = "sudo -E"
+
+# Build settings
+[build]
+target = "x86_64-unknown-linux-gnu"
+
+# Cargo aliases for convenience
+[alias]
+b = "build"
+t = "test"
+r = "run"
+c = "check"
+cl = "clippy"
+
+# Term settings
+[term]
+verbose = false

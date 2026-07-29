@@ -6,6 +6,11 @@
 [target."cfg(all())"]
 runner = "sudo -E"
 
+# Build settings for eBPF programs
+# Required for Aya v0.14+ - eBPF programs cannot use unwinding
+[target.'cfg(target_arch = "bpf")']
+rustflags = ["-C", "panic=abort"]
+
 # Build settings
 [build]
 target = "x86_64-unknown-linux-gnu"

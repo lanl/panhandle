@@ -512,17 +512,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         
         let blocked_paths: Vec<String> = if let Some(ref paths) = args.block_paths {
-            // Validate all paths are within size limit
-            for path in paths {
-                if path.len() > 256 {
-                    info!(
-                        "Path '{}' exceeds maximum length of 256 bytes (got {} bytes)",
-                        path,
-                        path.len()
-                    );
-                    std::process::exit(1);
-                }
-            }
             paths.clone()
         } else {
             Vec::new()
@@ -553,6 +542,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             aya::maps::HashMap::try_from(blocked_paths_map)?;
 
         // Populate the denylist with initial paths
+        if blocked_paths.is_empty() {
+            let path = [0u8; 256];
+            path_denylist.insert(path, 0, 0)?; // value of 0 is a placeholder, check on ebpf side for it to know that no path list was provided
+        }
         for path_str in blocked_paths {
             let mut path = [0u8; 256];
             let bytes = path_str.as_bytes();

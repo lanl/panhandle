@@ -30,9 +30,9 @@ static PATH_SCRATCH: PerCpuArray<PathBuf> = PerCpuArray::with_max_entries(1, 0);
 static BLOCKED_COMMS: HashMap<[u8; 16], u8> = HashMap::with_max_entries(64, 0);
 
 // List of filepaths to blocked the execution of syscalls on
-// Key = 256 byte filepath, Value = 1
+// Key = 256 byte filepath, Value = 1 (or 0 for placeholder stating it was not provided)
 #[map(name = "BLOCKED_PATHS")]
-static BLOCKED_PATHS: HashMap<[u8; 256], u8> = HashMap::with_max_entries(64,0);
+static BLOCKED_PATHS: HashMap<[u8; 256], u8> = HashMap::with_max_entries(64, 0);
 
 #[lsm(hook = "file_open")]
 pub fn block_open(ctx: LsmContext) -> i32 {
@@ -66,15 +66,17 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     if ret > 0 {
         let len = (ret as usize) & PATH_MASK;
         let path_str = unsafe { core::str::from_utf8_unchecked(&scratch.buf[..len]) };
-        if !path_is_blocked(&path_str) {
-            return Ok(0); // comm is blocked, but path isn't, so return Ok
+        
+        // If path map has real entries (not just placeholder) and this path isn't blocked, allow it
+        if !is_path_map_empty() && !path_is_blocked(&path_str) {
+            return Ok(0); // comm is blocked but the path isn't, return ok
         }
+        
     }
 
-    // Deny the open.
+    // if we couldn't get the path, or path checking indicates block, deny by default
     Ok(EPERM)
 }
-
 
 // hook for strictly blocking execve
 #[lsm(hook = "bprm_check_security")]
@@ -107,4 +109,14 @@ fn path_is_blocked(filepath: &str) -> bool {
     let len = path_bytes.len().min(256);
     key[..len].copy_from_slice(&path_bytes[..len]);
     unsafe { BLOCKED_PATHS.get(&key).is_some() }
+}
+
+// Returns true if the path map only contains the placeholder (meaning it's effectively empty)
+// The placeholder is an all-zeros key with value 0
+fn is_path_map_empty() -> bool {
+    let placeholder: [u8; 256] = [0u8; 256];
+    match unsafe { BLOCKED_PATHS.get(&placeholder) } {
+        Some(val) => *val == 0, // If placeholder exists with value 0, map is "empty"
+        None => false,           // Placeholder doesn't exist, so map has real entries
+    }
 }

@@ -15,7 +15,7 @@ use chrono::prelude::*;
 // this is the local import section
 use panhandle_common::*;
 
-// IMPLEMENTED: EbpfEvent trait provides generic event processing capabilities.
+/// EbpfEvent trait provides generic event processing capabilities.
 /// This trait enables unified handling of different eBPF event types (Readline, ExecveEvent, etc.)
 /// through a common interface, allowing for code reuse between `consume_shell_ebpf_map` and
 /// `consume_execve_ebpf_map` while maintaining type safety.
@@ -191,15 +191,18 @@ pub fn consume_ebpf_map<T: EbpfEvent + Copy + 'static>(
     let hostname_ref = hostname.clone();
     let executable_vec = ref_executable_vec;
 
+    info!("Starting to consume events from readline perf buffer");
     buf.for_each(|event| {
+        info!("Received event from readline buffer");
         let sample_bytes = match event {
             PerfEvent::Sample { head, tail } => {
+                info!("Processing sample event from readline");
                 let mut bytes = head.to_vec();
                 bytes.extend_from_slice(tail);
                 bytes
             }
             PerfEvent::Lost { count } => {
-                error!("Lost {} events", count);
+                error!("Lost {} readline events", count);
                 return;
             }
         };

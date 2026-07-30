@@ -504,10 +504,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // process syscall blocking
     if let Some(syscalls) = &args.syscalls {
-        let blocked_comms: Vec<String> = if let Some(ref comms) = args.comm_deny {
-            comms.clone()
-        } else {
-            info!("Syscall blocking enabled but no comms specified");
+        let mut list_type: u8 = 0; // 0 = unspecified, 1 = deny list, 2 = allow list, 3 = both (error)
+        let comms: Vec<String> = if let Some(ref comms_deny) = args.comm_deny {
+            list_type += DENY_LIST;
+            comms_deny.clone()
+        } else if let Some(ref comms_allow) = args.comm_allow {
+            list_type += ALLOW_LIST;
+            comms_allow.clone()
+        }
+        else {
+            if args.verbose{ 
+                info!("Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked.");
+            }
             Vec::new()
         };
         
@@ -517,24 +525,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Vec::new()
         };
         
-        if args.debug {
-            info!("Blocking file opens for comms: {:?}", blocked_comms);
-            info!("Blocking file opens for paths: {:?}", blocked_paths);
-        }
-        
-        // Get the BLOCKED_COMMS map
-        let blocked_comms_map = ebpf.take_map("BLOCKED_COMMS").unwrap();
-        let mut comm_denylist: aya::maps::HashMap<_, [u8; 16], u8> =
-            aya::maps::HashMap::try_from(blocked_comms_map)?;
+        // Get the COMMS map
+        let comms_map = ebpf.take_map("COMMS").unwrap();
+        let mut comm_list: aya::maps::HashMap<_, [u8; 16], u8> =
+            aya::maps::HashMap::try_from(comms_map)?;
 
-        // Populate the denylist with initial comms
-        for comm_str in blocked_comms {
+        // Populate the comm list with specified comms from either the deny list or allow list
+        // Not allowing for providing both an allow list and deny list
+        if list_type == 3 {
+            println!("Allow and deny list both provided, exiting with error.");
+            std::process::exit(1);
+        }
+        // list_type is used on the ebpf side to determine how to handle process blocking
+        for comm_str in comms {
             let mut comm = [0u8; 16];
             let bytes = comm_str.as_bytes();
             let len = bytes.len().min(15); // Max 15 chars + null terminator
             comm[..len].copy_from_slice(&bytes[..len]);
-            comm_denylist.insert(comm, 1, 0)?;
+            comm_list.insert(comm, list_type, 0)?;
         }
+
+        // Insert mode indicator key to tell eBPF which mode we're in.
+        // This known key within the hashmap is required for when ebpf side can't find a comm in the map but still needs to know what to do with it
+        if list_type != 0 {
+            let mode_key = [LIST_MODE; 16];
+            comm_list.insert(mode_key, list_type, 0)?;
+        }
+        
 
         // Get the BLOCKED_PATHS map
         let blocked_paths_map = ebpf.take_map("BLOCKED_PATHS").unwrap();
@@ -545,6 +562,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if blocked_paths.is_empty() {
             let path = [0u8; 256];
             path_denylist.insert(path, 0, 0)?; // value of 0 is a placeholder, check on ebpf side for it to know that no path list was provided
+            if args.verbose { 
+                println!("Process blocking was turned on but no filepath list was provided. Defaulting to blocking all paths.")
+            }
         }
         for path_str in blocked_paths {
             let mut path = [0u8; 256];

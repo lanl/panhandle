@@ -23,27 +23,27 @@ wait $PANHANDLE_PID 2>/dev/null
 
 # now display results
 echo "CPU Message:"
-grep -m1 "cpu" tmp_metrics.txt
+grep -m5 "cpu" tmp_metrics.txt
 echo ""
 
 echo "GPU Message:"
-grep -m1 "gpu" tmp_metrics.txt
+grep -m5 "gpu" tmp_metrics.txt
 echo ""
 
 echo "Memory Message:"
-grep -m1 "mem" tmp_metrics.txt
+grep -m5 "mem" tmp_metrics.txt
 echo ""
 
 echo "Memory Fault Message:"
-grep -m1 "fault" tmp_metrics.txt
+grep -m5 "fault" tmp_metrics.txt
 echo ""
 
 echo "Socket Message:"
-grep -m1 "sock" tmp_metrics.txt
+grep -m5 "sock" tmp_metrics.txt
 echo ""
 
 echo "I/O Message:"
-grep -m1 "Read_Count" tmp_metrics.txt
+grep -m5 "Read_Count" tmp_metrics.txt
 echo ""
 
 rm tmp_metrics.txt

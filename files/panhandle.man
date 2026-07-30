@@ -103,11 +103,11 @@ Specify a comma separated list of syscalls to be blocked. Provide pid_white or p
 \fB--block-paths\fI <FILEPATHS>\fR
 Specify a comma separated list of file paths to be blocked when blocking processes using -syscalls. Provide comm_allow or comm_deny to control which processes are blocked.
 .TP
-\fB--pid-white\fI <PIDS>\fR
-Specify a comma separated list of PIDs that will be allowed to execute the syscalls specified in --syscalls.
+\fB--comm-allow\fI <COMMS>\fR
+Specify a comma separated list of PIDs that will be allowed to execute the syscalls specified in --syscalls on the filepaths specified in --blocked-paths.
 .TP
-\fB--pid-black\fI <PIDS>\fR
-Specify a comma separated list of PIDs that will be blocked from executing the syscalls specified in --syscalls.
+\fB--comm-deny\fI <COMMS>\fR
+Specify a comma separated list of PIDs that will be blocked from executing the syscalls specified in --syscalls on the filepaths specified in --blocked-paths.
 .SH FILES
 .TP
 \fC/opt/panhandle/panhandle.yaml\fR

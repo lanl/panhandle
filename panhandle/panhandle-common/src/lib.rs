@@ -22,6 +22,9 @@ pub const SYSCALL_OFFSET: usize = 8;
 pub const FILENAME_OFFSET: usize = 16;
 pub const ARGS_OFFSET: usize = 24;
 pub const MAX_POSSIBLE_UID: u32 = 4294967294;
+pub const DENY_LIST: u8 = 1;
+pub const ALLOW_LIST: u8 = 2;
+pub const LIST_MODE: u8 = 255;
 
 // structs used for consuming or presenting the desired data
 // this readline struct is used by the zlentry and readline methods

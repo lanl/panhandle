@@ -5,8 +5,8 @@ use aya_ebpf::{
     maps::{HashMap, PerCpuArray},
     programs::LsmContext,
 };
-use aya_log_ebpf::info;
 
+// use aya_log_ebpf::info;
 use crate::vmlinux::file;
 
 const PATH_SIZE: usize = 256;
@@ -71,7 +71,7 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     if ret > 0 {
         let len = (ret as usize) & PATH_MASK;
         let path_str = unsafe { core::str::from_utf8_unchecked(&scratch.buf[..len]) };
-        
+
         // If path map has real entries (not just placeholder) and this path isn't blocked, allow it
         if !is_path_map_empty() && !path_is_blocked(&path_str) {
             return Ok(0); // comm is blocked but the path isn't, return ok
@@ -122,7 +122,7 @@ fn comm_is_blocked() -> bool {
                 None => {
                     // Comm not in map, so we do not have a key to go off and must use the LIST_MODE indicator in the hashmap
                     let list_mode = get_list_mode();
-                    
+
                     if list_mode == ALLOW_LIST {
                         // Allow list mode: block because comm is NOT in the allow list
                         true
@@ -142,7 +142,7 @@ fn comm_is_blocked() -> bool {
 fn get_list_mode() -> u8 {
     // Use a mode indicator key that userspace sets to indicate the mode
     let mode_key: [u8; 16] = [LIST_MODE; 16];
-    
+
     match unsafe { COMMS.get(&mode_key) } {
         Some(&value) => value,
         None => DENY_LIST, // Default to deny list mode if mode key not found
@@ -164,6 +164,6 @@ fn is_path_map_empty() -> bool {
     let placeholder: [u8; 256] = [0u8; 256];
     match unsafe { BLOCKED_PATHS.get(&placeholder) } {
         Some(val) => *val == 0, // If placeholder exists with value 0, map is "empty"
-        None => false,           // Placeholder doesn't exist, so map has real entries
+        None => false,          // Placeholder doesn't exist, so map has real entries
     }
 }

@@ -132,13 +132,13 @@ pub struct RawArgs {
     #[serde(default)]
     pub syscalls: Option<Vec<String>>,
 
-    /// Specify a comma separated list of file paths to be blocked when blocking processes using -syscalls. 
+    /// Specify a comma separated list of file paths to be blocked when blocking processes using -syscalls.
     /// Provide comm_allow or comm_deny to control which processes are blocked. Maximum paths defined by MAX_BLOCKED_PATHS.
     #[arg(long, value_parser = validate_path_length, num_args = 1..=MAX_BLOCKED_PATHS, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub block_paths: Option<Vec<String>>,
 
-    /// Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls. 
+    /// Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls.
     /// Maximum 64 process names, 15 characters each.
     #[arg(long, value_parser = validate_comm_length, num_args = 1..=MAX_BLOCKED_COMMS, value_delimiter = ',', global = true)]
     #[serde(default)]

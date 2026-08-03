@@ -3,7 +3,7 @@ use std::{convert::TryInto, path::PathBuf};
 use aya::{
     Btf,
     maps::{HashMap, PerCpuArray, perf::PerfEventArray},
-    programs::{TracePoint, UProbe, uprobe::UProbeScope, BtfTracePoint},
+    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
     util::online_cpus,
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
@@ -511,20 +511,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if let Some(ref comms_allow) = args.comm_allow {
             list_type += ALLOW_LIST;
             comms_allow.clone()
-        }
-        else {
-            if args.verbose{ 
-                info!("Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked.");
+        } else {
+            if args.verbose {
+                info!(
+                    "Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked."
+                );
             }
             Vec::new()
         };
-        
+
         let blocked_paths: Vec<String> = if let Some(ref paths) = args.block_paths {
             paths.clone()
         } else {
             Vec::new()
         };
-        
+
         // Get the COMMS map
         let comms_map = ebpf.take_map("COMMS").unwrap();
         let mut comm_list: aya::maps::HashMap<_, [u8; 16], u8> =
@@ -551,7 +552,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mode_key = [LIST_MODE; 16];
             comm_list.insert(mode_key, list_type, 0)?;
         }
-        
 
         // Get the BLOCKED_PATHS map
         let blocked_paths_map = ebpf.take_map("BLOCKED_PATHS").unwrap();
@@ -562,8 +562,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if blocked_paths.is_empty() {
             let path = [0u8; 256];
             path_denylist.insert(path, 0, 0)?; // value of 0 is a placeholder, check on ebpf side for it to know that no path list was provided
-            if args.verbose { 
-                println!("Process blocking was turned on but no filepath list was provided. Defaulting to blocking all paths.")
+            if args.verbose {
+                println!(
+                    "Process blocking was turned on but no filepath list was provided. Defaulting to blocking all paths."
+                )
             }
         }
         for path_str in blocked_paths {
@@ -582,7 +584,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             attach_lsm_hook(&mut ebpf, "file_open", "block_open")
                 .expect("failed to attach file_open hook");
         }
-        
+
         if syscalls.iter().any(|s| s == "execve") {
             attach_lsm_hook(&mut ebpf, "bprm_check_security", "block_execve")
                 .expect("failed to attach bprm_check_security hook");

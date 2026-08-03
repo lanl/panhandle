@@ -1,8 +1,5 @@
 # CHANGELOG
 
-### v1.0.15
- - added aya v0.14.0 compatibility
-
 ### v1.0.14
  - added io usage monitoring, displaying disk reads/writes and inode creation. Can be filtered by PIDs using --pid-list. The poll interval can be adjusted using --poll.
 

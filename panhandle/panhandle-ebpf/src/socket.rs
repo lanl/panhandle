@@ -43,8 +43,8 @@ pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> u32 {
 }
 
 fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
-    let oldstate: i32 = ctx.arg(1);
-    let newstate: i32 = ctx.arg(2);
+    let oldstate: i32 = unsafe { ctx.arg(1) };
+    let newstate: i32 = unsafe { ctx.arg(2) };
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
     let mut stats = unsafe { NET_STATS.get(&pid).copied().unwrap_or(NetStats::new()) };

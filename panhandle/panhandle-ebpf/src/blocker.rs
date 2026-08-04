@@ -60,9 +60,10 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
 
     let path_ptr = unsafe { &(*f).f_path } as *const _ as *mut core::ffi::c_void;
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(feature = "target_arch_aarch64", feature = "target_arch_arm"))]
     let buf_ptr = scratch.buf.as_mut_ptr() as *mut u8;
-    #[cfg(not(target_arch = "aarch64"))]
+    
+    #[cfg(not(any(feature = "target_arch_aarch64", feature = "target_arch_arm")))]
     let buf_ptr = scratch.buf.as_mut_ptr() as *mut i8;
 
     let ret: c_long = unsafe {

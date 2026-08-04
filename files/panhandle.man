@@ -96,6 +96,18 @@ Monitor events from the zsh shell using the zlentry function.
 .TP
 \fB--poll <POLLING_FREQUENCY_SECONDS>\fP
 Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to 30 seconds.
+.TP
+\fB--syscalls\fI <SYSCALLS>\fR
+Specify a comma separated list of syscalls to be blocked. Provide comm_allow or comm_deny to control which processes are blocked when executing these syscalls.
+.TP
+\fB--block-paths\fI <FILEPATHS>\fR
+Specify a comma separated list of file paths to be blocked when blocking processes using --syscalls. Provide comm_allow or comm_deny to control which processes are blocked.
+.TP
+\fB--comm-allow\fI <COMMS>\fR
+Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls. Maximum 64 process names, 15 characters each.
+.TP
+\fB--comm-deny\fI <COMMS>\fR
+Specify a comma separated list of process names (comm) that will be denied from executing the syscalls specified in --syscalls. Maximum 64 process names, 15 characters each.
 .SH FILES
 .TP
 \fC/opt/panhandle/panhandle.yaml\fR

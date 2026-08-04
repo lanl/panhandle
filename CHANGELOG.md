@@ -1,5 +1,8 @@
 # CHANGELOG
 
+### v1.0.16
+- added process blocking. Control how blocking is done using the comm-deny, comm-allow, syscalls, and block-paths options.
+
 ### v1.0.15
  - reduced resource allocation to reduce memory footprint.
 

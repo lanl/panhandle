@@ -1,4 +1,11 @@
-use std::{convert::TryInto, path::PathBuf};
+use std::{
+    convert::TryInto,
+    fs::{File, canonicalize},
+    panic,
+    path::PathBuf,
+    process,
+    sync::Arc,
+};
 
 use aya::{
     Btf,
@@ -6,24 +13,17 @@ use aya::{
     programs::{BtfTracePoint, TracePoint, UProbe},
     util::online_cpus,
 };
-// use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
+use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
+use bytes::BytesMut;
 use clap::Parser;
+use machine_info::Machine;
+use reqwest::Client;
+use simplelog::*;
 use tokio::{
     signal,
     task::JoinHandle,
     time::{Duration, sleep},
 };
-extern crate simplelog;
-use std::{
-    fs::{File, canonicalize},
-    panic, process,
-    sync::Arc,
-};
-
-use bytes::BytesMut;
-use machine_info::Machine;
-use reqwest::Client;
-use simplelog::*;
 use uzers::get_current_uid;
 
 #[rustfmt::skip]
@@ -205,6 +205,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         env!("OUT_DIR"),
         "/panhandle"
     )))?;
+
+    if let Err(e) = EbpfLogger::init(&mut ebpf) {
+        // not fatal — just means you won't see ebpf-side logs
+        eprintln!("failed to initialize eBPF logger: {e}");
+    }
 
     // set up executable vars
     let mut canonical_executable_vec = Vec::new();
@@ -498,6 +503,95 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
+    // process syscall blocking
+    if let Some(syscalls) = &args.syscalls {
+        let mut list_type: u8 = 0; // 0 = unspecified, 1 = deny list, 2 = allow list, 3 = both (error)
+        let comms: Vec<String> = if let Some(ref comms_deny) = args.comm_deny {
+            list_type += DENY_LIST;
+            comms_deny.clone()
+        } else if let Some(ref comms_allow) = args.comm_allow {
+            list_type += ALLOW_LIST;
+            comms_allow.clone()
+        } else {
+            if args.verbose {
+                info!(
+                    "Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked."
+                );
+            }
+            Vec::new()
+        };
+
+        let blocked_paths: Vec<String> = if let Some(ref paths) = args.block_paths {
+            paths.clone()
+        } else {
+            Vec::new()
+        };
+
+        // Get the COMMS map
+        let comms_map = ebpf.take_map("COMMS").unwrap();
+        let mut comm_list: aya::maps::HashMap<_, [u8; 16], u8> =
+            aya::maps::HashMap::try_from(comms_map)?;
+
+        // Populate the comm list with specified comms from either the deny list or allow list
+        // Not allowing for providing both an allow list and deny list
+        if list_type == 3 {
+            println!("Allow and deny list both provided, exiting with error.");
+            std::process::exit(1);
+        }
+        // list_type is used on the ebpf side to determine how to handle process blocking
+        for comm_str in comms {
+            let mut comm = [0u8; 16];
+            let bytes = comm_str.as_bytes();
+            let len = bytes.len().min(15); // Max 15 chars + null terminator
+            comm[..len].copy_from_slice(&bytes[..len]);
+            comm_list.insert(comm, list_type, 0)?;
+        }
+
+        // Insert mode indicator key to tell eBPF which mode we're in.
+        // This known key within the hashmap is required for when ebpf side can't find a comm in the map but still needs to know what to do with it
+        if list_type != 0 {
+            let mode_key = [LIST_MODE; 16];
+            comm_list.insert(mode_key, list_type, 0)?;
+        }
+
+        // Get the BLOCKED_PATHS map
+        let blocked_paths_map = ebpf.take_map("BLOCKED_PATHS").unwrap();
+        let mut path_denylist: aya::maps::HashMap<_, [u8; 256], u8> =
+            aya::maps::HashMap::try_from(blocked_paths_map)?;
+
+        // Populate the denylist with initial paths
+        if blocked_paths.is_empty() {
+            let path = [0u8; 256];
+            path_denylist.insert(path, 0, 0)?; // value of 0 is a placeholder, check on ebpf side for it to know that no path list was provided
+            if args.verbose {
+                println!(
+                    "Process blocking was turned on but no filepath list was provided. Defaulting to blocking all paths."
+                )
+            }
+        }
+        for path_str in blocked_paths {
+            let mut path = [0u8; 256];
+            let bytes = path_str.as_bytes();
+            let len = bytes.len(); // Already validated to be <= 256
+            path[..len].copy_from_slice(&bytes[..len]);
+            path_denylist.insert(path, 1, 0)?;
+        }
+
+        // Check for open related syscalls - open, openat, creat
+        if syscalls
+            .iter()
+            .any(|s| s == "open" || s == "openat" || s == "creat")
+        {
+            attach_lsm_hook(&mut ebpf, "file_open", "block_open")
+                .expect("failed to attach file_open hook");
+        }
+
+        if syscalls.iter().any(|s| s == "execve") {
+            attach_lsm_hook(&mut ebpf, "bprm_check_security", "block_execve")
+                .expect("failed to attach bprm_check_security hook");
+        }
+    }
+
     if args.bash {
         // canonicalize the path and then convert to string
         let file: PathBuf = canonicalize("/bin/bash").unwrap_or_default();
@@ -684,7 +778,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             && !args.memory
             && !args.cpu
             && !args.gpu
-            && !args.io)
+            && !args.io
+            && args.syscalls.is_none())
     {
         // this is the main program functionality
         // the default option if the other shells are not selected

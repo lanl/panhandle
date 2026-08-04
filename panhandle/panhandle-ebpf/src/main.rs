@@ -16,10 +16,12 @@ use aya_ebpf::{
     programs::TracePointContext,
 };
 use panhandle_common::*;
+mod blocker;
 mod cpu_usage;
 mod readline;
 mod socket;
 mod vanilla_execve;
+mod vmlinux;
 mod zlentry;
 
 #[map(name = "panhandle_execve_events")]

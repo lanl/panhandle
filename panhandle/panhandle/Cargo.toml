@@ -1,6 +1,6 @@
 [package]
 name = "panhandle"
-version = "1.0.14"
+version = "1.0.15"
 edition = "2024"
 homepage = "https://github.com/lanl/panhandle"
 license = "MIT"

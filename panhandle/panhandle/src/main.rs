@@ -73,10 +73,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bump the memlock rlimit. This is needed for older kernels that don't use the new memcg
     // based accounting
-    let rlim = libc::rlimit {
-        rlim_cur: libc::RLIM_INFINITY,
-        rlim_max: libc::RLIM_INFINITY,
-    };
+    //let rlim = libc::rlimit {
+    //    rlim_cur: libc::RLIM_INFINITY,
+    //    rlim_max: libc::RLIM_INFINITY,
+    //};
 
     // check for if running as root, exit if not
     let current_uid = get_current_uid();
@@ -195,10 +195,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // set up ebpf memory lock
     // SAFETY: unsafe call recommended by the Aya library, requires libc which is a dependency of the rpm build already
-    let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
-    if ret != 0 {
-        debug!("remove limit on locked memory failed, ret is: {}", ret);
-    }
+    //let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
+    //if ret != 0 {
+    //    debug!("remove limit on locked memory failed, ret is: {}", ret);
+    //}
 
     // load the built ebpf program
     // this looks like a failure until the ebpf build runs
@@ -662,7 +662,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::task::spawn(async move {
                 // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
                 let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(2048))
+                    .map(|_| BytesMut::with_capacity(1024))
                     .collect::<Vec<_>>();
 
                 consume_shell_ebpf_map(
@@ -751,7 +751,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::task::spawn(async move {
                 // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
                 let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(2048))
+                    .map(|_| BytesMut::with_capacity(1024))
                     .collect::<Vec<_>>();
 
                 consume_shell_ebpf_map(
@@ -839,7 +839,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::task::spawn(async move {
                 // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
                 let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(2048))
+                    .map(|_| BytesMut::with_capacity(1024))
                     .collect::<Vec<_>>();
 
                 consume_execve_ebpf_map(

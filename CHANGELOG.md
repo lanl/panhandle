@@ -1,7 +1,10 @@
 # CHANGELOG
 
+### v1.0.16
+- added process blocking. Control how blocking is done using the comm-deny, comm-allow, syscalls, and block-paths options.
+
 ### v1.0.15
- - added process blocking. Control how blocking is done using the comm-deny, comm-allow, syscalls, and block-paths options.
+ - reduced resource allocation to reduce memory footprint.
 
 ### v1.0.14
  - added io usage monitoring, displaying disk reads/writes and inode creation. Can be filtered by PIDs using --pid-list. The poll interval can be adjusted using --poll.

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-# test file to show that process blocking can block malicious operations
+# script to test process blocking feature. Runs indefinitely, repeatedly trying open, openat, creat, and execve operations on /usr/bin/su until ctrl+c
+# To block using panhandle, run "cargo run -- --syscalls open --comm-deny python3"
+# To specifically block /usr/bin/su operations using panhandle, run "cargo run -- --syscalls open --comm-deny python3 --block-paths /usr/bin/su"
 
 import os
 import sys
@@ -110,12 +112,12 @@ def main():
     print("MALICIOUS OPERATION TEST")
     print("=" * 70)
     print("\nCycling through:")
-    print("  open    : Standard file opening (/usr/bin/su)")
-    print("  openat  : Open relative to directory fd (/usr/bin/su)")
-    print("  creat   : Create/truncate file (temp directory)")
-    print("  execve  : Execute binary (/usr/bin/su)")
+    print("open: Standard file opening (/usr/bin/su)")
+    print("openat: Open relative to directory fd (/usr/bin/su)")
+    print("creat: Create/truncate file (temp directory)")
+    print("execve: Execute binary (/usr/bin/su)")
     print("\nBefore blocking: Should see SUCCESS")
-    print("After blocking:  Should see BLOCKED")
+    print("After blocking: Should see BLOCKED")
     print("\nPress Ctrl+C to stop\n")
     print("=" * 70 + "\n")
     

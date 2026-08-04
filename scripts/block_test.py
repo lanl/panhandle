@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# script to test process blocking feature
+# script to test process blocking feature. Runs indefinitely, repeatedly trying open, openat, creat, and execve operations until ctrl+c
+# To block using panhandle, run "cargo run -- --syscalls open --comm-deny python3"
 
 import os
 import sys

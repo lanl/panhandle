@@ -4,6 +4,8 @@ use aya::{
     Btf,
     maps::{HashMap, PerCpuArray, perf::PerfEventArray},
     programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
+    maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
+    programs::{BtfTracePoint, TracePoint, UProbe},
     util::online_cpus,
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
@@ -13,13 +15,13 @@ use tokio::{
     task::JoinHandle,
     time::{Duration, sleep},
 };
-extern crate simplelog;
 use std::{
     fs::{File, canonicalize},
     panic, process,
     sync::Arc,
 };
 
+use bytes::BytesMut;
 use machine_info::Machine;
 use reqwest::Client;
 use simplelog::*;
@@ -608,11 +610,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // readline stuff
         let program: &mut UProbe = ebpf.program_mut("readline").unwrap().try_into()?;
         program.load()?;
-        program.attach(
-            "readline_internal_teardown",
-            file_string,
-            UProbeScope::AllProcesses,
-        )?;
+        program.attach(Some("readline_internal_teardown"), 0, file_string, None)?;
 
         // get the uid_options map from ebpf land
         let readline_uid_options_map = ebpf.take_map("readline_uid_options").unwrap();
@@ -646,9 +644,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         readline_uid_list_map.insert(0, zeroed_array, 0)?;
 
         let cpus: Vec<u32> = online_cpus().unwrap();
+        let num_cpus: usize = cpus.len();
 
         // Process events from the perf buffer
-        let mut events = PerfEventArray::try_from(ebpf.take_map("readline_events").unwrap())?;
+        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("readline_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 
@@ -661,9 +660,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // now spawn the async stuff
             tokio::task::spawn(async move {
+                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
+                let buffers = (0..num_cpus)
+                    .map(|_| BytesMut::with_capacity(2048))
+                    .collect::<Vec<_>>();
+
                 consume_shell_ebpf_map(
                     &client,
                     buf,
+                    buffers,
                     ref_executable_vec,
                     ref_global_url,
                     http_bool,
@@ -672,7 +677,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     syslog_bool,
                     args.json,
                     args.debug,
-                );
+                )
+                .await;
             });
         }
     }
@@ -693,7 +699,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // zlentry stuff
         let program: &mut UProbe = ebpf.program_mut("zlentry").unwrap().try_into()?;
         program.load()?;
-        program.attach("zleentry", file_string, UProbeScope::AllProcesses)?;
+        program.attach(Some("zleentry"), 0, file_string, None)?;
 
         // get the uid_options map from ebpf land
         let zlentry_uid_options_map = ebpf.take_map("zlentry_uid_options").unwrap();
@@ -727,9 +733,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zlentry_uid_list_map.insert(0, zeroed_array, 0)?;
 
         let cpus = online_cpus().unwrap();
+        let num_cpus = cpus.len();
 
         // Process events from the perf buffer
-        let mut events = PerfEventArray::try_from(ebpf.take_map("zlentry_events").unwrap())?;
+        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("zlentry_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 
@@ -742,9 +749,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // now spawn the async stuff
             tokio::task::spawn(async move {
+                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
+                let buffers = (0..num_cpus)
+                    .map(|_| BytesMut::with_capacity(2048))
+                    .collect::<Vec<_>>();
+
                 consume_shell_ebpf_map(
                     &client,
                     buf,
+                    buffers,
                     ref_executable_vec,
                     ref_global_url,
                     http_bool,
@@ -753,7 +766,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     syslog_bool,
                     args.json,
                     args.debug,
-                );
+                )
+                .await;
             });
         }
     }
@@ -806,10 +820,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         uid_list_map.insert(0, zeroed_array, 0)?;
 
         let cpus: Vec<u32> = online_cpus().unwrap();
+        let num_cpus = cpus.len();
 
         // Process events from the perf buffer
         let mut events =
-            PerfEventArray::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
+            AsyncPerfEventArray::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
         for cpu in cpus {
             let buf = events.open(cpu, Some(32))?;
 
@@ -822,9 +837,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // now spawn the async stuff
             tokio::task::spawn(async move {
+                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
+                let buffers = (0..num_cpus)
+                    .map(|_| BytesMut::with_capacity(2048))
+                    .collect::<Vec<_>>();
+
                 consume_execve_ebpf_map(
                     &client,
                     buf,
+                    buffers,
                     ref_executable_vec,
                     ref_global_url,
                     http_bool,
@@ -833,7 +854,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     syslog_bool,
                     args.json,
                     args.debug,
-                );
+                )
+                .await;
             });
         }
     }

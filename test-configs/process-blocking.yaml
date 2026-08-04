@@ -1,3 +1,4 @@
+# intended to be ran when testing process blocking with block_test2.py
 comm_deny: [python3]
 syscalls: [open,creat,openat]
 block_paths: [/usr/bin/su]

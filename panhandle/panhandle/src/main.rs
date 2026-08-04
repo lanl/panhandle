@@ -1,30 +1,29 @@
-use std::{convert::TryInto, path::PathBuf};
+use std::{
+    convert::TryInto,
+    fs::{File, canonicalize},
+    panic,
+    path::PathBuf,
+    process,
+    sync::Arc,
+};
 
 use aya::{
     Btf,
-    maps::{HashMap, PerCpuArray, perf::PerfEventArray},
-    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
     maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
     programs::{BtfTracePoint, TracePoint, UProbe},
     util::online_cpus,
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
+use bytes::BytesMut;
 use clap::Parser;
+use machine_info::Machine;
+use reqwest::Client;
+use simplelog::*;
 use tokio::{
     signal,
     task::JoinHandle,
     time::{Duration, sleep},
 };
-use std::{
-    fs::{File, canonicalize},
-    panic, process,
-    sync::Arc,
-};
-
-use bytes::BytesMut;
-use machine_info::Machine;
-use reqwest::Client;
-use simplelog::*;
 use uzers::get_current_uid;
 
 #[rustfmt::skip]

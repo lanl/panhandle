@@ -1,8 +1,6 @@
 use aya::Btf;
-use aya::maps::perf::{PerfEvent, PerfEventArrayBuffer};
 use aya::programs::{KProbe, Lsm};
 use aya::maps::perf::AsyncPerfEventArrayBuffer;
-use aya::programs::{KProbe};
 use procfs::process::Process;
 use tokio::{net::lookup_host, time::Duration};
 use port_check::*;

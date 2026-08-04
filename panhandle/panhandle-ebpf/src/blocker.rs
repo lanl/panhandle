@@ -53,7 +53,7 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
         return Ok(0);
     }
 
-    let f: *const file = ctx.arg(0);
+    let f: *const file = unsafe { ctx.arg(0) };
 
     let ptr = PATH_SCRATCH.get_ptr_mut(0).ok_or(0i32)?;
     let scratch = unsafe { &mut *ptr };

@@ -5,7 +5,7 @@ use aya_ebpf::{
     maps::{HashMap, PerCpuArray},
     programs::LsmContext,
 };
-
+use core::ffi::c_char;
 // use aya_log_ebpf::info;
 use crate::vmlinux::file;
 
@@ -63,7 +63,7 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     let ret: c_long = unsafe {
         bpf_d_path(
             path_ptr as *mut _,
-            scratch.buf.as_mut_ptr() as *mut i8,
+            scratch.buf.as_mut_ptr() as *mut c_char,
             PATH_SIZE as u32,
         )
     };

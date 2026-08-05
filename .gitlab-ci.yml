@@ -313,7 +313,7 @@ build-rpm-suse-15.5_x86_64:
     - export CARGO_TARGET_DIR="./target/x86_64-unknown-linux-gnu"
     - strip -s $CARGO_TARGET_DIR/release/panhandle
     - ~/.cargo/bin/cargo generate-rpm --arch x86_64 --package panhandle --output $CI_PROJECT_DIR/rpmbuild/sles/
-    - mv $CI_PROJECT_DIR/rpmbuild/sles/panhandle-*.x86_64.rpm $CI_PROJECT_DIR/rpmbuild/sles/panhandle-$VERSION-$RELEASE.sle15.x86_64.rpm
+    - mv $CI_PROJECT_DIR/rpmbuild/sles/panhandle-*.x86_64.rpm $CI_PROJECT_DIR/rpmbuild/sles/panhandle-$VERSION-$RELEASE.sle15-5.x86_64.rpm
     # clean
     - ~/.cargo/bin/cargo clean
   artifacts:
@@ -344,7 +344,7 @@ build-rpm-suse-15.5_aarch64:
     - export CARGO_TARGET_DIR="./target/aarch64-unknown-linux-gnu"
     - strip -s $CARGO_TARGET_DIR/release/panhandle
     - ~/.cargo/bin/cargo  generate-rpm --arch aarch64 --package panhandle --output $CI_PROJECT_DIR/rpmbuild/sles/
-    - mv $CI_PROJECT_DIR/rpmbuild/sles/panhandle-*.aarch64.rpm $CI_PROJECT_DIR/rpmbuild/sles/panhandle-$VERSION-$RELEASE.sle15.aarch64.rpm
+    - mv $CI_PROJECT_DIR/rpmbuild/sles/panhandle-*.aarch64.rpm $CI_PROJECT_DIR/rpmbuild/sles/panhandle-$VERSION-$RELEASE.sle15-5.aarch64.rpm
     # clean
     - ~/.cargo/bin/cargo clean
   artifacts:
@@ -358,3 +358,70 @@ build-rpm-suse-15.5_aarch64:
     - aarch64
     - openshift-arm
     - kubernetes-arm
+
+build-rpm-suse-15.7_x86_64:
+  stage: build-rpm
+  image: registry.suse.com/suse/sle15:15.7
+  before_script:
+    - zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
+    - ldd --version
+    - curl https://sh.rustup.rs -sSf | sh -s -- -y
+    - source ~/.cargo/env
+    - cd panhandle/
+    - ~/.cargo/bin/rustup toolchain install stable
+    - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
+    - ~/.cargo/bin/cargo update
+  script:
+    # x86_64 build
+    - ~/.cargo/bin/rustup target add x86_64-unknown-linux-gnu
+    - ~/.cargo/bin/cargo build --config ../.runner-config.toml --target=x86_64-unknown-linux-gnu --bin panhandle --release --all-features 
+    - export CARGO_TARGET_DIR="./target/x86_64-unknown-linux-gnu"
+    - strip -s $CARGO_TARGET_DIR/release/panhandle
+    - ~/.cargo/bin/cargo generate-rpm --arch x86_64 --package panhandle --output $CI_PROJECT_DIR/rpmbuild/sles/
+    - mv $CI_PROJECT_DIR/rpmbuild/sles/panhandle-*.x86_64.rpm $CI_PROJECT_DIR/rpmbuild/sles/panhandle-$VERSION-$RELEASE.sle15-7.x86_64.rpm
+    # clean
+    - ~/.cargo/bin/cargo clean
+  artifacts:
+    when: on_success
+    paths:
+    - "$CI_PROJECT_DIR/rpmbuild/sles/panhandle-*.x86_64.rpm"
+  only:
+    - schedules
+    - triggers
+
+build-rpm-suse-15.7_aarch64:
+  stage: build-rpm
+  image: registry.suse.com/suse/sle15:15.7
+  before_script:
+    - zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
+    - ldd --version
+    - curl https://sh.rustup.rs -sSf | sh -s -- -y
+    - source ~/.cargo/env
+    - cd panhandle/
+    - ~/.cargo/bin/rustup toolchain install stable
+    - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
+    - ~/.cargo/bin/cargo update
+  script:
+    ## aarch64 build
+    - ~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu
+    - ~/.cargo/bin/cargo build --config ../.runner-config.toml --target=aarch64-unknown-linux-gnu --bin panhandle --release --all-features
+    - export CARGO_TARGET_DIR="./target/aarch64-unknown-linux-gnu"
+    - strip -s $CARGO_TARGET_DIR/release/panhandle
+    - ~/.cargo/bin/cargo  generate-rpm --arch aarch64 --package panhandle --output $CI_PROJECT_DIR/rpmbuild/sles/
+    - mv $CI_PROJECT_DIR/rpmbuild/sles/panhandle-*.aarch64.rpm $CI_PROJECT_DIR/rpmbuild/sles/panhandle-$VERSION-$RELEASE.sle15-7.aarch64.rpm
+    # clean
+    - ~/.cargo/bin/cargo clean
+  artifacts:
+    when: on_success
+    paths:
+    - "$CI_PROJECT_DIR/rpmbuild/sles/panhandle-*.aarch64.rpm"
+  only:
+    - schedules
+    - triggers
+  tags:
+    - aarch64
+    - openshift-arm
+    - kubernetes-arm
+

@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs)]
 use aya_ebpf::{
     cty::c_long,
     helpers::{bpf_d_path, bpf_get_current_comm},

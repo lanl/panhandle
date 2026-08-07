@@ -1,6 +1,6 @@
 shells: true
 syscall_execve: true
-exclude_min_uid: 1
+exclude_min_uid: 0
 json: true 
 output:
   - file: /var/log/panhandle/panhandle.log

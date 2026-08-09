@@ -1,5 +1,4 @@
 #![allow(static_mut_refs)]
-use core::u8;
 
 use aya_ebpf::{
     EbpfContext,
@@ -8,7 +7,7 @@ use aya_ebpf::{
         bpf_probe_read_user_str_bytes,
     },
     macros::{map, uretprobe},
-    maps::{HashMap, PerCpuArray, PerfEventArray},
+    maps::{HashMap, RingBuf},
     programs::RetProbeContext,
 };
 use panhandle_common::Readline;
@@ -17,10 +16,9 @@ use crate::*;
 /// this is the ebpf program to access the libreadline entries via
 /// the readline or readline teardown method.
 
+// 256 KiB: Readline entries are ~440 bytes each
 #[map(name = "readline_events")]
-static mut READLINE_EVENTS: PerfEventArray<Readline> = PerfEventArray::new(0);
-#[map(name = "readline_scratch")]
-pub static READLINE_SCRATCH: PerCpuArray<Readline> = PerCpuArray::with_max_entries(1024, 0);
+static READLINE_EVENTS: RingBuf = RingBuf::with_byte_size(1 << 18, 0);
 #[map(name = "readline_uid_options")]
 static READLINE_UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
 #[map(name = "readline_uid_include_list")]
@@ -37,7 +35,7 @@ pub fn readline(ctx: RetProbeContext) -> u32 {
 
 fn try_readline(ctx: RetProbeContext) -> Result<u32, i64> {
     // get the pointer to this event
-    let ret_ptr: *const u8 = ctx.ret().unwrap();
+    let ret_ptr: *const u8 = ctx.ret();
 
     let initial_uid: u32 = bpf_get_current_uid_gid() as u32;
     // skip event if the uid is not in the range of UIDs
@@ -53,15 +51,16 @@ fn try_readline(ctx: RetProbeContext) -> Result<u32, i64> {
         }
     }
 
-    // SAFETY: we are getting and copying a reference to our self-defined struct,
-    // the map is created on program load
+    // SAFETY: reserve space directly in the ring buffer and populate it in place; this avoids
+    // the extra copy through a scratch map that a perf array output required
+    let mut entry = READLINE_EVENTS.reserve::<Readline>(0).ok_or(0)?;
     let event: &mut Readline = unsafe {
-        let ptr: *mut Readline = READLINE_SCRATCH.get_ptr_mut(0).ok_or(0)?;
+        let ptr: *mut Readline = entry.as_mut_ptr();
+        // SAFETY: Readline only holds ints and byte arrays, and all 0s is a valid byte-pattern
+        // for each of those.
+        *ptr = core::mem::zeroed();
         &mut *ptr
     };
-    // SAFETY: Readline only holds ints and byte arrays, and all 0s is a valid byte-pattern
-    // for each of those.
-    *event = unsafe { core::mem::zeroed::<Readline>() };
 
     // add in the data from the ebpf methods related to this event
     // SAFETY: this is a core BPF method implemented in Aya, the error condition is handled by an empty bytestring
@@ -78,11 +77,7 @@ fn try_readline(ctx: RetProbeContext) -> Result<u32, i64> {
     event.tgid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
     // output the event to the userspace program
-    // SAFETY: this map is created with a custom struct, the struct is zeroed before population
-    // the map is created on program load
-    unsafe {
-        READLINE_EVENTS.output(&ctx, event, 0);
-    }
+    entry.submit(0);
 
     Ok(0)
 }

@@ -1,5 +1,8 @@
 # CHANGELOG
 
+### v1.0.17
+- updated to aya v0.14, switching execve/readline/zlentry event delivery from per-CPU perf arrays to ring buffers
+
 ### v1.0.16
 - added process blocking. Control how blocking is done using the comm-deny, comm-allow, syscalls, and block-paths options.
 

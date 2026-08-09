@@ -9,7 +9,7 @@ use panhandle_common::*;
 
 // per pid hashmap for network stats
 #[map(name = "net_stats")]
-static mut NET_STATS: HashMap<u32, NetStats> = HashMap::with_max_entries(1024, 0);
+static NET_STATS: HashMap<u32, NetStats> = HashMap::with_max_entries(1024, 0);
 
 // useful TCP states matching the struct in the kernel
 const TCP_ESTABLISHED: i32 = 1;
@@ -43,8 +43,8 @@ pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> u32 {
 }
 
 fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
-    let oldstate: i32 = unsafe { ctx.arg(1) };
-    let newstate: i32 = unsafe { ctx.arg(2) };
+    let oldstate: i32 = ctx.arg(1);
+    let newstate: i32 = ctx.arg(2);
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
     let mut stats = unsafe { NET_STATS.get(&pid).copied().unwrap_or(NetStats::new()) };
@@ -63,16 +63,14 @@ fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
         && stats.tcp_fin_wait == 0
         && stats.udp_sockets == 0;
 
-    unsafe {
-        if is_empty {
-            if stats.bytes_sent == 0 && stats.bytes_recv == 0 {
-                let _ = NET_STATS.remove(&pid);
-            } else {
-                let _ = NET_STATS.insert(&pid, &stats, 0);
-            }
+    if is_empty {
+        if stats.bytes_sent == 0 && stats.bytes_recv == 0 {
+            let _ = NET_STATS.remove(&pid);
         } else {
             let _ = NET_STATS.insert(&pid, &stats, 0);
         }
+    } else {
+        let _ = NET_STATS.insert(&pid, &stats, 0);
     }
 
     Ok(0)
@@ -99,9 +97,7 @@ fn try_tcp_sendmsg(ctx: ProbeContext) -> Result<u32, u32> {
         stats.bytes_sent += size as u64;
         stats.packets_sent += 1;
 
-        unsafe {
-            let _ = NET_STATS.insert(&pid, &stats, 0);
-        }
+        let _ = NET_STATS.insert(&pid, &stats, 0);
     }
 
     Ok(0)
@@ -128,9 +124,7 @@ fn try_tcp_cleanup_rbuf(ctx: ProbeContext) -> Result<u32, u32> {
         stats.bytes_recv += copied as u64;
         stats.packets_recv += 1;
 
-        unsafe {
-            let _ = NET_STATS.insert(&pid, &stats, 0);
-        }
+        let _ = NET_STATS.insert(&pid, &stats, 0);
     }
 
     Ok(0)
@@ -162,9 +156,7 @@ fn try_udp_sendmsg(ctx: ProbeContext) -> Result<u32, u32> {
         stats.packets_sent += 1;
     }
 
-    unsafe {
-        let _ = NET_STATS.insert(&pid, &stats, 0);
-    }
+    let _ = NET_STATS.insert(&pid, &stats, 0);
 
     Ok(0)
 }
@@ -190,9 +182,7 @@ fn try_udp_recvmsg(ctx: ProbeContext) -> Result<u32, u32> {
         stats.bytes_recv += size as u64;
         stats.packets_recv += 1;
 
-        unsafe {
-            let _ = NET_STATS.insert(&pid, &stats, 0);
-        }
+        let _ = NET_STATS.insert(&pid, &stats, 0);
     }
 
     Ok(0)

@@ -54,7 +54,7 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
         return Ok(0);
     }
 
-    let f: *const file = unsafe { ctx.arg(0) };
+    let f: *const file = ctx.arg(0);
 
     let ptr = PATH_SCRATCH.get_ptr_mut(0).ok_or(0i32)?;
     let scratch = unsafe { &mut *ptr };
@@ -63,17 +63,11 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
 
     #[cfg(bpf_target_arch = "aarch64")]
     let buf_ptr = scratch.buf.as_mut_ptr() as *mut u8;
-    
+
     #[cfg(not(bpf_target_arch = "aarch64"))]
     let buf_ptr = scratch.buf.as_mut_ptr() as *mut i8;
 
-    let ret: c_long = unsafe {
-        bpf_d_path(
-            path_ptr as *mut _,
-            buf_ptr,
-            PATH_SIZE as u32,
-        )
-    };
+    let ret: c_long = unsafe { bpf_d_path(path_ptr as *mut _, buf_ptr, PATH_SIZE as u32) };
 
     if ret > 0 {
         let len = (ret as usize) & PATH_MASK;

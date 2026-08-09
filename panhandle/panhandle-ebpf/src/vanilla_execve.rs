@@ -9,15 +9,14 @@ use aya_ebpf::{
         bpf_ktime_get_boot_ns, bpf_probe_read_user_str_bytes,
     },
     macros::{map, tracepoint},
-    maps::{PerCpuArray, PerfEventArray, RingBuf},
+    maps::RingBuf,
     programs::TracePointContext,
 };
 use panhandle_common::*;
 
-#[map]
-pub static EXECVE_SCRATCH: PerCpuArray<ExecveEvent> = PerCpuArray::with_max_entries(1024, 0);
+// 1 MiB: ExecveEvent is ~11KB, so this comfortably buffers bursts of execve activity
 #[map(name = "vanilla_execve_events")]
-static mut EXECVE_EVENTS: PerfEventArray<ExecveEvent> = PerfEventArray::new(0);
+static EXECVE_EVENTS: RingBuf = RingBuf::with_byte_size(1 << 20, 0);
 
 #[tracepoint]
 pub fn monitor_execve(ctx: TracePointContext) -> u32 {
@@ -27,13 +26,16 @@ pub fn monitor_execve(ctx: TracePointContext) -> u32 {
     }
 }
 
-fn try_monitor_execve(ctx: TracePointContext) -> Result<u32, i64> {
+fn try_monitor_execve(_ctx: TracePointContext) -> Result<u32, i64> {
     let uid: u32 = bpf_get_current_uid_gid() as u32;
     if (uid >= MINUID) && (uid <= MAXUID) {
-        // SAFETY: we are getting and copying a reference to our self-defined struct,
-        // the map is created on program load
+        // SAFETY: reserve space directly in the ring buffer and populate it in place; this
+        // avoids the extra copy through a scratch map that a perf array output required.
+        // Note: as in the prior scratch-buffer version, only the fields below are populated -
+        // argv/envp/filename are left as whatever bytes the reservation happened to contain.
+        let mut entry = EXECVE_EVENTS.reserve::<ExecveEvent>(0).ok_or(0)?;
         let event: &mut ExecveEvent = unsafe {
-            let ptr: *mut ExecveEvent = EXECVE_SCRATCH.get_ptr_mut(0).ok_or(0)?;
+            let ptr: *mut ExecveEvent = entry.as_mut_ptr();
             &mut *ptr
         };
         event.command = bpf_get_current_comm()?;
@@ -44,11 +46,7 @@ fn try_monitor_execve(ctx: TracePointContext) -> Result<u32, i64> {
         event.timestamp = unsafe { bpf_ktime_get_boot_ns() };
         //info!(&ctx, "filename: {}, command: {}, uid: {}, pid: {}, gid: {}, tgid: {}", event.filename, event.command, event.uid, event.pid, event.gid, event.tgid);
 
-        // SAFETY: this map is created with a custom struct, the struct is zeroed before population
-        // the map is created on program load
-        unsafe {
-            EXECVE_EVENTS.output(&ctx, event, 0);
-        }
+        entry.submit(0);
     }
     Ok(0)
 }

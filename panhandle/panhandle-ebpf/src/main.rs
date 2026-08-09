@@ -3,16 +3,14 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 #![allow(static_mut_refs)]
-use core::u8;
 
 use aya_ebpf::{
-    bindings::BPF_F_RDONLY,
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
         bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
     macros::{map, tracepoint},
-    maps::{HashMap, PerCpuArray, PerfEventArray},
+    maps::{HashMap, RingBuf},
     programs::TracePointContext,
 };
 use panhandle_common::*;
@@ -24,11 +22,9 @@ mod vanilla_execve;
 mod vmlinux;
 mod zlentry;
 
+// 1 MiB: ExecveEvent is ~11KB, so this comfortably buffers bursts of execve activity
 #[map(name = "panhandle_execve_events")]
-static mut PANHANDLE_EVENTS: PerfEventArray<ExecveEvent> = PerfEventArray::new(0);
-#[map(name = "panhandle_scratch")]
-pub static PANHANDLE_SCRATCH: PerCpuArray<ExecveEvent> =
-    PerCpuArray::with_max_entries(1024, BPF_F_RDONLY);
+static PANHANDLE_EVENTS: RingBuf = RingBuf::with_byte_size(1 << 20, 0);
 #[map(name = "uid_options")]
 static UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
 #[map(name = "uid_include_list")]
@@ -54,7 +50,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     // Get the comm (process name)
     let command: [u8; 16] = match bpf_get_current_comm() {
         Ok(c) => c,
-        Err(ret) => return Err(ret),
+        Err(ret) => return Err(ret as i64),
     };
 
     // filter out commands if shells
@@ -83,15 +79,16 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
 
     // iterate over the argv info and copy to struct in the map
     if !data.argv.is_null() {
-        // SAFETY: we are getting and copying a reference to our self-defined struct,
-        // the map is created on program load
+        // SAFETY: reserve space directly in the ring buffer and populate it in place; this
+        // avoids the extra copy through a scratch map that a perf array output required
+        let mut entry = PANHANDLE_EVENTS.reserve::<ExecveEvent>(0).ok_or(0)?;
         let event_data: &mut ExecveEvent = unsafe {
-            let ptr: *mut ExecveEvent = PANHANDLE_SCRATCH.get_ptr_mut(0).ok_or(0)?;
+            let ptr: *mut ExecveEvent = entry.as_mut_ptr();
+            // SAFETY: ExecveEvent only holds ints and byte arrays, and all 0s is a valid
+            // byte-pattern for each of those.
+            *ptr = core::mem::zeroed();
             &mut *ptr
         };
-        // SAFETY: ExecveEvent only holds ints and byte arrays, and all 0s is a valid byte-pattern
-        // for each of those.
-        *event_data = unsafe { core::mem::zeroed::<ExecveEvent>() };
         // SAFETY: this is a core BPF method implemented in Aya
         unsafe {
             bpf_probe_read_user_str_bytes(
@@ -137,11 +134,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
         event_data.tgid = (bpf_get_current_pid_tgid() >> 32) as u32;
         event_data.command = command;
 
-        // SAFETY: this map is created with a custom struct, the struct is zeroed before population
-        // the map is created on program load
-        unsafe {
-            PANHANDLE_EVENTS.output(&ctx, event_data, 0);
-        }
+        entry.submit(0);
     }
     Ok(0)
 }

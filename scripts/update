@@ -5,4 +5,4 @@ cargo clean
 cargo update --verbose
 cargo fmt --all
 cargo deny check
-cargo sbom > ../panhandle-sbom.spdx
+cargo sbom --project-directory .. > ../panhandle-sbom.spdx

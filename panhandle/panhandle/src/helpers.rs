@@ -1,8 +1,8 @@
 use aya::Btf;
 use aya::programs::{KProbe, Lsm};
-use aya::maps::perf::AsyncPerfEventArrayBuffer;
+use aya::maps::{MapData, RingBuf};
 use procfs::process::Process;
-use tokio::{net::lookup_host, time::Duration};
+use tokio::{io::unix::AsyncFd, net::lookup_host, time::Duration};
 use port_check::*;
 use std::{fs::canonicalize, sync::Arc};
 use url::Url;
@@ -10,8 +10,17 @@ use reqwest::{Client, Error, Response, header::CONTENT_TYPE};
 use simplelog::{debug, error, info};
 use syslog::{Error as SyslogError, Facility, Formatter3164};
 use uzers::get_user_by_uid;
-use bytes::BytesMut;
 use chrono::prelude::*;
+
+/// Reconstruct an owned, `#[repr(C)]`/`Copy` event struct from a ring buffer item. Ring buffer
+/// reservations are always contiguous (unlike perf array samples), so no head/tail
+/// reconstruction is needed here.
+///
+/// SAFETY: `T` must be exactly the plain-old-data struct written by the corresponding
+/// `RingBuf::submit` call on the eBPF side, with `bytes.len() >= size_of::<T>()`.
+pub(crate) unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
+    unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const T) }
+}
 
 // this is the local import section
 use panhandle_common::*;
@@ -19,8 +28,7 @@ use panhandle_common::*;
 /// this is a method to handle the display of the shell (bash, zsh) ebpf events
 pub async fn consume_shell_ebpf_map(
     client: &Client,
-    mut buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
-    mut buffers: Vec<BytesMut>,
+    mut async_fd: AsyncFd<RingBuf<MapData>>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
     http: bool,
@@ -35,14 +43,23 @@ pub async fn consume_shell_ebpf_map(
 
     // main cpu loop
     loop {
-        let events: aya::maps::perf::Events = buf.read_events(&mut buffers).await.unwrap();
-        for buf in buffers.iter_mut().take(events.read) {
-            // read the event
-            let ptr: *const Readline = buf.as_ptr() as *const Readline;
-            // SAFETY: derefernce the pointer that we created in ebpf-land
-            // this is implemented by a shared struct and zero'd on the ebpf side for consistency
-            let data: &Readline = unsafe { &*ptr };
+        let Ok(mut guard) = async_fd.readable_mut().await else {
+            continue;
+        };
 
+        // drain the currently-readable items into owned copies before doing any async work,
+        // since the ring buffer only hands out borrowed slices while the guard is held
+        let mut events: Vec<Readline> = Vec::new();
+        let ring_buf = guard.get_inner_mut();
+        while let Some(item) = ring_buf.next() {
+            if item.len() >= core::mem::size_of::<Readline>() {
+                // SAFETY: this is implemented by a shared struct and zero'd on the ebpf side for consistency
+                events.push(unsafe { read_ring_item::<Readline>(&item) });
+            }
+        }
+        guard.clear_ready();
+
+        for data in &events {
             // process the command to fix artifacts in the scratch
             let mut command: &str = core::str::from_utf8(&data.command)
                 .unwrap_or_default()
@@ -52,7 +69,7 @@ pub async fn consume_shell_ebpf_map(
             }
 
             // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.contains(&command.to_string()) {
+            if !executable_vec.is_empty() && !executable_vec.iter().any(|s| s == command) {
                 debug!(
                     "skipping event with path: '{}' not in the list to monitor: '{:?}'",
                     command, &executable_vec
@@ -161,8 +178,7 @@ pub async fn consume_shell_ebpf_map(
 /// this is a method to handle the display of the execve ebpf events
 pub async fn consume_execve_ebpf_map(
     client: &Client,
-    mut buf: AsyncPerfEventArrayBuffer<aya::maps::MapData>,
-    mut buffers: Vec<BytesMut>,
+    mut async_fd: AsyncFd<RingBuf<MapData>>,
     ref_executable_vec: Vec<String>,
     global_url: Arc<String>,
     http: bool,
@@ -177,14 +193,23 @@ pub async fn consume_execve_ebpf_map(
 
     // main cpu loop
     loop {
-        let events: aya::maps::perf::Events = buf.read_events(&mut buffers).await.unwrap();
-        for buf in buffers.iter_mut().take(events.read) {
-            // read the event
-            let ptr: *const ExecveEvent = buf.as_ptr() as *const ExecveEvent;
-            // SAFETY: derefernce the pointer that we created in ebpf-land
-            // this is implemented by a shared struct and zero'd on the ebpf side for consistency
-            let data: &ExecveEvent = unsafe { &*ptr };
+        let Ok(mut guard) = async_fd.readable_mut().await else {
+            continue;
+        };
 
+        // drain the currently-readable items into owned copies before doing any async work,
+        // since the ring buffer only hands out borrowed slices while the guard is held
+        let mut events: Vec<ExecveEvent> = Vec::new();
+        let ring_buf = guard.get_inner_mut();
+        while let Some(item) = ring_buf.next() {
+            if item.len() >= core::mem::size_of::<ExecveEvent>() {
+                // SAFETY: this is implemented by a shared struct and zero'd on the ebpf side for consistency
+                events.push(unsafe { read_ring_item::<ExecveEvent>(&item) });
+            }
+        }
+        guard.clear_ready();
+
+        for data in &events {
             // process the command to fix artifacts in the scratch
             let mut command = core::str::from_utf8(&data.command)
                 .unwrap_or_default()
@@ -202,7 +227,7 @@ pub async fn consume_execve_ebpf_map(
             }
 
             // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.contains(&filename.to_string()) {
+            if !executable_vec.is_empty() && !executable_vec.iter().any(|s| s == filename) {
                 debug!(
                     "skipping event with path: '{}' not in the list to monitor: '{:?}'",
                     filename, &executable_vec
@@ -544,6 +569,18 @@ pub async fn validate_url(url: &str) -> Result<&str, String> {
     } else {
         Ok(url) // URL found valid
     }
+}
+
+/// Whether the plain-text and/or JSON form of a message is actually needed, given the
+/// configured output channels. Mirrors `output_message`'s own selection logic below:
+/// `plain_string` is used for non-JSON http/syslog and non-debug terminal output;
+/// `json_string` is used for JSON http/syslog and debug terminal output (debug always
+/// logs the JSON form). Computing this once per report call lets callers skip building
+/// whichever string won't be used.
+pub fn output_needs(http: bool, syslog: bool, json_output: bool, debug: bool) -> (bool, bool) {
+    let needs_plain = (http || syslog) && !json_output || !debug;
+    let needs_json = (http || syslog) && json_output || debug;
+    (needs_plain, needs_json)
 }
 
 /// wrapper method to handle output formatting to syslog or http

@@ -3,32 +3,25 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 #![allow(static_mut_refs)]
-use core::u8;
 
 use aya_ebpf::{
-    bindings::BPF_F_RDONLY,
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
         bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
     macros::{map, tracepoint},
-    maps::{HashMap, PerCpuArray, PerfEventArray},
+    maps::{HashMap, RingBuf},
     programs::TracePointContext,
 };
 use panhandle_common::*;
 mod blocker;
-mod cpu_usage;
-mod readline;
+mod shell_entry;
 mod socket;
-mod vanilla_execve;
 mod vmlinux;
-mod zlentry;
 
+// 1 MiB: ExecveEvent is ~11KB, so this comfortably buffers bursts of execve activity
 #[map(name = "panhandle_execve_events")]
-static mut PANHANDLE_EVENTS: PerfEventArray<ExecveEvent> = PerfEventArray::new(0);
-#[map(name = "panhandle_scratch")]
-pub static PANHANDLE_SCRATCH: PerCpuArray<ExecveEvent> =
-    PerCpuArray::with_max_entries(1024, BPF_F_RDONLY);
+static PANHANDLE_EVENTS: RingBuf = RingBuf::with_byte_size(1 << 20, 0);
 #[map(name = "uid_options")]
 static UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
 #[map(name = "uid_include_list")]
@@ -54,7 +47,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     // Get the comm (process name)
     let command: [u8; 16] = match bpf_get_current_comm() {
         Ok(c) => c,
-        Err(ret) => return Err(ret),
+        Err(ret) => return Err(ret as i64),
     };
 
     // filter out commands if shells
@@ -83,51 +76,69 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
 
     // iterate over the argv info and copy to struct in the map
     if !data.argv.is_null() {
-        // SAFETY: we are getting and copying a reference to our self-defined struct,
-        // the map is created on program load
+        // SAFETY: reserve space directly in the ring buffer and populate it in place; this
+        // avoids the extra copy through a scratch map that a perf array output required
+        let mut entry = PANHANDLE_EVENTS.reserve::<ExecveEvent>(0).ok_or(0)?;
         let event_data: &mut ExecveEvent = unsafe {
-            let ptr: *mut ExecveEvent = PANHANDLE_SCRATCH.get_ptr_mut(0).ok_or(0)?;
+            let ptr: *mut ExecveEvent = entry.as_mut_ptr();
+            // zero out this memory in case of artifacts
+            *ptr = core::mem::zeroed();
             &mut *ptr
         };
-        // SAFETY: ExecveEvent only holds ints and byte arrays, and all 0s is a valid byte-pattern
-        // for each of those.
-        *event_data = unsafe { core::mem::zeroed::<ExecveEvent>() };
+        // Fetch the filename pointer safely without using '?'
+        let filename_ptr = unsafe {
+            match ctx.read_at::<*const u8>(FILENAME_OFFSET) {
+                Ok(ptr) => ptr,
+                Err(_) => {
+                    entry.discard(0); // Clean up the ringbuf reference before exiting!
+                    return Err(-1);
+                }
+            }
+        };
+
         // SAFETY: this is a core BPF method implemented in Aya
         unsafe {
-            bpf_probe_read_user_str_bytes(
-                ctx.read_at::<*const u8>(FILENAME_OFFSET)?,
-                &mut event_data.filename,
-            )
-            .unwrap_or(b"");
+            let _ = bpf_probe_read_user_str_bytes(filename_ptr, &mut event_data.filename);
         };
         // SAFETY: this is a core BPF method implemented in Aya
         let timestamp: u64 = unsafe { bpf_ktime_get_boot_ns() };
 
-        let envp: *const *const u8 = data.envp;
+        // Read envp with explicit bound-reassurance for the verifier
         for env in 0..ENV_COUNT {
-            // SAFETY: this is a core BPF method implemented in Aya, the null condition is handled
-            let env_ptr: *const u8 = unsafe { bpf_probe_read_user(envp.offset(env as isize)) }?;
+            let env_ptr = match unsafe { bpf_probe_read_user(data.envp.offset(env as isize)) } {
+                Ok(ptr) => ptr,
+                Err(_) => break,
+            };
             if env_ptr.is_null() {
                 break;
             }
-            // SAFETY: this is a core BPF method implemented in Aya, the error condition is handled by an empty bytestring
-            unsafe {
-                bpf_probe_read_user_str_bytes(env_ptr, &mut event_data.envp[env as usize])
-                    .unwrap_or(b"")
-            };
+
+            // Reassure the verifier that env is safely within bounds
+            if (env as usize) < ENV_COUNT {
+                unsafe {
+                    bpf_probe_read_user_str_bytes(env_ptr, &mut event_data.envp[env as usize])
+                        .unwrap_or(b"");
+                };
+            }
         }
-        let argv: *const *const u8 = data.argv;
+
+        // Read argv with explicit bound-reassurance for the verifier
         for i in 0..ARG_COUNT {
-            // SAFETY: this is a core BPF method implemented in Aya, the null condition is handled
-            let arg_ptr: *const u8 = unsafe { bpf_probe_read_user(argv.offset(i as isize)) }?;
+            let arg_ptr = match unsafe { bpf_probe_read_user(data.argv.offset(i as isize)) } {
+                Ok(ptr) => ptr,
+                Err(_) => break,
+            };
             if arg_ptr.is_null() {
                 break;
             }
-            // SAFETY: this is a core BPF method implemented in Aya, the error condition is handled by an empty bytestring
-            unsafe {
-                bpf_probe_read_user_str_bytes(arg_ptr, &mut event_data.argv[i as usize])
-                    .unwrap_or(b"")
-            };
+
+            // Reassure the verifier that i is safely within bounds
+            if (i as usize) < ARG_COUNT {
+                unsafe {
+                    bpf_probe_read_user_str_bytes(arg_ptr, &mut event_data.argv[i as usize])
+                        .unwrap_or(b"");
+                };
+            }
         }
 
         event_data.timestamp = timestamp;
@@ -137,11 +148,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
         event_data.tgid = (bpf_get_current_pid_tgid() >> 32) as u32;
         event_data.command = command;
 
-        // SAFETY: this map is created with a custom struct, the struct is zeroed before population
-        // the map is created on program load
-        unsafe {
-            PANHANDLE_EVENTS.output(&ctx, event_data, 0);
-        }
+        entry.submit(0);
     }
     Ok(0)
 }

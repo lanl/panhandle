@@ -5,8 +5,6 @@
 // used code from https://github.com/FlakM/sysrat/blob/main/ebpf/common/src/lib.rs
 use core::fmt::{self, Formatter};
 
-pub type pid_t = i32;
-
 // put all the desired shared constants here / enables not adding them to the ebpf
 // memory-limited application and also re-use in the userland application.
 pub const ARG_SIZE: usize = 400;
@@ -41,30 +39,6 @@ pub struct Readline {
     //pub regs: [u64; 31],
     //pub task: *const task_struct,
     //pub fp: [u8; ARG_SIZE],
-}
-
-// this sched switch struct is used for calculating CPU usage
-// replaced aya_ebpf data types in place of Rust ones to prevent seg fault issue when reading the sched switch kernel struct
-// see cat /sys/kernel/debug/tracing/events/sched/sched_switch/format to verify the size and signage of the data types
-#[repr(C)]
-pub struct trace_event_raw_sched_switch {
-    pub ent: trace_entry,
-    pub prev_comm: [i8; 16], // Changed from ::aya_ebpf::cty::c_char
-    pub prev_pid: pid_t,
-    pub prev_prio: i32,  // Changed from ::aya_ebpf::cty::c_int
-    pub prev_state: i64, // Changed from ::aya_ebpf::cty::c_long
-    pub next_comm: [i8; 16],
-    pub next_pid: pid_t,
-    pub next_prio: i32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct trace_entry {
-    pub type_: u16, // Changed from ::aya_ebpf::cty::c_ushort
-    pub flags: u8,  // Changed from ::aya_ebpf::cty::c_uchar
-    pub preempt_count: u8,
-    pub pid: i32, // Changed from ::aya_ebpf::cty::c_int
 }
 
 // Custom struct used for monitoring network usage

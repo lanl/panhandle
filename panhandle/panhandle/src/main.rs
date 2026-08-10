@@ -9,17 +9,16 @@ use std::{
 
 use aya::{
     Btf,
-    maps::{HashMap, PerCpuArray, perf::AsyncPerfEventArray},
-    programs::{BtfTracePoint, TracePoint, UProbe},
-    util::online_cpus,
+    maps::{HashMap, RingBuf},
+    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
-use bytes::BytesMut;
 use clap::Parser;
 use machine_info::Machine;
 use reqwest::Client;
 use simplelog::*;
 use tokio::{
+    io::{Interest, unix::AsyncFd},
     signal,
     task::JoinHandle,
     time::{Duration, sleep},
@@ -206,9 +205,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "/panhandle"
     )))?;
 
-    if let Err(e) = EbpfLogger::init(&mut ebpf) {
-        // not fatal — just means you won't see ebpf-side logs
-        eprintln!("failed to initialize eBPF logger: {e}");
+    if args.debug {
+        match EbpfLogger::init(&mut ebpf) {
+            Ok(logger) => match AsyncFd::with_interest(logger, Interest::READABLE) {
+                Ok(mut async_logger) => {
+                    tokio::spawn(async move {
+                        loop {
+                            let Ok(mut guard) = async_logger.readable_mut().await else {
+                                continue;
+                            };
+                            guard.get_inner_mut().flush();
+                            guard.clear_ready();
+                        }
+                    });
+                }
+                Err(e) => eprintln!("failed to poll eBPF logger: {e}"),
+            },
+            // not fatal — just means you won't see ebpf-side logs
+            Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
+        }
     }
 
     // set up executable vars
@@ -251,18 +266,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CPU monitoring
     let mut cpu_handle: Option<JoinHandle<()>> = None;
     if args.cpu {
-        // Load and attach the sched_switch tracepoint
-        let program: &mut TracePoint = ebpf.program_mut("sched_switch").unwrap().try_into()?;
-        program.load()?;
-        program.attach("sched", "sched_switch")?;
-
-        // Get the per pid and busy cpu time hashmaps
-        let pid_cpu_time_map = ebpf.take_map("per_cpu_time").unwrap();
-        let pid_cpu_time = HashMap::try_from(pid_cpu_time_map)?;
-
-        let busy_cpu_time_map = ebpf.take_map("busy_cpu_time").unwrap();
-        let busy_cpu_time = PerCpuArray::try_from(busy_cpu_time_map)?;
-
         let json_output = args.json;
         let debug_mode = args.debug;
         let verbose_mode = args.verbose;
@@ -285,8 +288,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             loop {
                 if let Err(e) = monitor_cpu_usage(
-                    &pid_cpu_time,
-                    &busy_cpu_time,
                     &pid_filter,
                     &json_output,
                     &http_bool,
@@ -609,7 +610,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // readline stuff
         let program: &mut UProbe = ebpf.program_mut("readline").unwrap().try_into()?;
         program.load()?;
-        program.attach(Some("readline_internal_teardown"), 0, file_string, None)?;
+        program.attach(
+            "readline_internal_teardown",
+            file_string,
+            UProbeScope::AllProcesses,
+        )?;
 
         // get the uid_options map from ebpf land
         let readline_uid_options_map = ebpf.take_map("readline_uid_options").unwrap();
@@ -642,44 +647,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // add the data to the map by index / the values will be retrieved by index in ebpf-land
         readline_uid_list_map.insert(0, zeroed_array, 0)?;
 
-        let cpus: Vec<u32> = online_cpus().unwrap();
-        let num_cpus: usize = cpus.len();
+        // Process events from the ring buffer
+        let ring_buf = RingBuf::try_from(ebpf.take_map("readline_events").unwrap())?;
+        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
 
-        // Process events from the perf buffer
-        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("readline_events").unwrap())?;
-        for cpu in cpus {
-            let buf = events.open(cpu, Some(32))?;
+        let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
+        let ref_global_url = global_url.clone();
+        let ref_syslog_address = syslog_address.clone();
+        let client = Client::new();
+        let ref_hostname = hostname.clone();
 
-            // have to clone these Vec's of Strings (due to lack of Copy trait) across the cpus for access to their data
-            let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
-            let ref_global_url = global_url.clone();
-            let ref_syslog_address = syslog_address.clone();
-            let client = Client::new();
-            let ref_hostname = hostname.clone();
-
-            // now spawn the async stuff
-            tokio::task::spawn(async move {
-                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
-                let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(1024))
-                    .collect::<Vec<_>>();
-
-                consume_shell_ebpf_map(
-                    &client,
-                    buf,
-                    buffers,
-                    ref_executable_vec,
-                    ref_global_url,
-                    http_bool,
-                    ref_syslog_address,
-                    ref_hostname,
-                    syslog_bool,
-                    args.json,
-                    args.debug,
-                )
-                .await;
-            });
-        }
+        // now spawn the async stuff
+        tokio::task::spawn(async move {
+            consume_shell_ebpf_map(
+                &client,
+                async_fd,
+                ref_executable_vec,
+                ref_global_url,
+                http_bool,
+                ref_syslog_address,
+                ref_hostname,
+                syslog_bool,
+                args.json,
+                args.debug,
+            )
+            .await;
+        });
     }
     if args.zsh {
         // canonicalize the path and then convert to string
@@ -698,7 +691,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // zlentry stuff
         let program: &mut UProbe = ebpf.program_mut("zlentry").unwrap().try_into()?;
         program.load()?;
-        program.attach(Some("zleentry"), 0, file_string, None)?;
+        program.attach("zleentry", file_string, UProbeScope::AllProcesses)?;
 
         // get the uid_options map from ebpf land
         let zlentry_uid_options_map = ebpf.take_map("zlentry_uid_options").unwrap();
@@ -731,44 +724,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // add the data to the map by index / the values will be retrieved by index in ebpf-land
         zlentry_uid_list_map.insert(0, zeroed_array, 0)?;
 
-        let cpus = online_cpus().unwrap();
-        let num_cpus = cpus.len();
+        // Process events from the ring buffer
+        let ring_buf = RingBuf::try_from(ebpf.take_map("zlentry_events").unwrap())?;
+        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
 
-        // Process events from the perf buffer
-        let mut events = AsyncPerfEventArray::try_from(ebpf.take_map("zlentry_events").unwrap())?;
-        for cpu in cpus {
-            let buf = events.open(cpu, Some(32))?;
+        let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
+        let ref_global_url = global_url.clone();
+        let ref_syslog_address = syslog_address.clone();
+        let client = Client::new();
+        let ref_hostname = hostname.clone();
 
-            // have to clone these Vec's of Strings (due to lack of Copy trait) across the cpus for access to their data
-            let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
-            let ref_global_url = global_url.clone();
-            let ref_syslog_address = syslog_address.clone();
-            let client = Client::new();
-            let ref_hostname = hostname.clone();
-
-            // now spawn the async stuff
-            tokio::task::spawn(async move {
-                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
-                let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(1024))
-                    .collect::<Vec<_>>();
-
-                consume_shell_ebpf_map(
-                    &client,
-                    buf,
-                    buffers,
-                    ref_executable_vec,
-                    ref_global_url,
-                    http_bool,
-                    ref_syslog_address,
-                    ref_hostname,
-                    syslog_bool,
-                    args.json,
-                    args.debug,
-                )
-                .await;
-            });
-        }
+        // now spawn the async stuff
+        tokio::task::spawn(async move {
+            consume_shell_ebpf_map(
+                &client,
+                async_fd,
+                ref_executable_vec,
+                ref_global_url,
+                http_bool,
+                ref_syslog_address,
+                ref_hostname,
+                syslog_bool,
+                args.json,
+                args.debug,
+            )
+            .await;
+        });
     }
     if args.syscall_execve
         || (!args.bash
@@ -818,45 +799,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // add the data to the map by index / the values will be retrieved by index in ebpf-land
         uid_list_map.insert(0, zeroed_array, 0)?;
 
-        let cpus: Vec<u32> = online_cpus().unwrap();
-        let num_cpus = cpus.len();
+        // Process events from the ring buffer
+        let ring_buf = RingBuf::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
+        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
 
-        // Process events from the perf buffer
-        let mut events =
-            AsyncPerfEventArray::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
-        for cpu in cpus {
-            let buf = events.open(cpu, Some(32))?;
+        let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
+        let ref_global_url = global_url.clone();
+        let ref_syslog_address = syslog_address.clone();
+        let client = Client::new();
+        let ref_hostname = hostname.clone();
 
-            // have to clone these Vec's of Strings (due to lack of Copy trait) across the cpus for access to their data
-            let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
-            let ref_global_url = global_url.clone();
-            let ref_syslog_address = syslog_address.clone();
-            let client = Client::new();
-            let ref_hostname = hostname.clone();
-
-            // now spawn the async stuff
-            tokio::task::spawn(async move {
-                // note: if experiencing buffer overruns after changing default values the capacity here should be tweaked
-                let buffers = (0..num_cpus)
-                    .map(|_| BytesMut::with_capacity(1024))
-                    .collect::<Vec<_>>();
-
-                consume_execve_ebpf_map(
-                    &client,
-                    buf,
-                    buffers,
-                    ref_executable_vec,
-                    ref_global_url,
-                    http_bool,
-                    ref_syslog_address,
-                    ref_hostname,
-                    syslog_bool,
-                    args.json,
-                    args.debug,
-                )
-                .await;
-            });
-        }
+        // now spawn the async stuff
+        tokio::task::spawn(async move {
+            consume_execve_ebpf_map(
+                &client,
+                async_fd,
+                ref_executable_vec,
+                ref_global_url,
+                http_bool,
+                ref_syslog_address,
+                ref_hostname,
+                syslog_bool,
+                args.json,
+                args.debug,
+            )
+            .await;
+        });
     }
     debug!("monitoring for events in ebpf-land...");
     // await the escape signal - this may need to change based on the method of running the program

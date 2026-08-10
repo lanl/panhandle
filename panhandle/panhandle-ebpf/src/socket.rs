@@ -9,7 +9,7 @@ use panhandle_common::*;
 
 // per pid hashmap for network stats
 #[map(name = "net_stats")]
-static NET_STATS: HashMap<u32, NetStats> = HashMap::with_max_entries(1024, 0);
+static NET_STATS: HashMap<u32, NetStats> = HashMap::with_max_entries(256, 0);
 
 // useful TCP states matching the struct in the kernel
 const TCP_ESTABLISHED: i32 = 1;

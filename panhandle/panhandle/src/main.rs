@@ -205,23 +205,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "/panhandle"
     )))?;
 
-    match EbpfLogger::init(&mut ebpf) {
-        Ok(logger) => match AsyncFd::with_interest(logger, Interest::READABLE) {
-            Ok(mut async_logger) => {
-                tokio::spawn(async move {
-                    loop {
-                        let Ok(mut guard) = async_logger.readable_mut().await else {
-                            continue;
-                        };
-                        guard.get_inner_mut().flush();
-                        guard.clear_ready();
-                    }
-                });
-            }
-            Err(e) => eprintln!("failed to poll eBPF logger: {e}"),
-        },
-        // not fatal — just means you won't see ebpf-side logs
-        Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
+    if args.debug {
+        match EbpfLogger::init(&mut ebpf) {
+            Ok(logger) => match AsyncFd::with_interest(logger, Interest::READABLE) {
+                Ok(mut async_logger) => {
+                    tokio::spawn(async move {
+                        loop {
+                            let Ok(mut guard) = async_logger.readable_mut().await else {
+                                continue;
+                            };
+                            guard.get_inner_mut().flush();
+                            guard.clear_ready();
+                        }
+                    });
+                }
+                Err(e) => eprintln!("failed to poll eBPF logger: {e}"),
+            },
+            // not fatal — just means you won't see ebpf-side logs
+            Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
+        }
     }
 
     // set up executable vars

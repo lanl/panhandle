@@ -1,5 +1,7 @@
-use procfs::CurrentSI;
-use procfs::process::{Process, all_processes};
+use procfs::{
+    CurrentSI,
+    process::{Process, all_processes},
+};
 use reqwest::Client;
 extern crate simplelog;
 use std::sync::Arc;

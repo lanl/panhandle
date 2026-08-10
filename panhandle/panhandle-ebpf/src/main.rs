@@ -83,45 +83,63 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
             let ptr: *mut ExecveEvent = entry.as_mut_ptr();
             // SAFETY: ExecveEvent only holds ints and byte arrays, and all 0s is a valid
             // byte-pattern for each of those.
-            *ptr = core::mem::zeroed();
+            //*ptr = core::mem::zeroed();
             &mut *ptr
         };
+        // Fetch the filename pointer safely without using '?'
+        let filename_ptr = unsafe {
+            match ctx.read_at::<*const u8>(FILENAME_OFFSET) {
+                Ok(ptr) => ptr,
+                Err(_) => {
+                    entry.discard(0); // Clean up the ringbuf reference before exiting!
+                    return Err(-1);
+                }
+            }
+        };
+
         // SAFETY: this is a core BPF method implemented in Aya
         unsafe {
-            bpf_probe_read_user_str_bytes(
-                ctx.read_at::<*const u8>(FILENAME_OFFSET)?,
-                &mut event_data.filename,
-            )
-            .unwrap_or(b"");
+            let _ = bpf_probe_read_user_str_bytes(filename_ptr, &mut event_data.filename);
         };
         // SAFETY: this is a core BPF method implemented in Aya
         let timestamp: u64 = unsafe { bpf_ktime_get_boot_ns() };
 
-        let envp: *const *const u8 = data.envp;
+        // Read envp with explicit bound-reassurance for the verifier
         for env in 0..ENV_COUNT {
-            // SAFETY: this is a core BPF method implemented in Aya, the null condition is handled
-            let env_ptr: *const u8 = unsafe { bpf_probe_read_user(envp.offset(env as isize)) }?;
+            let env_ptr = match unsafe { bpf_probe_read_user(data.envp.offset(env as isize)) } {
+                Ok(ptr) => ptr,
+                Err(_) => break,
+            };
             if env_ptr.is_null() {
                 break;
             }
-            // SAFETY: this is a core BPF method implemented in Aya, the error condition is handled by an empty bytestring
-            unsafe {
-                bpf_probe_read_user_str_bytes(env_ptr, &mut event_data.envp[env as usize])
-                    .unwrap_or(b"")
-            };
+
+            // Reassure the verifier that env is safely within bounds
+            if (env as usize) < ENV_COUNT {
+                unsafe {
+                    bpf_probe_read_user_str_bytes(env_ptr, &mut event_data.envp[env as usize])
+                        .unwrap_or(b"");
+                };
+            }
         }
-        let argv: *const *const u8 = data.argv;
+
+        // Read argv with explicit bound-reassurance for the verifier
         for i in 0..ARG_COUNT {
-            // SAFETY: this is a core BPF method implemented in Aya, the null condition is handled
-            let arg_ptr: *const u8 = unsafe { bpf_probe_read_user(argv.offset(i as isize)) }?;
+            let arg_ptr = match unsafe { bpf_probe_read_user(data.argv.offset(i as isize)) } {
+                Ok(ptr) => ptr,
+                Err(_) => break,
+            };
             if arg_ptr.is_null() {
                 break;
             }
-            // SAFETY: this is a core BPF method implemented in Aya, the error condition is handled by an empty bytestring
-            unsafe {
-                bpf_probe_read_user_str_bytes(arg_ptr, &mut event_data.argv[i as usize])
-                    .unwrap_or(b"")
-            };
+
+            // Reassure the verifier that i is safely within bounds
+            if (i as usize) < ARG_COUNT {
+                unsafe {
+                    bpf_probe_read_user_str_bytes(arg_ptr, &mut event_data.argv[i as usize])
+                        .unwrap_or(b"");
+                };
+            }
         }
 
         event_data.timestamp = timestamp;

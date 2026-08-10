@@ -81,9 +81,8 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
         let mut entry = PANHANDLE_EVENTS.reserve::<ExecveEvent>(0).ok_or(0)?;
         let event_data: &mut ExecveEvent = unsafe {
             let ptr: *mut ExecveEvent = entry.as_mut_ptr();
-            // SAFETY: ExecveEvent only holds ints and byte arrays, and all 0s is a valid
-            // byte-pattern for each of those.
-            //*ptr = core::mem::zeroed();
+            // zero out this memory in case of artifacts
+            *ptr = core::mem::zeroed();
             &mut *ptr
         };
         // Fetch the filename pointer safely without using '?'

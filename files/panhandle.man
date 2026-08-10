@@ -27,7 +27,7 @@ Specify a comma separated list of absolute executable paths to exclusively monit
 Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
 .TP
 \fB--exclude-min-uid\fI <EXCLUDE_MIN_UID>\fR
-Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 1.
+Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 0.
 .TP
 \fB--exclude-max-uid\fI <EXCLUDE_MAX_UID>\fR
 Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. Defaults to 999.

@@ -39,7 +39,7 @@ pub struct RawArgs {
     #[arg(short, long, global = true)]
     pub config: Option<String>,
 
-    /// Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 1.
+    /// Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 0.
     #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
     pub exclude_min_uid: Option<u32>,
 

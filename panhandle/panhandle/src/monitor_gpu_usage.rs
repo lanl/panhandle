@@ -25,6 +25,31 @@ Per GPU messages contain:
 - Encoder/Decoder usage
 - Temperature
 */
+
+// Fully-owned per-process GPU data gathered during the blocking scan phase.
+struct GpuProcessEntry {
+    pid: u32,
+    comm: String,
+    ppid: Option<u32>,
+    parent_comm: Option<String>,
+    gpu_id: u32,
+    vram_percent: u32,
+    encoder_percent: u32,
+    decoder_percent: u32,
+}
+
+// Fully-owned per-GPU data gathered during the blocking scan phase.
+struct GpuEntry {
+    id: String,
+    gpu_percent: u32,
+    vram_percent: u32,
+    vram_mb: u64,
+    encoder_percent: u32,
+    decoder_percent: u32,
+    temperature: u32,
+    processes: Vec<GpuProcessEntry>,
+}
+
 pub async fn monitor_gpu_usage(
     machine: &Machine,
     json_output: &bool,
@@ -38,82 +63,136 @@ pub async fn monitor_gpu_usage(
     client: &Client,
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    for gpu in machine.graphics_status() {
-        for process in gpu.processes {
-            if let Some(pids) = pid_list
-                && !pids.contains(&{ process.pid })
-            {
-                continue;
+    let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
+
+    // Gather the NVML query and procfs lookups up front (off the async executor) so the
+    // reporting loop below only does formatting/output work.
+    let gpus: Vec<GpuEntry> = tokio::task::block_in_place(|| {
+        let mut gpus = Vec::new();
+
+        for gpu in machine.graphics_status() {
+            let mut processes = Vec::new();
+
+            for process in gpu.processes {
+                if let Some(pids) = pid_list
+                    && !pids.contains(&{ process.pid })
+                {
+                    continue;
+                }
+
+                let comm = if process.pid > 0 {
+                    get_process_name(process.pid).unwrap_or_else(|| "unknown".to_string())
+                } else {
+                    "unknown".to_string()
+                };
+
+                // Retrieve parent process info only if verbose flag is set
+                let (ppid, parent_comm) = if *verbose {
+                    if let Ok(parent_pid) = get_parent_pid(process.pid) {
+                        let parent_name =
+                            get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
+                        (Some(parent_pid), Some(parent_name))
+                    } else {
+                        (Some(0), Some("unknown".to_string()))
+                    }
+                } else {
+                    (None, None)
+                };
+
+                processes.push(GpuProcessEntry {
+                    pid: process.pid,
+                    comm,
+                    ppid,
+                    parent_comm,
+                    gpu_id: process.gpu,
+                    vram_percent: process.memory,
+                    encoder_percent: process.encoder,
+                    decoder_percent: process.decoder,
+                });
             }
 
-            let comm = if process.pid > 0 {
-                get_process_name(process.pid).unwrap_or_else(|| "unknown".to_string())
-            } else {
-                "unknown".to_string()
-            };
+            gpus.push(GpuEntry {
+                id: gpu.id,
+                gpu_percent: gpu.gpu,
+                vram_percent: gpu.memory_usage,
+                vram_mb: gpu.memory_used / (1024 * 1024),
+                encoder_percent: gpu.encoder,
+                decoder_percent: gpu.decoder,
+                temperature: gpu.temperature,
+                processes,
+            });
+        }
 
-            // Retrieve parent process info only if verbose flag is set
-            let (ppid, parent_comm) = if *verbose {
-                if let Ok(parent_pid) = get_parent_pid(process.pid) {
-                    let parent_name =
-                        get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
-                    (Some(parent_pid), Some(parent_name))
-                } else {
-                    (Some(0), Some("unknown".to_string()))
-                }
-            } else {
-                (None, None)
-            };
+        gpus
+    });
 
+    for gpu in gpus {
+        for process in gpu.processes {
             let (plain_string, json_string) = if *verbose {
-                let ppid_val = ppid.unwrap_or(0);
-                let parent_comm_val = parent_comm.as_deref().unwrap_or("unknown");
+                let ppid_val = process.ppid.unwrap_or(0);
+                let parent_comm_val = process.parent_comm.as_deref().unwrap_or("unknown");
 
-                let plain = format!(
-                    "Type: gpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
-                    process.pid,
-                    comm,
-                    ppid_val,
-                    parent_comm_val,
-                    process.gpu,
-                    process.memory,
-                    process.encoder,
-                    process.decoder
-                );
+                let plain = if needs_plain {
+                    format!(
+                        "Type: gpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
+                        process.pid,
+                        process.comm,
+                        ppid_val,
+                        parent_comm_val,
+                        process.gpu_id,
+                        process.vram_percent,
+                        process.encoder_percent,
+                        process.decoder_percent
+                    )
+                } else {
+                    String::new()
+                };
 
-                let json = format!(
-                    "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
-                    process.pid,
-                    comm,
-                    ppid_val,
-                    parent_comm_val,
-                    process.gpu,
-                    process.memory,
-                    process.encoder,
-                    process.decoder
-                );
+                let json = if needs_json {
+                    format!(
+                        "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+                        process.pid,
+                        process.comm,
+                        ppid_val,
+                        parent_comm_val,
+                        process.gpu_id,
+                        process.vram_percent,
+                        process.encoder_percent,
+                        process.decoder_percent
+                    )
+                } else {
+                    String::new()
+                };
 
                 (plain, json)
             } else {
-                let plain = format!(
-                    "Type: gpu, PID: {}, Comm: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
-                    process.pid,
-                    comm,
-                    process.gpu,
-                    process.memory,
-                    process.encoder,
-                    process.decoder
-                );
+                let plain = if needs_plain {
+                    format!(
+                        "Type: gpu, PID: {}, Comm: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
+                        process.pid,
+                        process.comm,
+                        process.gpu_id,
+                        process.vram_percent,
+                        process.encoder_percent,
+                        process.decoder_percent
+                    )
+                } else {
+                    String::new()
+                };
 
-                let json = format!(
-                    "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
-                    process.pid,
-                    comm,
-                    process.gpu,
-                    process.memory,
-                    process.encoder,
-                    process.decoder
-                );
+                let json = if needs_json {
+                    format!(
+                        "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+                        process.pid,
+                        process.comm,
+                        process.gpu_id,
+                        process.vram_percent,
+                        process.encoder_percent,
+                        process.decoder_percent
+                    )
+                } else {
+                    String::new()
+                };
 
                 (plain, json)
             };
@@ -134,16 +213,34 @@ pub async fn monitor_gpu_usage(
         }
 
         // construct the global (per gpu) messages
-        let vram_mb = gpu.memory_used / (1024 * 1024);
-
-        let plain_string = format!(
-            "Type: gpu, GPU_ID: {}, GPU_Percent: {}, VRAM_Percent: {}, VRAM_MB: {}, Encoder_Percent: {}, Decoder_Percent: {}, Temperature_C: {}",
-            gpu.id, gpu.gpu, gpu.memory_usage, vram_mb, gpu.encoder, gpu.decoder, gpu.temperature
-        );
-        let json_string = format!(
-            "{{\"Type\": \"gpu\", \"GPU_ID\": {}, \"GPU_Percent\": {}, \"VRAM_Percent\": {}, \"VRAM_MB\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}, \"Temperature_C\": {}}}",
-            gpu.id, gpu.gpu, gpu.memory_usage, vram_mb, gpu.encoder, gpu.decoder, gpu.temperature
-        );
+        let plain_string = if needs_plain {
+            format!(
+                "Type: gpu, GPU_ID: {}, GPU_Percent: {}, VRAM_Percent: {}, VRAM_MB: {}, Encoder_Percent: {}, Decoder_Percent: {}, Temperature_C: {}",
+                gpu.id,
+                gpu.gpu_percent,
+                gpu.vram_percent,
+                gpu.vram_mb,
+                gpu.encoder_percent,
+                gpu.decoder_percent,
+                gpu.temperature
+            )
+        } else {
+            String::new()
+        };
+        let json_string = if needs_json {
+            format!(
+                "{{\"Type\": \"gpu\", \"GPU_ID\": {}, \"GPU_Percent\": {}, \"VRAM_Percent\": {}, \"VRAM_MB\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}, \"Temperature_C\": {}}}",
+                gpu.id,
+                gpu.gpu_percent,
+                gpu.vram_percent,
+                gpu.vram_mb,
+                gpu.encoder_percent,
+                gpu.decoder_percent,
+                gpu.temperature
+            )
+        } else {
+            String::new()
+        };
 
         output_message(
             http,

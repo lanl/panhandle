@@ -14,6 +14,22 @@ Output messages contain:
 - Open_FDs: Current number of open file descriptors
 - Unique_Inodes: Current number of unique inodes being accessed. Usually the same as Open_FDS, but Multiple FDs can sometimes point to one inode.
  */
+
+// Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
+// loop afterward only needs to do async formatting/output work.
+struct IoEntry {
+    pid: u32,
+    comm: String,
+    ppid: Option<u32>,
+    parent_comm: Option<String>,
+    read_count: u64,
+    write_count: u64,
+    read_bytes: u64,
+    write_bytes: u64,
+    open_fds: usize,
+    unique_inodes: usize,
+}
+
 pub async fn monitor_io_usage(
     json_output: &bool,
     http: &bool,
@@ -26,92 +42,119 @@ pub async fn monitor_io_usage(
     client: &Client,
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let all_processes = match procfs::process::all_processes() {
-        Ok(procs) => procs,
-        Err(e) => {
-            if *debug {
-                eprintln!("Error reading processes: {}", e);
+    let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
+
+    // Gather all procfs data up front (off the async executor) so the reporting loop
+    // below only does formatting/output work.
+    let entries: Vec<IoEntry> = tokio::task::block_in_place(|| {
+        let mut entries = Vec::new();
+
+        let all_processes = match procfs::process::all_processes() {
+            Ok(procs) => procs,
+            Err(e) => {
+                if *debug {
+                    eprintln!("Error reading processes: {}", e);
+                }
+                return entries;
             }
-            return Ok(());
-        }
-    };
-
-    for proc_result in all_processes {
-        let proc = match proc_result {
-            Ok(p) => p,
-            Err(_) => continue,
         };
 
-        let pid = proc.pid();
+        for proc_result in all_processes {
+            let proc = match proc_result {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
 
-        if let Some(pids) = pid_list
-            && !pids.contains(&(pid as u32))
-        {
-            continue;
-        }
+            let pid = proc.pid();
 
-        let stat = match proc.stat() {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
+            if let Some(pids) = pid_list
+                && !pids.contains(&(pid as u32))
+            {
+                continue;
+            }
 
-        let io = match proc.io() {
-            Ok(io_stats) => io_stats,
-            Err(_) => continue,
-        };
+            let stat = match proc.stat() {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
 
-        let fd_path = format!("/proc/{}/fd", pid);
-        let mut unique_inodes = HashSet::new();
-        let mut fd_count = 0;
+            let io = match proc.io() {
+                Ok(io_stats) => io_stats,
+                Err(_) => continue,
+            };
 
-        if let Ok(entries) = std::fs::read_dir(&fd_path) {
-            for entry in entries.flatten() {
-                fd_count += 1;
+            let fd_path = format!("/proc/{}/fd", pid);
+            let mut unique_inodes = HashSet::new();
+            let mut fd_count = 0;
 
-                if let Ok(metadata) = entry.metadata() {
-                    unique_inodes.insert(metadata.ino());
+            if let Ok(dir_entries) = std::fs::read_dir(&fd_path) {
+                for entry in dir_entries.flatten() {
+                    fd_count += 1;
+
+                    if let Ok(metadata) = entry.metadata() {
+                        unique_inodes.insert(metadata.ino());
+                    }
                 }
             }
-        }
 
-        if io.read_bytes == 0
-            && io.write_bytes == 0
-            && io.syscr == 0
-            && io.syscw == 0
-            && unique_inodes.is_empty()
-        {
-            continue;
-        }
+            if io.read_bytes == 0
+                && io.write_bytes == 0
+                && io.syscr == 0
+                && io.syscw == 0
+                && unique_inodes.is_empty()
+            {
+                continue;
+            }
 
-        // Retrieve parent process info only if verbose flag is set
-        let (ppid, parent_comm) = if *verbose {
-            let ppid = stat.ppid as u32;
-            let parent_comm = if ppid > 0 {
-                get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+            // Retrieve parent process info only if verbose flag is set
+            let (ppid, parent_comm) = if *verbose {
+                let ppid = stat.ppid as u32;
+                let parent_comm = if ppid > 0 {
+                    get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+                } else {
+                    "unknown".to_string()
+                };
+                (Some(ppid), Some(parent_comm))
             } else {
-                "unknown".to_string()
+                (None, None)
             };
-            (Some(ppid), Some(parent_comm))
-        } else {
-            (None, None)
-        };
 
+            entries.push(IoEntry {
+                pid: pid as u32,
+                comm: stat.comm,
+                ppid,
+                parent_comm,
+                read_count: io.syscr,
+                write_count: io.syscw,
+                read_bytes: io.read_bytes,
+                write_bytes: io.write_bytes,
+                open_fds: fd_count,
+                unique_inodes: unique_inodes.len(),
+            });
+        }
+
+        entries
+    });
+
+    for entry in entries {
         report_io_and_inode_stats(
-            pid as u32,
-            &stat.comm,
-            ppid,
-            parent_comm.as_deref(),
-            io.syscr,
-            io.syscw,
-            io.read_bytes,
-            io.write_bytes,
-            fd_count,
-            unique_inodes.len(),
+            entry.pid,
+            &entry.comm,
+            entry.ppid,
+            entry.parent_comm.as_deref(),
+            entry.read_count,
+            entry.write_count,
+            entry.read_bytes,
+            entry.write_bytes,
+            entry.open_fds,
+            entry.unique_inodes,
             json_output,
             http,
             syslog,
             debug,
             verbose,
+            needs_plain,
+            needs_json,
             hostname,
             syslog_address,
             global_url,
@@ -140,6 +183,8 @@ async fn report_io_and_inode_stats(
     syslog: &bool,
     debug_mode: &bool,
     verbose: &bool,
+    needs_plain: bool,
+    needs_json: bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     http_url: &Arc<String>,
@@ -152,54 +197,72 @@ async fn report_io_and_inode_stats(
         let ppid_val = ppid.unwrap_or(0);
         let parent_comm_val = parent_comm.unwrap_or("unknown");
 
-        let plain = format!(
-            "Type: io, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
-            pid,
-            comm,
-            ppid_val,
-            parent_comm_val,
-            read_count,
-            write_count,
-            read_mb,
-            write_mb,
-            open_fds,
-            unique_inodes
-        );
+        let plain = if needs_plain {
+            format!(
+                "Type: io, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
+                pid,
+                comm,
+                ppid_val,
+                parent_comm_val,
+                read_count,
+                write_count,
+                read_mb,
+                write_mb,
+                open_fds,
+                unique_inodes
+            )
+        } else {
+            String::new()
+        };
 
-        let json_value = json!({
-            "Type": "io",
-            "PID": pid,
-            "Comm": comm,
-            "PPID": ppid_val,
-            "Parent_Comm": parent_comm_val,
-            "Read_Count": read_count,
-            "Write_Count": write_count,
-            "Read_MB": read_mb,
-            "Write_MB": write_mb,
-            "Open_FDs": open_fds,
-            "Unique_Inodes": unique_inodes,
-        });
+        let json_string = if needs_json {
+            json!({
+                "Type": "io",
+                "PID": pid,
+                "Comm": comm,
+                "PPID": ppid_val,
+                "Parent_Comm": parent_comm_val,
+                "Read_Count": read_count,
+                "Write_Count": write_count,
+                "Read_MB": read_mb,
+                "Write_MB": write_mb,
+                "Open_FDs": open_fds,
+                "Unique_Inodes": unique_inodes,
+            })
+            .to_string()
+        } else {
+            String::new()
+        };
 
-        (plain, json_value.to_string())
+        (plain, json_string)
     } else {
-        let plain = format!(
-            "Type: io, PID: {}, Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
-            pid, comm, read_count, write_count, read_mb, write_mb, open_fds, unique_inodes
-        );
+        let plain = if needs_plain {
+            format!(
+                "Type: io, PID: {}, Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
+                pid, comm, read_count, write_count, read_mb, write_mb, open_fds, unique_inodes
+            )
+        } else {
+            String::new()
+        };
 
-        let json_value = json!({
-            "Type": "io",
-            "PID": pid,
-            "Comm": comm,
-            "Read_Count": read_count,
-            "Write_Count": write_count,
-            "Read_MB": read_mb,
-            "Write_MB": write_mb,
-            "Open_FDs": open_fds,
-            "Unique_Inodes": unique_inodes,
-        });
+        let json_string = if needs_json {
+            json!({
+                "Type": "io",
+                "PID": pid,
+                "Comm": comm,
+                "Read_Count": read_count,
+                "Write_Count": write_count,
+                "Read_MB": read_mb,
+                "Write_MB": write_mb,
+                "Open_FDs": open_fds,
+                "Unique_Inodes": unique_inodes,
+            })
+            .to_string()
+        } else {
+            String::new()
+        };
 
-        (plain, json_value.to_string())
+        (plain, json_string)
     };
 
     output_message(

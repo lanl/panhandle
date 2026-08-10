@@ -2,7 +2,7 @@
 mod tests {
     use std::path::PathBuf;
 
-    use crate::{helpers::*, input_configs::*};
+    use crate::{helpers::*, input_configs::*, monitor_cpu_usage::*};
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
     #[tokio::test]
@@ -283,5 +283,126 @@ mod tests {
     async fn test_url_invalid() {
         let url_invalid = "www.invalid.com";
         assert!(validate_url(url_invalid).await.is_err());
+    }
+
+    // test that output_needs correctly determines which of plain_string/json_string
+    // output_message will actually use, for every meaningfully distinct combination of
+    // output channel flags
+    #[test]
+    fn test_output_needs() {
+        // no output channels, no debug: only the plain terminal log is used
+        assert_eq!(output_needs(false, false, false, false), (true, false));
+        // no output channels, debug on: the terminal log always uses the json form when debug
+        assert_eq!(output_needs(false, false, false, true), (false, true));
+        // http on, non-json: http uses plain, terminal (non-debug) uses plain
+        assert_eq!(output_needs(true, false, false, false), (true, false));
+        // http on, json requested: http uses json, terminal (non-debug) still uses plain
+        assert_eq!(output_needs(true, false, true, false), (true, true));
+        // http on, json requested, debug on: plain is unused by either channel now
+        assert_eq!(output_needs(true, false, true, true), (false, true));
+        // syslog behaves the same as http for channel selection
+        assert_eq!(output_needs(false, true, false, false), (true, false));
+        // json_output with no channel enabled has no effect: terminal (non-debug) still
+        // only needs plain, and nothing needs json
+        assert_eq!(output_needs(false, false, true, false), (true, false));
+        // json_output with no channel enabled but debug on: only the debug terminal path
+        // needs json
+        assert_eq!(output_needs(false, false, true, true), (false, true));
+    }
+
+    // test that read_ring_item correctly reconstructs a POD struct from its raw bytes,
+    // the same way it reconstructs Readline/ExecveEvent from a ring buffer item
+    #[test]
+    fn test_read_ring_item_roundtrip() {
+        #[repr(C)]
+        #[derive(Copy, Clone, PartialEq, Debug)]
+        struct TestEvent {
+            a: u32,
+            b: u64,
+            c: [u8; 4],
+        }
+
+        let original = TestEvent {
+            a: 42,
+            b: 123_456_789,
+            c: [1, 2, 3, 4],
+        };
+        // SAFETY: reinterpreting a repr(C) Copy struct as its own raw bytes for the test
+        let bytes: &[u8] = unsafe {
+            core::slice::from_raw_parts(
+                &original as *const TestEvent as *const u8,
+                core::mem::size_of::<TestEvent>(),
+            )
+        };
+
+        // SAFETY: bytes was constructed directly from a TestEvent of the same size above
+        let reconstructed: TestEvent = unsafe { read_ring_item(bytes) };
+        assert_eq!(original, reconstructed);
+    }
+
+    // ring buffer items can be larger than size_of::<T>() (e.g. alignment padding); the
+    // struct should be read from the front regardless of trailing bytes
+    #[test]
+    fn test_read_ring_item_ignores_trailing_bytes() {
+        #[repr(C)]
+        #[derive(Copy, Clone, PartialEq, Debug)]
+        struct TestEvent {
+            a: u32,
+        }
+
+        let original = TestEvent { a: 7 };
+        // SAFETY: reinterpreting a repr(C) Copy struct as its own raw bytes for the test
+        let mut bytes: Vec<u8> = unsafe {
+            core::slice::from_raw_parts(
+                &original as *const TestEvent as *const u8,
+                core::mem::size_of::<TestEvent>(),
+            )
+        }
+        .to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+
+        // SAFETY: bytes starts with a valid TestEvent's bytes, followed by extra padding
+        let reconstructed: TestEvent = unsafe { read_ring_item(&bytes) };
+        assert_eq!(original, reconstructed);
+    }
+
+    // test the per-PID CPU% formula: 100% = one core fully busy for the whole interval
+    #[test]
+    fn test_calc_cpu_percent() {
+        assert_eq!(calc_cpu_percent(1_000_000_000, 1_000_000_000), 100.0);
+        assert_eq!(calc_cpu_percent(500_000_000, 1_000_000_000), 50.0);
+        assert_eq!(calc_cpu_percent(0, 1_000_000_000), 0.0);
+        // multi-threaded processes can exceed 100% (200% = fully using two cores)
+        assert_eq!(calc_cpu_percent(2_000_000_000, 1_000_000_000), 200.0);
+        // a zero interval must not divide-by-zero or panic
+        assert_eq!(calc_cpu_percent(1_000_000_000, 0), 0.0);
+    }
+
+    // test the system-wide CPU% formula: normalized 0-100% across all cores
+    #[test]
+    fn test_calc_system_cpu_percent() {
+        // 1 of 4 cores fully busy for the whole interval => 25%
+        assert_eq!(
+            calc_system_cpu_percent(1_000_000_000, 1_000_000_000, 4),
+            25.0
+        );
+        // all 4 cores fully busy => 100%
+        assert_eq!(
+            calc_system_cpu_percent(4_000_000_000, 1_000_000_000, 4),
+            100.0
+        );
+        // idle system => 0%
+        assert_eq!(calc_system_cpu_percent(0, 1_000_000_000, 4), 0.0);
+        // clamped at 100% even if timing jitter pushes the raw ratio slightly over
+        assert_eq!(
+            calc_system_cpu_percent(5_000_000_000, 1_000_000_000, 4),
+            100.0
+        );
+        // a zero interval or zero cpu count must not divide-by-zero or panic
+        assert_eq!(calc_system_cpu_percent(1_000_000_000, 0, 4), 0.0);
+        assert_eq!(
+            calc_system_cpu_percent(1_000_000_000, 1_000_000_000, 0),
+            0.0
+        );
     }
 }

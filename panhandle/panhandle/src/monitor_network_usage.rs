@@ -9,6 +9,19 @@ use serde_json::json;
 
 use crate::helpers::*;
 
+// Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
+// loop afterward only needs to do async formatting/output work.
+struct NetworkEntry {
+    pid: u32,
+    comm: String,
+    ppid: Option<u32>,
+    parent_comm: Option<String>,
+    nic: String,
+    ip: String,
+    mac: String,
+    stats: NetStats,
+}
+
 /// Network monitoring main function
 pub async fn monitor_network_usage(
     net_stats_map: &HashMap<aya::maps::MapData, u32, NetStats>,
@@ -23,17 +36,30 @@ pub async fn monitor_network_usage(
     client: &Client,
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Iterate over all entries in the map
-    for (pid, stats) in net_stats_map.iter().flatten() {
-        // Skip entries with no activity
-        if !stats.has_activity() {
-            continue;
-        }
+    let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
 
-        // Get process information from procfs
-        if let Ok(proc) = Process::new(pid.try_into().unwrap())
-            && let Ok(stat) = proc.stat()
-        {
+    // Gather all procfs/netlink data up front (off the async executor) so the reporting
+    // loop below only does formatting/output work, keeping blocking I/O off the shared
+    // tokio worker threads for as short a window as possible.
+    let entries: Vec<NetworkEntry> = tokio::task::block_in_place(|| {
+        // Fetch the interface list once per poll cycle instead of once (or twice) per PID.
+        let interfaces = NetworkInterface::show().unwrap_or_default();
+        let mut entries = Vec::new();
+
+        for (pid, stats) in net_stats_map.iter().flatten() {
+            // Skip entries with no activity
+            if !stats.has_activity() {
+                continue;
+            }
+
+            // Get process information from procfs
+            let Ok(proc) = Process::new(pid.try_into().unwrap()) else {
+                continue;
+            };
+            let Ok(stat) = proc.stat() else {
+                continue;
+            };
+
             // apply PID filter if provided
             if let Some(pids) = pid_list
                 && !pids.contains(&(stat.pid as u32))
@@ -54,30 +80,47 @@ pub async fn monitor_network_usage(
                 (None, None)
             };
 
-            let (nic, ip, mac) = get_network_info(pid);
+            let (nic, ip, mac) = get_network_info(pid, &interfaces);
 
-            // send all info to print function
-            report_network_stats(
+            entries.push(NetworkEntry {
                 pid,
-                &stat.comm,
+                comm: stat.comm,
                 ppid,
-                parent_comm.as_deref(),
-                &nic,
-                &ip,
-                &mac,
-                &stats,
-                &json_output,
-                &http,
-                &syslog,
-                &debug,
-                &verbose,
-                hostname,
-                syslog_address,
-                global_url,
-                client,
-            )
-            .await;
+                parent_comm,
+                nic,
+                ip,
+                mac,
+                stats,
+            });
         }
+
+        entries
+    });
+
+    for entry in entries {
+        // send all info to print function
+        report_network_stats(
+            entry.pid,
+            &entry.comm,
+            entry.ppid,
+            entry.parent_comm.as_deref(),
+            &entry.nic,
+            &entry.ip,
+            &entry.mac,
+            &entry.stats,
+            json_output,
+            http,
+            syslog,
+            debug,
+            verbose,
+            needs_plain,
+            needs_json,
+            hostname,
+            syslog_address,
+            global_url,
+            client,
+        )
+        .await;
     }
     Ok(())
 }
@@ -92,11 +135,13 @@ async fn report_network_stats(
     ip: &str,
     mac: &str,
     stats: &NetStats,
-    json_output: &&bool,
-    http: &&bool,
-    syslog: &&bool,
-    debug_mode: &&bool,
-    verbose: &&bool,
+    json_output: &bool,
+    http: &bool,
+    syslog: &bool,
+    debug_mode: &bool,
+    verbose: &bool,
+    needs_plain: bool,
+    needs_json: bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     http_url: &Arc<String>,
@@ -106,95 +151,113 @@ async fn report_network_stats(
     let bytes_recv_mb = stats.bytes_recv / (1024 * 1024);
 
     // Build messages conditionally based on verbose flag
-    let (plain_string, json_string) = if **verbose {
+    let (plain_string, json_string) = if *verbose {
         // Verbose mode: include parent info
         let ppid = ppid.unwrap_or(0);
         let parent_comm = parent_comm.unwrap_or("unknown");
 
-        let plain = format!(
-            "Type: sock, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
-            pid,
-            comm,
-            ppid,
-            parent_comm,
-            nic,
-            ip,
-            mac,
-            stats.tcp_established,
-            stats.tcp_syn_recv,
-            stats.tcp_close_wait,
-            stats.tcp_fin_wait,
-            stats.tcp_time_wait,
-            stats.udp_sockets,
-            bytes_sent_mb,
-            bytes_recv_mb,
-            stats.packets_sent,
-            stats.packets_recv
-        );
+        let plain = if needs_plain {
+            format!(
+                "Type: sock, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                nic,
+                ip,
+                mac,
+                stats.tcp_established,
+                stats.tcp_syn_recv,
+                stats.tcp_close_wait,
+                stats.tcp_fin_wait,
+                stats.tcp_time_wait,
+                stats.udp_sockets,
+                bytes_sent_mb,
+                bytes_recv_mb,
+                stats.packets_sent,
+                stats.packets_recv
+            )
+        } else {
+            String::new()
+        };
 
-        let json_value = json!({
-            "Type": "sock",
-            "PID": pid,
-            "Comm": comm,
-            "PPID": ppid,
-            "Parent_Comm": parent_comm,
-            "NIC": nic,
-            "IP": ip,
-            "MAC": mac,
-            "ESTAB": stats.tcp_established,
-            "SYN_RECV": stats.tcp_syn_recv,
-            "CLOSE_WAIT": stats.tcp_close_wait,
-            "FIN_WAIT": stats.tcp_fin_wait,
-            "TIME_WAIT": stats.tcp_time_wait,
-            "UDP": stats.udp_sockets,
-            "MB_Sent": bytes_sent_mb,
-            "MB_Recv": bytes_recv_mb,
-            "Packets_Sent": stats.packets_sent,
-            "Packets_Recv": stats.packets_recv,
-        });
+        let json_string = if needs_json {
+            json!({
+                "Type": "sock",
+                "PID": pid,
+                "Comm": comm,
+                "PPID": ppid,
+                "Parent_Comm": parent_comm,
+                "NIC": nic,
+                "IP": ip,
+                "MAC": mac,
+                "ESTAB": stats.tcp_established,
+                "SYN_RECV": stats.tcp_syn_recv,
+                "CLOSE_WAIT": stats.tcp_close_wait,
+                "FIN_WAIT": stats.tcp_fin_wait,
+                "TIME_WAIT": stats.tcp_time_wait,
+                "UDP": stats.udp_sockets,
+                "MB_Sent": bytes_sent_mb,
+                "MB_Recv": bytes_recv_mb,
+                "Packets_Sent": stats.packets_sent,
+                "Packets_Recv": stats.packets_recv,
+            })
+            .to_string()
+        } else {
+            String::new()
+        };
 
-        (plain, json_value.to_string())
+        (plain, json_string)
     } else {
         // Non-verbose mode: exclude parent info
-        let plain = format!(
-            "Type: sock, PID: {}, Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
-            pid,
-            comm,
-            nic,
-            ip,
-            mac,
-            stats.tcp_established,
-            stats.tcp_syn_recv,
-            stats.tcp_close_wait,
-            stats.tcp_fin_wait,
-            stats.tcp_time_wait,
-            stats.udp_sockets,
-            bytes_sent_mb,
-            bytes_recv_mb,
-            stats.packets_sent,
-            stats.packets_recv
-        );
+        let plain = if needs_plain {
+            format!(
+                "Type: sock, PID: {}, Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+                pid,
+                comm,
+                nic,
+                ip,
+                mac,
+                stats.tcp_established,
+                stats.tcp_syn_recv,
+                stats.tcp_close_wait,
+                stats.tcp_fin_wait,
+                stats.tcp_time_wait,
+                stats.udp_sockets,
+                bytes_sent_mb,
+                bytes_recv_mb,
+                stats.packets_sent,
+                stats.packets_recv
+            )
+        } else {
+            String::new()
+        };
 
-        let json_value = json!({
-            "Type": "sock",
-            "PID": pid,
-            "Comm": comm,
-            "NIC": nic,
-            "IP": ip,
-            "MAC": mac,
-            "ESTAB": stats.tcp_established,
-            "SYN_RECV": stats.tcp_syn_recv,
-            "CLOSE_WAIT": stats.tcp_close_wait,
-            "FIN_WAIT": stats.tcp_fin_wait,
-            "TIME_WAIT": stats.tcp_time_wait,
-            "UDP": stats.udp_sockets,
-            "MB_Sent": bytes_sent_mb,
-            "MB_Recv": bytes_recv_mb,
-            "Packets_Sent": stats.packets_sent,
-            "Packets_Recv": stats.packets_recv,
-        });
+        let json_string = if needs_json {
+            json!({
+                "Type": "sock",
+                "PID": pid,
+                "Comm": comm,
+                "NIC": nic,
+                "IP": ip,
+                "MAC": mac,
+                "ESTAB": stats.tcp_established,
+                "SYN_RECV": stats.tcp_syn_recv,
+                "CLOSE_WAIT": stats.tcp_close_wait,
+                "FIN_WAIT": stats.tcp_fin_wait,
+                "TIME_WAIT": stats.tcp_time_wait,
+                "UDP": stats.udp_sockets,
+                "MB_Sent": bytes_sent_mb,
+                "MB_Recv": bytes_recv_mb,
+                "Packets_Sent": stats.packets_sent,
+                "Packets_Recv": stats.packets_recv,
+            })
+            .to_string()
+        } else {
+            String::new()
+        };
 
-        (plain, json_value.to_string())
+        (plain, json_string)
     };
 
     // Output via configured channels
@@ -214,12 +277,9 @@ async fn report_network_stats(
 }
 
 // Get network info for a PID (interface, ip, mac)
-fn get_network_info(pid: u32) -> (String, String, String) {
-    // Get all interfaces once
-    let interfaces = NetworkInterface::show().unwrap_or_default();
-
+fn get_network_info(pid: u32, interfaces: &[NetworkInterface]) -> (String, String, String) {
     // Try to match process connection to interface
-    if let Some((iface_name, ip)) = get_active_connection_info(pid)
+    if let Some((iface_name, ip)) = get_active_connection_info(pid, interfaces)
         && let Some(iface) = interfaces.iter().find(|i| i.name == iface_name)
     {
         let mac = iface
@@ -237,7 +297,7 @@ fn get_network_info(pid: u32) -> (String, String, String) {
                 .mac_addr
                 .clone()
                 .unwrap_or_else(|| "00:00:00:00:00:00".to_string());
-            return (iface.name, ip, mac);
+            return (iface.name.clone(), ip, mac);
         }
     }
 
@@ -249,7 +309,10 @@ fn get_network_info(pid: u32) -> (String, String, String) {
 }
 
 // Get interface name and IP from process connections
-fn get_active_connection_info(pid: u32) -> Option<(String, String)> {
+fn get_active_connection_info(
+    pid: u32,
+    interfaces: &[NetworkInterface],
+) -> Option<(String, String)> {
     for path in [
         format!("/proc/{}/net/tcp", pid),
         format!("/proc/{}/net/tcp6", pid),
@@ -263,7 +326,7 @@ fn get_active_connection_info(pid: u32) -> Option<(String, String)> {
                 }
 
                 if let Some(hex) = parts[1].split(':').next()
-                    && let Some((iface, ip)) = hex_to_interface(hex)
+                    && let Some((iface, ip)) = hex_to_interface(hex, interfaces)
                 {
                     return Some((iface, ip));
                 }
@@ -274,7 +337,7 @@ fn get_active_connection_info(pid: u32) -> Option<(String, String)> {
 }
 
 // Convert hex IP to interface name and IP string
-fn hex_to_interface(hex: &str) -> Option<(String, String)> {
+fn hex_to_interface(hex: &str, interfaces: &[NetworkInterface]) -> Option<(String, String)> {
     let ip = if hex.len() == 8 {
         // IPv4
         let val = u32::from_str_radix(hex, 16).ok()?;
@@ -289,11 +352,10 @@ fn hex_to_interface(hex: &str) -> Option<(String, String)> {
     }
 
     // Match IP to interface
-    let interfaces = NetworkInterface::show().ok()?;
     for iface in interfaces {
-        for addr in iface.addr {
+        for addr in &iface.addr {
             if addr.ip() == ip {
-                return Some((iface.name, ip.to_string()));
+                return Some((iface.name.clone(), ip.to_string()));
             }
         }
     }

@@ -13,8 +13,10 @@ use aya_ebpf::{
 use panhandle_common::Readline;
 
 use crate::*;
-/// this is the ebpf program to access the libreadline entries via
-/// the readline or readline teardown method.
+/// Shared implementation for capturing shell command-line entries via libreadline's
+/// (bash) or zle's (zsh) teardown hooks. Both shells need their own top-level
+/// `#[uretprobe]` function (each is attached to a different target binary/symbol), but
+/// they funnel through the same event-population logic below.
 
 // 256 KiB: Readline entries are ~440 bytes each
 #[map(name = "readline_events")]
@@ -25,35 +27,64 @@ static READLINE_UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_e
 static READLINE_UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
     HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
 
+#[map(name = "zlentry_events")]
+static ZLENTRY_EVENTS: RingBuf = RingBuf::with_byte_size(1 << 18, 0);
+#[map(name = "zlentry_uid_options")]
+static ZLENTRY_UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
+#[map(name = "zlentry_uid_include_list")]
+static ZLENTRY_UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
+    HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
+
 #[uretprobe]
 pub fn readline(ctx: RetProbeContext) -> u32 {
-    match try_readline(ctx) {
+    match try_shell_entry(
+        &ctx,
+        &READLINE_EVENTS,
+        &READLINE_UID_OPTIONS,
+        &READLINE_UID_INCLUDE_LIST,
+    ) {
         Ok(ret) => ret,
         Err(ret) => ret as u32,
     }
 }
 
-fn try_readline(ctx: RetProbeContext) -> Result<u32, i64> {
+#[uretprobe]
+pub fn zlentry(ctx: RetProbeContext) -> u32 {
+    match try_shell_entry(
+        &ctx,
+        &ZLENTRY_EVENTS,
+        &ZLENTRY_UID_OPTIONS,
+        &ZLENTRY_UID_INCLUDE_LIST,
+    ) {
+        Ok(ret) => ret,
+        Err(ret) => ret as u32,
+    }
+}
+
+fn try_shell_entry(
+    ctx: &RetProbeContext,
+    events: &RingBuf,
+    uid_options: &HashMap<u32, u32>,
+    uid_include_list: &HashMap<u32, [u32; UID_COUNT]>,
+) -> Result<u32, i64> {
     // get the pointer to this event
     let ret_ptr: *const u8 = ctx.ret();
-
     let initial_uid: u32 = bpf_get_current_uid_gid() as u32;
+
     // skip event if the uid is not in the range of UIDs
-    if exclude_uid(initial_uid, &READLINE_UID_OPTIONS) {
+    if exclude_uid(initial_uid, uid_options) {
         return Ok(0);
     }
 
     // skip if not in the include uids list
     // the uid_options map has an entry for if the uid_include_list is defined / desired in userland to reduce overhead
-    if get_bool(3, &READLINE_UID_OPTIONS) {
-        if !check_uid_in_uidarray(&initial_uid, &READLINE_UID_INCLUDE_LIST) {
-            return Ok(0);
-        }
+    if get_bool(3, uid_options) && !check_uid_in_uidarray(&initial_uid, uid_include_list) {
+        return Ok(0);
     }
 
     // SAFETY: reserve space directly in the ring buffer and populate it in place; this avoids
     // the extra copy through a scratch map that a perf array output required
-    let mut entry = READLINE_EVENTS.reserve::<Readline>(0).ok_or(0)?;
+    let mut entry = events.reserve::<Readline>(0).ok_or(0)?;
     let event: &mut Readline = unsafe {
         let ptr: *mut Readline = entry.as_mut_ptr();
         // SAFETY: Readline only holds ints and byte arrays, and all 0s is a valid byte-pattern

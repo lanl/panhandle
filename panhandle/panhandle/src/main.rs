@@ -9,7 +9,7 @@ use std::{
 
 use aya::{
     Btf,
-    maps::{HashMap, PerCpuArray, RingBuf},
+    maps::{HashMap, RingBuf},
     programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
@@ -264,18 +264,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CPU monitoring
     let mut cpu_handle: Option<JoinHandle<()>> = None;
     if args.cpu {
-        // Load and attach the sched_switch tracepoint
-        let program: &mut TracePoint = ebpf.program_mut("sched_switch").unwrap().try_into()?;
-        program.load()?;
-        program.attach("sched", "sched_switch")?;
-
-        // Get the per pid and busy cpu time hashmaps
-        let pid_cpu_time_map = ebpf.take_map("per_cpu_time").unwrap();
-        let pid_cpu_time = HashMap::try_from(pid_cpu_time_map)?;
-
-        let busy_cpu_time_map = ebpf.take_map("busy_cpu_time").unwrap();
-        let busy_cpu_time = PerCpuArray::try_from(busy_cpu_time_map)?;
-
         let json_output = args.json;
         let debug_mode = args.debug;
         let verbose_mode = args.verbose;
@@ -298,8 +286,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             loop {
                 if let Err(e) = monitor_cpu_usage(
-                    &pid_cpu_time,
-                    &busy_cpu_time,
                     &pid_filter,
                     &json_output,
                     &http_bool,

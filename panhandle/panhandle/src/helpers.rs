@@ -18,7 +18,7 @@ use chrono::prelude::*;
 ///
 /// SAFETY: `T` must be exactly the plain-old-data struct written by the corresponding
 /// `RingBuf::submit` call on the eBPF side, with `bytes.len() >= size_of::<T>()`.
-unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
+pub(crate) unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
     unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const T) }
 }
 
@@ -69,7 +69,7 @@ pub async fn consume_shell_ebpf_map(
             }
 
             // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.contains(&command.to_string()) {
+            if !executable_vec.is_empty() && !executable_vec.iter().any(|s| s == command) {
                 debug!(
                     "skipping event with path: '{}' not in the list to monitor: '{:?}'",
                     command, &executable_vec
@@ -227,7 +227,7 @@ pub async fn consume_execve_ebpf_map(
             }
 
             // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.contains(&filename.to_string()) {
+            if !executable_vec.is_empty() && !executable_vec.iter().any(|s| s == filename) {
                 debug!(
                     "skipping event with path: '{}' not in the list to monitor: '{:?}'",
                     filename, &executable_vec
@@ -569,6 +569,18 @@ pub async fn validate_url(url: &str) -> Result<&str, String> {
     } else {
         Ok(url) // URL found valid
     }
+}
+
+/// Whether the plain-text and/or JSON form of a message is actually needed, given the
+/// configured output channels. Mirrors `output_message`'s own selection logic below:
+/// `plain_string` is used for non-JSON http/syslog and non-debug terminal output;
+/// `json_string` is used for JSON http/syslog and debug terminal output (debug always
+/// logs the JSON form). Computing this once per report call lets callers skip building
+/// whichever string won't be used.
+pub fn output_needs(http: bool, syslog: bool, json_output: bool, debug: bool) -> (bool, bool) {
+    let needs_plain = (http || syslog) && !json_output || !debug;
+    let needs_json = (http || syslog) && json_output || debug;
+    (needs_plain, needs_json)
 }
 
 /// wrapper method to handle output formatting to syslog or http

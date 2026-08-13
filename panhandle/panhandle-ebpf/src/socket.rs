@@ -5,6 +5,7 @@ use aya_ebpf::{
     maps::HashMap,
     programs::{BtfTracePointContext, ProbeContext},
 };
+use aya_log_ebpf::warn;
 use panhandle_common::*;
 
 // per pid hashmap for network stats
@@ -66,11 +67,11 @@ fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
     if is_empty {
         if stats.bytes_sent == 0 && stats.bytes_recv == 0 {
             let _ = NET_STATS.remove(&pid);
-        } else {
-            let _ = NET_STATS.insert(&pid, &stats, 0);
+        } else if NET_STATS.insert(&pid, &stats, 0).is_err() {
+            warn!(&ctx, "net_stats map full, dropping update for pid {}", pid);
         }
-    } else {
-        let _ = NET_STATS.insert(&pid, &stats, 0);
+    } else if NET_STATS.insert(&pid, &stats, 0).is_err() {
+        warn!(&ctx, "net_stats map full, dropping update for pid {}", pid);
     }
 
     Ok(0)
@@ -97,7 +98,9 @@ fn try_tcp_sendmsg(ctx: ProbeContext) -> Result<u32, u32> {
         stats.bytes_sent += size as u64;
         stats.packets_sent += 1;
 
-        let _ = NET_STATS.insert(&pid, &stats, 0);
+        if NET_STATS.insert(&pid, &stats, 0).is_err() {
+            warn!(&ctx, "net_stats map full, dropping update for pid {}", pid);
+        }
     }
 
     Ok(0)
@@ -124,7 +127,9 @@ fn try_tcp_cleanup_rbuf(ctx: ProbeContext) -> Result<u32, u32> {
         stats.bytes_recv += copied as u64;
         stats.packets_recv += 1;
 
-        let _ = NET_STATS.insert(&pid, &stats, 0);
+        if NET_STATS.insert(&pid, &stats, 0).is_err() {
+            warn!(&ctx, "net_stats map full, dropping update for pid {}", pid);
+        }
     }
 
     Ok(0)
@@ -156,7 +161,9 @@ fn try_udp_sendmsg(ctx: ProbeContext) -> Result<u32, u32> {
         stats.packets_sent += 1;
     }
 
-    let _ = NET_STATS.insert(&pid, &stats, 0);
+    if NET_STATS.insert(&pid, &stats, 0).is_err() {
+        warn!(&ctx, "net_stats map full, dropping update for pid {}", pid);
+    }
 
     Ok(0)
 }
@@ -182,7 +189,9 @@ fn try_udp_recvmsg(ctx: ProbeContext) -> Result<u32, u32> {
         stats.bytes_recv += size as u64;
         stats.packets_recv += 1;
 
-        let _ = NET_STATS.insert(&pid, &stats, 0);
+        if NET_STATS.insert(&pid, &stats, 0).is_err() {
+            warn!(&ctx, "net_stats map full, dropping update for pid {}", pid);
+        }
     }
 
     Ok(0)

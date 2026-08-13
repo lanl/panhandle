@@ -13,6 +13,7 @@ use aya_ebpf::{
     maps::{HashMap, RingBuf},
     programs::TracePointContext,
 };
+use aya_log_ebpf::{debug, warn};
 use panhandle_common::*;
 mod blocker;
 mod shell_entry;
@@ -41,6 +42,10 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
 
     // skip event if the uid is not in the range of UIDs
     if exclude_uid(initial_uid, &UID_OPTIONS) {
+        debug!(
+            &ctx,
+            "execve: skipping, uid {} excluded by range filter", initial_uid
+        );
         return Ok(0);
     }
 
@@ -57,6 +62,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
         let shell_bool: bool = check_shells(command);
         if !shell_bool {
             // this is *probably* not an shell
+            debug!(&ctx, "execve: skipping, comm does not match shell filter");
             return Ok(0);
         }
     }
@@ -65,6 +71,10 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     // the uid_options map has an entry for if the uid_include_list is defined / desired in userland to reduce overhead
     if get_bool(3, &UID_OPTIONS) {
         if !check_uid_in_uidarray(&initial_uid, &UID_INCLUDE_LIST) {
+            debug!(
+                &ctx,
+                "execve: skipping, uid {} not in include list", initial_uid
+            );
             return Ok(0);
         }
     }
@@ -78,7 +88,16 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     if !data.argv.is_null() {
         // SAFETY: reserve space directly in the ring buffer and populate it in place; this
         // avoids the extra copy through a scratch map that a perf array output required
-        let mut entry = PANHANDLE_EVENTS.reserve::<ExecveEvent>(0).ok_or(0)?;
+        let mut entry = match PANHANDLE_EVENTS.reserve::<ExecveEvent>(0) {
+            Some(entry) => entry,
+            None => {
+                warn!(
+                    &ctx,
+                    "execve: ring buffer full, dropping event for uid {}", initial_uid
+                );
+                return Ok(0);
+            }
+        };
         let event_data: &mut ExecveEvent = unsafe {
             let ptr: *mut ExecveEvent = entry.as_mut_ptr();
             // zero out this memory in case of artifacts

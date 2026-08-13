@@ -10,6 +10,7 @@ use aya_ebpf::{
     maps::{HashMap, RingBuf},
     programs::RetProbeContext,
 };
+use aya_log_ebpf::{debug, warn};
 use panhandle_common::Readline;
 
 use crate::*;
@@ -39,6 +40,7 @@ static ZLENTRY_UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
 pub fn readline(ctx: RetProbeContext) -> u32 {
     match try_shell_entry(
         &ctx,
+        "readline",
         &READLINE_EVENTS,
         &READLINE_UID_OPTIONS,
         &READLINE_UID_INCLUDE_LIST,
@@ -52,6 +54,7 @@ pub fn readline(ctx: RetProbeContext) -> u32 {
 pub fn zlentry(ctx: RetProbeContext) -> u32 {
     match try_shell_entry(
         &ctx,
+        "zlentry",
         &ZLENTRY_EVENTS,
         &ZLENTRY_UID_OPTIONS,
         &ZLENTRY_UID_INCLUDE_LIST,
@@ -63,6 +66,7 @@ pub fn zlentry(ctx: RetProbeContext) -> u32 {
 
 fn try_shell_entry(
     ctx: &RetProbeContext,
+    name: &str,
     events: &RingBuf,
     uid_options: &HashMap<u32, u32>,
     uid_include_list: &HashMap<u32, [u32; UID_COUNT]>,
@@ -73,18 +77,35 @@ fn try_shell_entry(
 
     // skip event if the uid is not in the range of UIDs
     if exclude_uid(initial_uid, uid_options) {
+        debug!(
+            ctx,
+            "{}: skipping, uid {} excluded by range filter", name, initial_uid
+        );
         return Ok(0);
     }
 
     // skip if not in the include uids list
     // the uid_options map has an entry for if the uid_include_list is defined / desired in userland to reduce overhead
     if get_bool(3, uid_options) && !check_uid_in_uidarray(&initial_uid, uid_include_list) {
+        debug!(
+            ctx,
+            "{}: skipping, uid {} not in include list", name, initial_uid
+        );
         return Ok(0);
     }
 
     // SAFETY: reserve space directly in the ring buffer and populate it in place; this avoids
     // the extra copy through a scratch map that a perf array output required
-    let mut entry = events.reserve::<Readline>(0).ok_or(0)?;
+    let mut entry = match events.reserve::<Readline>(0) {
+        Some(entry) => entry,
+        None => {
+            warn!(
+                ctx,
+                "{}: ring buffer full, dropping event for uid {}", name, initial_uid
+            );
+            return Ok(0);
+        }
+    };
     let event: &mut Readline = unsafe {
         let ptr: *mut Readline = entry.as_mut_ptr();
         // SAFETY: Readline only holds ints and byte arrays, and all 0s is a valid byte-pattern

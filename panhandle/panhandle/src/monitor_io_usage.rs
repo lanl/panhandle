@@ -1,4 +1,8 @@
-use std::{collections::HashSet, os::unix::fs::MetadataExt, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    os::unix::fs::MetadataExt,
+    sync::Arc,
+};
 
 use reqwest::Client;
 use serde_json::json;
@@ -22,12 +26,120 @@ struct IoEntry {
     comm: String,
     ppid: Option<u32>,
     parent_comm: Option<String>,
+    uid: Option<u32>,
+    username: Option<String>,
+    state: Option<char>,
     read_count: u64,
     write_count: u64,
     read_bytes: u64,
     write_bytes: u64,
     open_fds: usize,
     unique_inodes: usize,
+}
+
+/// Plain-text rendering of an IO stats entry. `verbose` includes parent/owner/state
+/// fields; the compact form keeps just PID/comm plus the IO counters.
+pub fn format_io_prose(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    read_count: u64,
+    write_count: u64,
+    read_mb: u64,
+    write_mb: u64,
+    open_fds: usize,
+    unique_inodes: usize,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_prose = format_state_prose(state);
+        format!(
+            "Type: io, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, User ID: {}, User: {}, State: {}, Read Count: {}, Write Count: {}, Read: {} MB, Write: {} MB, Open FDs: {}, Unique Inodes: {}",
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            uid_val,
+            username_val,
+            state_prose,
+            read_count,
+            write_count,
+            read_mb,
+            write_mb,
+            open_fds,
+            unique_inodes
+        )
+    } else {
+        format!(
+            "Type: io, PID: {}, Comm: {}, Read Count: {}, Write Count: {}, Read: {} MB, Write: {} MB, Open FDs: {}, Unique Inodes: {}",
+            pid, comm, read_count, write_count, read_mb, write_mb, open_fds, unique_inodes
+        )
+    }
+}
+
+/// JSON rendering of an IO stats entry, mirroring `format_io_prose`. `verbose` includes
+/// parent/owner/state fields; the compact form keeps just PID/comm plus the IO counters.
+/// Built via the `json!` macro, so every string field is escaped by serde_json and the
+/// document is always valid JSON.
+pub fn format_io_json(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    read_count: u64,
+    write_count: u64,
+    read_mb: u64,
+    write_mb: u64,
+    open_fds: usize,
+    unique_inodes: usize,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_val = format_state(state);
+        json!({
+            "Type": "io",
+            "PID": pid,
+            "Comm": comm,
+            "PPID": ppid_val,
+            "Parent_Comm": parent_comm_val,
+            "UID": uid_val,
+            "Username": username_val,
+            "State": state_val,
+            "Read_Count": read_count,
+            "Write_Count": write_count,
+            "Read_MB": read_mb,
+            "Write_MB": write_mb,
+            "Open_FDs": open_fds,
+            "Unique_Inodes": unique_inodes,
+        })
+        .to_string()
+    } else {
+        json!({
+            "Type": "io",
+            "PID": pid,
+            "Comm": comm,
+            "Read_Count": read_count,
+            "Write_Count": write_count,
+            "Read_MB": read_mb,
+            "Write_MB": write_mb,
+            "Open_FDs": open_fds,
+            "Unique_Inodes": unique_inodes,
+        })
+        .to_string()
+    }
 }
 
 pub async fn monitor_io_usage(
@@ -48,6 +160,10 @@ pub async fn monitor_io_usage(
     // below only does formatting/output work.
     let entries: Vec<IoEntry> = tokio::task::block_in_place(|| {
         let mut entries = Vec::new();
+        // Cache of uid -> username, scoped to this single poll, so N processes owned by
+        // the same user cost one username lookup instead of N when --verbose is set --
+        // this can hit network-backed NSS (LDAP).
+        let mut username_cache: HashMap<u32, String> = HashMap::new();
 
         let all_processes = match procfs::process::all_processes() {
             Ok(procs) => procs,
@@ -119,11 +235,31 @@ pub async fn monitor_io_usage(
                 (None, None)
             };
 
+            // Retrieve owner info only if verbose flag is set
+            let (uid, username, state) = if *verbose {
+                let (uid, username) = match get_process_uid(pid as u32) {
+                    Some(uid) => {
+                        let username = username_cache
+                            .entry(uid)
+                            .or_insert_with(|| resolve_username(uid))
+                            .clone();
+                        (Some(uid), Some(username))
+                    }
+                    None => (None, Some("unknown".to_string())),
+                };
+                (uid, username, Some(stat.state))
+            } else {
+                (None, None, None)
+            };
+
             entries.push(IoEntry {
                 pid: pid as u32,
                 comm: stat.comm,
                 ppid,
                 parent_comm,
+                uid,
+                username,
+                state,
                 read_count: io.syscr,
                 write_count: io.syscw,
                 read_bytes: io.read_bytes,
@@ -142,6 +278,9 @@ pub async fn monitor_io_usage(
             &entry.comm,
             entry.ppid,
             entry.parent_comm.as_deref(),
+            entry.uid,
+            entry.username.as_deref(),
+            entry.state,
             entry.read_count,
             entry.write_count,
             entry.read_bytes,
@@ -172,6 +311,9 @@ async fn report_io_and_inode_stats(
     comm: &str,
     ppid: Option<u32>,
     parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
     read_count: u64,
     write_count: u64,
     read_bytes: u64,
@@ -194,42 +336,44 @@ async fn report_io_and_inode_stats(
     let write_mb = write_bytes / (1024 * 1024);
 
     let (plain_string, json_string) = if *verbose {
-        let ppid_val = ppid.unwrap_or(0);
-        let parent_comm_val = parent_comm.unwrap_or("unknown");
-
         let plain = if needs_plain {
-            format!(
-                "Type: io, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
+            format_io_prose(
+                true,
                 pid,
                 comm,
-                ppid_val,
-                parent_comm_val,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
                 read_count,
                 write_count,
                 read_mb,
                 write_mb,
                 open_fds,
-                unique_inodes
+                unique_inodes,
             )
         } else {
             String::new()
         };
 
         let json_string = if needs_json {
-            json!({
-                "Type": "io",
-                "PID": pid,
-                "Comm": comm,
-                "PPID": ppid_val,
-                "Parent_Comm": parent_comm_val,
-                "Read_Count": read_count,
-                "Write_Count": write_count,
-                "Read_MB": read_mb,
-                "Write_MB": write_mb,
-                "Open_FDs": open_fds,
-                "Unique_Inodes": unique_inodes,
-            })
-            .to_string()
+            format_io_json(
+                true,
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
+                read_count,
+                write_count,
+                read_mb,
+                write_mb,
+                open_fds,
+                unique_inodes,
+            )
         } else {
             String::new()
         };
@@ -237,27 +381,43 @@ async fn report_io_and_inode_stats(
         (plain, json_string)
     } else {
         let plain = if needs_plain {
-            format!(
-                "Type: io, PID: {}, Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
-                pid, comm, read_count, write_count, read_mb, write_mb, open_fds, unique_inodes
+            format_io_prose(
+                false,
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
+                read_count,
+                write_count,
+                read_mb,
+                write_mb,
+                open_fds,
+                unique_inodes,
             )
         } else {
             String::new()
         };
 
         let json_string = if needs_json {
-            json!({
-                "Type": "io",
-                "PID": pid,
-                "Comm": comm,
-                "Read_Count": read_count,
-                "Write_Count": write_count,
-                "Read_MB": read_mb,
-                "Write_MB": write_mb,
-                "Open_FDs": open_fds,
-                "Unique_Inodes": unique_inodes,
-            })
-            .to_string()
+            format_io_json(
+                false,
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
+                read_count,
+                write_count,
+                read_mb,
+                write_mb,
+                open_fds,
+                unique_inodes,
+            )
         } else {
             String::new()
         };

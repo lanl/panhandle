@@ -64,17 +64,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.verbose {
         println!("Starting Panhandle, using the arguments: \n{:#?}", args);
     }
+
     // remove standard backtrace message if not debug
     if !args.debug {
         panic::set_hook(Box::new(|_| {}));
     }
-
-    // Bump the memlock rlimit. This is needed for older kernels that don't use the new memcg
-    // based accounting
-    //let rlim = libc::rlimit {
-    //    rlim_cur: libc::RLIM_INFINITY,
-    //    rlim_max: libc::RLIM_INFINITY,
-    //};
 
     // check for if running as root, exit if not
     let current_uid = get_current_uid();
@@ -191,13 +185,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => Arc::new("UNKNOWN_HOST".to_string()),
     };
 
-    // set up ebpf memory lock
-    // SAFETY: unsafe call recommended by the Aya library, requires libc which is a dependency of the rpm build already
-    //let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
-    //if ret != 0 {
-    //    debug!("remove limit on locked memory failed, ret is: {}", ret);
-    //}
-
     // load the built ebpf program
     // this looks like a failure until the ebpf build runs
     let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
@@ -230,8 +217,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut canonical_executable_vec = Vec::new();
     if let Some(executables) = args.executables {
         canonical_executable_vec.append(&mut get_canonical_executable_list(&executables));
-        if canonical_executable_vec.len() > EXECUTABLE_COUNT {
-            info!("The number of executables requested to monitor exceeds the maximum");
+        if let Err(e) = validate_count(
+            canonical_executable_vec.len(),
+            EXECUTABLE_COUNT,
+            "executables",
+        ) {
+            info!("{}", e);
             process::exit(1);
         };
     };
@@ -246,11 +237,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => Vec::new(),
     };
 
-    if only_these_uids_vec.len() > UID_COUNT {
-        info!(
-            "The number of UIDs requested to monitor exceeds the maximum of {:}",
-            UID_COUNT
-        );
+    if let Err(e) = validate_count(only_these_uids_vec.len(), UID_COUNT, "UIDs") {
+        info!("{}", e);
         process::exit(1);
     }
 
@@ -281,7 +269,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cpu_handle = Some(tokio::spawn(async move {
             use std::collections::HashMap as StdHashMap;
 
-            let mut last_total_busy: u64 = 0;
+            let mut last_total_busy: Option<u64> = None;
             let mut last_pid_times: StdHashMap<u32, u64> = StdHashMap::new();
             let mut pid_stats: StdHashMap<u32, PidStats> = StdHashMap::new();
             let mut sample_count = 0u64;
@@ -358,9 +346,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let program: &mut BtfTracePoint = ebpf
             .program_mut("inet_sock_set_state")
             .unwrap()
-            .try_into()?;
-        program.load("inet_sock_set_state", &btf)?;
-        program.attach()?;
+            .try_into()
+            .inspect_err(|e| error!("failed to load eBPF program 'inet_sock_set_state': {}", e))?;
+        program.load("inet_sock_set_state", &btf).inspect_err(|e| {
+            error!("failed to load BTF tracepoint 'inet_sock_set_state': {}", e)
+        })?;
+        program.attach().inspect_err(|e| {
+            error!(
+                "failed to attach BTF tracepoint 'inet_sock_set_state': {}",
+                e
+            )
+        })?;
+        debug!("attached eBPF BTF tracepoint 'inet_sock_set_state'");
 
         // Attach kprobes for data transfer tracking
         attach_kprobe(&mut ebpf, "tcp_sendmsg")?;
@@ -506,21 +503,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // process syscall blocking
     if let Some(syscalls) = &args.syscalls {
-        let mut list_type: u8 = 0; // 0 = unspecified, 1 = deny list, 2 = allow list, 3 = both (error)
-        let comms: Vec<String> = if let Some(ref comms_deny) = args.comm_deny {
-            list_type += DENY_LIST;
-            comms_deny.clone()
-        } else if let Some(ref comms_allow) = args.comm_allow {
-            list_type += ALLOW_LIST;
-            comms_allow.clone()
-        } else {
-            if args.verbose {
-                info!(
-                    "Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked."
-                );
+        // Not allowing for providing both an allow list and deny list
+        let (list_type, comms) = match resolve_comm_list_mode(&args.comm_deny, &args.comm_allow) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                info!("{}", e);
+                process::exit(1);
             }
-            Vec::new()
         };
+        if list_type == NO_LIST && args.verbose {
+            info!(
+                "Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked."
+            );
+        }
+
+        // clap's num_args upper bound only limits raw CLI tokens, not the values a
+        // single comma-separated argument splits into, so it can't reject an over-limit
+        // list at parse time -- enforce the documented maximums here instead.
+        if let Err(e) = validate_count(
+            comms.len(),
+            MAX_BLOCKED_COMMS,
+            "comm-allow/comm-deny entries",
+        ) {
+            info!("{}", e);
+            process::exit(1);
+        }
+        if let Some(ref paths) = args.block_paths
+            && let Err(e) = validate_count(paths.len(), MAX_BLOCKED_PATHS, "block-paths entries")
+        {
+            info!("{}", e);
+            process::exit(1);
+        }
 
         let blocked_paths: Vec<String> = if let Some(ref paths) = args.block_paths {
             paths.clone()
@@ -533,12 +546,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut comm_list: aya::maps::HashMap<_, [u8; 16], u8> =
             aya::maps::HashMap::try_from(comms_map)?;
 
-        // Populate the comm list with specified comms from either the deny list or allow list
-        // Not allowing for providing both an allow list and deny list
-        if list_type == 3 {
-            println!("Allow and deny list both provided, exiting with error.");
-            std::process::exit(1);
-        }
         // list_type is used on the ebpf side to determine how to handle process blocking
         for comm_str in comms {
             let mut comm = [0u8; 16];
@@ -550,7 +557,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Insert mode indicator key to tell eBPF which mode we're in.
         // This known key within the hashmap is required for when ebpf side can't find a comm in the map but still needs to know what to do with it
-        if list_type != 0 {
+        if list_type != NO_LIST {
             let mode_key = [LIST_MODE; 16];
             comm_list.insert(mode_key, list_type, 0)?;
         }
@@ -597,7 +604,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // canonicalize the path and then convert to string
         let file: PathBuf = canonicalize("/bin/bash").unwrap_or_default();
         if !file.exists() {
-            debug!("Could not find /bin/bash");
+            error!("Could not find /bin/bash");
             process::exit(1);
         }
         debug!("found executable: {:?}", file);
@@ -608,13 +615,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // readline stuff
-        let program: &mut UProbe = ebpf.program_mut("readline").unwrap().try_into()?;
-        program.load()?;
-        program.attach(
-            "readline_internal_teardown",
-            file_string,
-            UProbeScope::AllProcesses,
-        )?;
+        let program: &mut UProbe = ebpf
+            .program_mut("readline")
+            .unwrap()
+            .try_into()
+            .inspect_err(|e| error!("failed to load eBPF program 'readline': {}", e))?;
+        program
+            .load()
+            .inspect_err(|e| error!("failed to load uprobe 'readline': {}", e))?;
+        program
+            .attach(
+                "readline_internal_teardown",
+                &file_string,
+                UProbeScope::AllProcesses,
+            )
+            .inspect_err(|e| {
+                error!(
+                    "failed to attach uprobe 'readline' to '{}': {}",
+                    file_string, e
+                )
+            })?;
+        debug!("attached eBPF uprobe 'readline' to '{}'", file_string);
 
         // get the uid_options map from ebpf land
         let readline_uid_options_map = ebpf.take_map("readline_uid_options").unwrap();
@@ -678,7 +699,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // canonicalize the path and then convert to string
         let file: PathBuf = canonicalize("/bin/zsh").unwrap_or_default();
         if !file.exists() {
-            debug!("Could not find /bin/zsh");
+            error!("Could not find /bin/zsh");
             process::exit(1);
         }
         debug!("found executable: {:?}", file);
@@ -689,9 +710,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // zlentry stuff
-        let program: &mut UProbe = ebpf.program_mut("zlentry").unwrap().try_into()?;
-        program.load()?;
-        program.attach("zleentry", file_string, UProbeScope::AllProcesses)?;
+        let program: &mut UProbe = ebpf
+            .program_mut("zlentry")
+            .unwrap()
+            .try_into()
+            .inspect_err(|e| error!("failed to load eBPF program 'zlentry': {}", e))?;
+        program
+            .load()
+            .inspect_err(|e| error!("failed to load uprobe 'zlentry': {}", e))?;
+        program
+            .attach("zleentry", &file_string, UProbeScope::AllProcesses)
+            .inspect_err(|e| {
+                error!(
+                    "failed to attach uprobe 'zlentry' to '{}': {}",
+                    file_string, e
+                )
+            })?;
+        debug!("attached eBPF uprobe 'zlentry' to '{}'", file_string);
 
         // get the uid_options map from ebpf land
         let zlentry_uid_options_map = ebpf.take_map("zlentry_uid_options").unwrap();
@@ -751,23 +786,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await;
         });
     }
-    if args.syscall_execve
-        || (!args.bash
-            && !args.zsh
-            && args.memory_faults.is_none()
-            && !args.socket
-            && !args.memory
-            && !args.cpu
-            && !args.gpu
-            && !args.io
-            && args.syscalls.is_none())
-    {
+    if should_run_default_execve_monitor(
+        args.syscall_execve,
+        args.bash,
+        args.zsh,
+        args.memory_faults.is_some(),
+        args.socket,
+        args.memory,
+        args.cpu,
+        args.gpu,
+        args.io,
+        args.syscalls.is_some(),
+    ) {
         // this is the main program functionality
         // the default option if the other shells are not selected
         // load the ebpf program
-        let program2: &mut TracePoint = ebpf.program_mut("panhandle").unwrap().try_into()?;
-        program2.load()?;
-        program2.attach("syscalls", "sys_enter_execve")?;
+        let program2: &mut TracePoint = ebpf
+            .program_mut("panhandle")
+            .unwrap()
+            .try_into()
+            .inspect_err(|e| error!("failed to load eBPF program 'panhandle': {}", e))?;
+        program2
+            .load()
+            .inspect_err(|e| error!("failed to load tracepoint 'sys_enter_execve': {}", e))?;
+        program2
+            .attach("syscalls", "sys_enter_execve")
+            .inspect_err(|e| error!("failed to attach tracepoint 'sys_enter_execve': {}", e))?;
+        debug!("attached eBPF tracepoint 'syscalls:sys_enter_execve'");
 
         // get the uid_options map from ebpf land
         let uid_options_map = ebpf.take_map("uid_options").unwrap();

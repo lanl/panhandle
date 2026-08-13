@@ -7,16 +7,12 @@ use aya_ebpf::{
     programs::LsmContext,
 };
 
-// use aya_log_ebpf::info;
+use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
+
 use crate::vmlinux::file;
 
 const PATH_SIZE: usize = 256;
 const PATH_MASK: usize = PATH_SIZE - 1;
-
-// Import from common lib
-const DENY_LIST: u8 = 1;
-const ALLOW_LIST: u8 = 2;
-const LIST_MODE: u8 = 255;
 
 // -EPERM: what we return to actually block the operation
 const EPERM: i32 = -1;

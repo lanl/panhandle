@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use machine_info::Machine;
 use reqwest::Client;
@@ -32,6 +32,8 @@ struct GpuProcessEntry {
     comm: String,
     ppid: Option<u32>,
     parent_comm: Option<String>,
+    uid: Option<u32>,
+    username: Option<String>,
     gpu_id: u32,
     vram_percent: u32,
     encoder_percent: u32,
@@ -69,6 +71,10 @@ pub async fn monitor_gpu_usage(
     // reporting loop below only does formatting/output work.
     let gpus: Vec<GpuEntry> = tokio::task::block_in_place(|| {
         let mut gpus = Vec::new();
+        // Cache of uid -> username, scoped to this single poll, so N processes owned by
+        // the same user cost one username lookup instead of N when --verbose is set --
+        // this can hit network-backed NSS (LDAP).
+        let mut username_cache: HashMap<u32, String> = HashMap::new();
 
         for gpu in machine.graphics_status() {
             let mut processes = Vec::new();
@@ -99,11 +105,29 @@ pub async fn monitor_gpu_usage(
                     (None, None)
                 };
 
+                // Retrieve owner info only if verbose flag is set
+                let (uid, username) = if *verbose && process.pid > 0 {
+                    match get_process_uid(process.pid) {
+                        Some(uid) => {
+                            let username = username_cache
+                                .entry(uid)
+                                .or_insert_with(|| resolve_username(uid))
+                                .clone();
+                            (Some(uid), Some(username))
+                        }
+                        None => (None, Some("unknown".to_string())),
+                    }
+                } else {
+                    (None, None)
+                };
+
                 processes.push(GpuProcessEntry {
                     pid: process.pid,
                     comm,
                     ppid,
                     parent_comm,
+                    uid,
+                    username,
                     gpu_id: process.gpu,
                     vram_percent: process.memory,
                     encoder_percent: process.encoder,
@@ -131,14 +155,18 @@ pub async fn monitor_gpu_usage(
             let (plain_string, json_string) = if *verbose {
                 let ppid_val = process.ppid.unwrap_or(0);
                 let parent_comm_val = process.parent_comm.as_deref().unwrap_or("unknown");
+                let (uid_val, username_val) =
+                    format_owner(process.uid, process.username.as_deref());
 
                 let plain = if needs_plain {
                     format!(
-                        "Type: gpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
+                        "Type: gpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
                         process.pid,
                         process.comm,
                         ppid_val,
                         parent_comm_val,
+                        uid_val,
+                        username_val,
                         process.gpu_id,
                         process.vram_percent,
                         process.encoder_percent,
@@ -150,11 +178,13 @@ pub async fn monitor_gpu_usage(
 
                 let json = if needs_json {
                     format!(
-                        "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+                        "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
                         process.pid,
                         process.comm,
                         ppid_val,
                         parent_comm_val,
+                        uid_val,
+                        username_val,
                         process.gpu_id,
                         process.vram_percent,
                         process.encoder_percent,

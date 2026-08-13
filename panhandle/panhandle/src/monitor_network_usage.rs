@@ -16,6 +16,9 @@ struct NetworkEntry {
     comm: String,
     ppid: Option<u32>,
     parent_comm: Option<String>,
+    uid: Option<u32>,
+    username: Option<String>,
+    state: Option<char>,
     nic: String,
     ip: String,
     mac: String,
@@ -45,6 +48,11 @@ pub async fn monitor_network_usage(
         // Fetch the interface list once per poll cycle instead of once (or twice) per PID.
         let interfaces = NetworkInterface::show().unwrap_or_default();
         let mut entries = Vec::new();
+        // Cache of uid -> username, scoped to this single poll, so N processes owned by
+        // the same user cost one username lookup instead of N when --verbose is set --
+        // this can hit network-backed NSS (LDAP).
+        let mut username_cache: std::collections::HashMap<u32, String> =
+            std::collections::HashMap::new();
 
         for (pid, stats) in net_stats_map.iter().flatten() {
             // Skip entries with no activity
@@ -80,6 +88,23 @@ pub async fn monitor_network_usage(
                 (None, None)
             };
 
+            // Only get owner info if verbose flag is set
+            let (uid, username, state) = if *verbose {
+                let (uid, username) = match get_process_uid(pid) {
+                    Some(uid) => {
+                        let username = username_cache
+                            .entry(uid)
+                            .or_insert_with(|| resolve_username(uid))
+                            .clone();
+                        (Some(uid), Some(username))
+                    }
+                    None => (None, Some("unknown".to_string())),
+                };
+                (uid, username, Some(stat.state))
+            } else {
+                (None, None, None)
+            };
+
             let (nic, ip, mac) = get_network_info(pid, &interfaces);
 
             entries.push(NetworkEntry {
@@ -87,6 +112,9 @@ pub async fn monitor_network_usage(
                 comm: stat.comm,
                 ppid,
                 parent_comm,
+                uid,
+                username,
+                state,
                 nic,
                 ip,
                 mac,
@@ -104,6 +132,9 @@ pub async fn monitor_network_usage(
             &entry.comm,
             entry.ppid,
             entry.parent_comm.as_deref(),
+            entry.uid,
+            entry.username.as_deref(),
+            entry.state,
             &entry.nic,
             &entry.ip,
             &entry.mac,
@@ -131,6 +162,9 @@ async fn report_network_stats(
     comm: &str,
     ppid: Option<u32>,
     parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
     nic: &str,
     ip: &str,
     mac: &str,
@@ -152,17 +186,22 @@ async fn report_network_stats(
 
     // Build messages conditionally based on verbose flag
     let (plain_string, json_string) = if *verbose {
-        // Verbose mode: include parent info
+        // Verbose mode: include parent and owner info
         let ppid = ppid.unwrap_or(0);
         let parent_comm = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_val = format_state(state);
 
         let plain = if needs_plain {
             format!(
-                "Type: sock, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+                "Type: sock, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, State: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
                 pid,
                 comm,
                 ppid,
                 parent_comm,
+                uid_val,
+                username_val,
+                state_val,
                 nic,
                 ip,
                 mac,
@@ -188,6 +227,9 @@ async fn report_network_stats(
                 "Comm": comm,
                 "PPID": ppid,
                 "Parent_Comm": parent_comm,
+                "UID": uid_val,
+                "Username": username_val,
+                "State": state_val,
                 "NIC": nic,
                 "IP": ip,
                 "MAC": mac,
@@ -277,7 +319,10 @@ async fn report_network_stats(
 }
 
 // Get network info for a PID (interface, ip, mac)
-fn get_network_info(pid: u32, interfaces: &[NetworkInterface]) -> (String, String, String) {
+pub(crate) fn get_network_info(
+    pid: u32,
+    interfaces: &[NetworkInterface],
+) -> (String, String, String) {
     // Try to match process connection to interface
     if let Some((iface_name, ip)) = get_active_connection_info(pid, interfaces)
         && let Some(iface) = interfaces.iter().find(|i| i.name == iface_name)
@@ -309,7 +354,7 @@ fn get_network_info(pid: u32, interfaces: &[NetworkInterface]) -> (String, Strin
 }
 
 // Get interface name and IP from process connections
-fn get_active_connection_info(
+pub(crate) fn get_active_connection_info(
     pid: u32,
     interfaces: &[NetworkInterface],
 ) -> Option<(String, String)> {
@@ -337,7 +382,10 @@ fn get_active_connection_info(
 }
 
 // Convert hex IP to interface name and IP string
-fn hex_to_interface(hex: &str, interfaces: &[NetworkInterface]) -> Option<(String, String)> {
+pub(crate) fn hex_to_interface(
+    hex: &str,
+    interfaces: &[NetworkInterface],
+) -> Option<(String, String)> {
     let ip = if hex.len() == 8 {
         // IPv4
         let val = u32::from_str_radix(hex, 16).ok()?;

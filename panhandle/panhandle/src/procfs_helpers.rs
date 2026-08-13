@@ -1,9 +1,12 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use procfs::process::all_processes;
 use reqwest::Client;
 
-use crate::helpers::{get_parent_pid, get_process_name, output_message, output_needs};
+use crate::helpers::{
+    format_owner, format_state, get_parent_pid, get_process_name, get_process_uid, output_message,
+    output_needs, resolve_username,
+};
 
 // Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
 // loop afterward only needs to do async formatting/output work.
@@ -12,6 +15,9 @@ struct MajorFaultEntry {
     comm: String,
     ppid: Option<u32>,
     parent_comm: Option<String>,
+    uid: Option<u32>,
+    username: Option<String>,
+    state: Option<char>,
     majflt: u64,
     cmajflt: u64,
 }
@@ -38,6 +44,10 @@ pub async fn get_major_faults(
     // below only does formatting/output work.
     let entries: Vec<MajorFaultEntry> = tokio::task::block_in_place(|| {
         let mut entries = Vec::new();
+        // Cache of uid -> username, scoped to this single poll, so N processes owned by
+        // the same user cost one username lookup instead of N when --verbose is set --
+        // this can hit network-backed NSS (LDAP).
+        let mut username_cache: HashMap<u32, String> = HashMap::new();
 
         if let Ok(procs) = all_processes() {
             for proc_res in procs.flatten() {
@@ -57,11 +67,31 @@ pub async fn get_major_faults(
                         (None, None)
                     };
 
+                    // Retrieve owner info only if verbose flag is set
+                    let (uid, username, state) = if *verbose {
+                        let (uid, username) = match get_process_uid(stat.pid as u32) {
+                            Some(uid) => {
+                                let username = username_cache
+                                    .entry(uid)
+                                    .or_insert_with(|| resolve_username(uid))
+                                    .clone();
+                                (Some(uid), Some(username))
+                            }
+                            None => (None, Some("unknown".to_string())),
+                        };
+                        (uid, username, Some(stat.state))
+                    } else {
+                        (None, None, None)
+                    };
+
                     entries.push(MajorFaultEntry {
                         pid: stat.pid,
                         comm: stat.comm,
                         ppid,
                         parent_comm,
+                        uid,
+                        username,
+                        state,
                         majflt: stat.majflt,
                         cmajflt: stat.cmajflt,
                     });
@@ -76,11 +106,21 @@ pub async fn get_major_faults(
         let (plain_string, json_string) = if *verbose {
             let ppid_val = entry.ppid.unwrap_or(0);
             let parent_comm_val = entry.parent_comm.as_deref().unwrap_or("unknown");
+            let (uid_val, username_val) = format_owner(entry.uid, entry.username.as_deref());
+            let state_val = format_state(entry.state);
 
             let plain = if needs_plain {
                 format!(
-                    "Type: mem, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, Maj_Faults: {}, Child_Maj_Faults: {}",
-                    entry.pid, entry.comm, ppid_val, parent_comm_val, entry.majflt, entry.cmajflt
+                    "Type: mem, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, State: {}, Maj_Faults: {}, Child_Maj_Faults: {}",
+                    entry.pid,
+                    entry.comm,
+                    ppid_val,
+                    parent_comm_val,
+                    uid_val,
+                    username_val,
+                    state_val,
+                    entry.majflt,
+                    entry.cmajflt
                 )
             } else {
                 String::new()
@@ -88,8 +128,16 @@ pub async fn get_major_faults(
 
             let json = if needs_json {
                 format!(
-                    "{{\"Type\": \"fault\", \"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"Maj_Faults\": \"{}\", \"Child_Maj_Faults\": \"{}\"}}",
-                    entry.pid, entry.comm, ppid_val, parent_comm_val, entry.majflt, entry.cmajflt
+                    "{{\"Type\": \"fault\", \"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"Maj_Faults\": \"{}\", \"Child_Maj_Faults\": \"{}\"}}",
+                    entry.pid,
+                    entry.comm,
+                    ppid_val,
+                    parent_comm_val,
+                    uid_val,
+                    username_val,
+                    state_val,
+                    entry.majflt,
+                    entry.cmajflt
                 )
             } else {
                 String::new()
@@ -141,6 +189,9 @@ struct MemoryUsageEntry {
     comm: String,
     ppid: Option<u32>,
     parent_comm: Option<String>,
+    uid: Option<u32>,
+    username: Option<String>,
+    state: Option<char>,
     rss_mb: u64,
     rss_pages: u64,
     vm_hwm_mb: u64,
@@ -183,6 +234,10 @@ pub async fn get_all_memory_usage(
     // below only does formatting/output work.
     let entries: Vec<MemoryUsageEntry> = tokio::task::block_in_place(|| {
         let mut entries = Vec::new();
+        // Cache of uid -> username, scoped to this single poll, so N processes owned by
+        // the same user cost one username lookup instead of N when --verbose is set --
+        // this can hit network-backed NSS (LDAP).
+        let mut username_cache: HashMap<u32, String> = HashMap::new();
 
         if let Ok(procs) = all_processes() {
             for proc_res in procs.flatten() {
@@ -220,11 +275,31 @@ pub async fn get_all_memory_usage(
                         (None, None)
                     };
 
+                    // Owner info only if verbose flag is set. The real UID is already
+                    // available for free here since `status` was fetched above for
+                    // vm_hwm/vm_rss regardless of verbosity -- only the username
+                    // resolution (which can hit network-backed NSS) is gated.
+                    let (uid, username, state) = if *verbose {
+                        let uid = status.as_ref().map(|s| s.ruid);
+                        let username = uid.map(|uid| {
+                            username_cache
+                                .entry(uid)
+                                .or_insert_with(|| resolve_username(uid))
+                                .clone()
+                        });
+                        (uid, username, Some(stat.state))
+                    } else {
+                        (None, None, None)
+                    };
+
                     entries.push(MemoryUsageEntry {
                         pid: stat.pid,
                         comm: stat.comm,
                         ppid,
                         parent_comm,
+                        uid,
+                        username,
+                        state,
                         rss_mb,
                         rss_pages,
                         vm_hwm_mb,
@@ -243,14 +318,19 @@ pub async fn get_all_memory_usage(
         let (plain_string, json_string) = if *verbose {
             let ppid_val = entry.ppid.unwrap_or(0);
             let parent_comm_val = entry.parent_comm.as_deref().unwrap_or("unknown");
+            let (uid_val, username_val) = format_owner(entry.uid, entry.username.as_deref());
+            let state_val = format_state(entry.state);
 
             let plain = if needs_plain {
                 format!(
-                    "Type: mem, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, RSS_MB: {}, RSS_Pages: {}, Peak_RSS_MB: {}, VSize_MB: {}, Shared_MB: {}, Data_Stack_Size_MB: {}",
+                    "Type: mem, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, State: {}, RSS_MB: {}, RSS_Pages: {}, Peak_RSS_MB: {}, VSize_MB: {}, Shared_MB: {}, Data_Stack_Size_MB: {}",
                     entry.pid,
                     entry.comm,
                     ppid_val,
                     parent_comm_val,
+                    uid_val,
+                    username_val,
+                    state_val,
                     entry.rss_mb,
                     entry.rss_pages,
                     entry.vm_hwm_mb,
@@ -264,11 +344,14 @@ pub async fn get_all_memory_usage(
 
             let json = if needs_json {
                 format!(
-                    "{{\"Type\": \"mem\", \"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_Size_MB\": \"{}\"}}",
+                    "{{\"Type\": \"mem\", \"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_Size_MB\": \"{}\"}}",
                     entry.pid,
                     entry.comm,
                     ppid_val,
                     parent_comm_val,
+                    uid_val,
+                    username_val,
+                    state_val,
                     entry.rss_mb,
                     entry.rss_pages,
                     entry.vm_hwm_mb,

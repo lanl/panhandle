@@ -562,6 +562,36 @@ pub async fn validate_syslog(addr: &str) -> Result<&str, String> {
     }
 }
 
+/// Determine which comm allow/deny list mode is active from the CLI args, and which comm
+/// list to populate the eBPF map with. Returns an error if both --comm-deny and
+/// --comm-allow were provided, since only one list mode can be active at a time.
+pub fn resolve_comm_list_mode(
+    comm_deny: &Option<Vec<String>>,
+    comm_allow: &Option<Vec<String>>,
+) -> Result<(u8, Vec<String>), String> {
+    match (comm_deny, comm_allow) {
+        (Some(_), Some(_)) => {
+            Err("Allow and deny list both provided, exiting with error.".to_string())
+        }
+        (Some(deny), None) => Ok((DENY_LIST, deny.clone())),
+        (None, Some(allow)) => Ok((ALLOW_LIST, allow.clone())),
+        (None, None) => Ok((NO_LIST, Vec::new())),
+    }
+}
+
+/// Error if more than `max` of something (identified by `label` in the message, e.g.
+/// "executables" or "UIDs") were requested to monitor.
+pub fn validate_count(len: usize, max: usize, label: &str) -> Result<(), String> {
+    if len > max {
+        Err(format!(
+            "The number of {} requested to monitor exceeds the maximum of {}",
+            label, max
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub async fn validate_url(url: &str) -> Result<&str, String> {
     // validate given URL
     if Url::parse(url).is_err() {
@@ -581,6 +611,35 @@ pub fn output_needs(http: bool, syslog: bool, json_output: bool, debug: bool) ->
     let needs_plain = (http || syslog) && !json_output || !debug;
     let needs_json = (http || syslog) && json_output || debug;
     (needs_plain, needs_json)
+}
+
+/// Render a process owner for --verbose output. The UID renders as "unknown" rather than
+/// a numeric fallback like 0 when it couldn't be resolved -- 0 is root's real UID, so
+/// defaulting to it would misattribute an unresolved process's ownership to root.
+pub fn format_owner(uid: Option<u32>, username: Option<&str>) -> (String, String) {
+    let uid_str = uid
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let username_str = username.unwrap_or("unknown").to_string();
+    (uid_str, username_str)
+}
+
+/// Render a process state char for --verbose output, an empty string when unavailable
+/// (e.g. the --gpu monitor, which has no Stat read to source a state from).
+pub fn format_state(state: Option<char>) -> String {
+    state.map(|s| s.to_string()).unwrap_or_default()
+}
+
+/// Delta since the last observed value. Returns 0 when there's no prior observation yet,
+/// rather than treating "never observed" the same as "observed as 0" (which would compute
+/// a delta spanning the process/system's entire lifetime and report it as if it all
+/// happened within a single poll interval -- a misleading spike on the very first sample
+/// after monitoring starts).
+pub fn calc_delta(current: u64, last: Option<u64>) -> u64 {
+    match last {
+        Some(last) => current.saturating_sub(last),
+        None => 0,
+    }
 }
 
 /// wrapper method to handle output formatting to syslog or http
@@ -652,28 +711,48 @@ pub async fn output_message(
 }
 
 /// Helper function to attach a single kprobe
-pub fn attach_kprobe(
-    ebpf: &mut aya::Ebpf,
-    program_name: &str,
-) -> Result<(), anyhow::Error> {
+pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str) -> Result<(), anyhow::Error> {
     let program: &mut KProbe = ebpf
         .program_mut(program_name)
         .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
-        .try_into()?;
-    
-    program.load()?;
-    program.attach(program_name, 0)?;
-    
+        .try_into()
+        .inspect_err(|e| error!("failed to load eBPF program '{}': {}", program_name, e))?;
+
+    program
+        .load()
+        .inspect_err(|e| error!("failed to load kprobe '{}': {}", program_name, e))?;
+    program
+        .attach(program_name, 0)
+        .inspect_err(|e| error!("failed to attach kprobe '{}': {}", program_name, e))?;
+
+    debug!("attached eBPF kprobe '{}'", program_name);
     Ok(())
 }
 
 /// Helper function to attach a single LSM hook
-pub fn attach_lsm_hook(ebpf: &mut aya::Ebpf, hook_name: &str, program_name: &str) -> Result<(), anyhow::Error> {
-    let program: &mut Lsm = ebpf.program_mut(program_name).ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?.try_into()?;
-    let btf = Btf::from_sys_fs()?;
-    program.load(hook_name, &btf)?;
-    program.attach()?;
+pub fn attach_lsm_hook(
+    ebpf: &mut aya::Ebpf,
+    hook_name: &str,
+    program_name: &str,
+) -> Result<(), anyhow::Error> {
+    let program: &mut Lsm = ebpf
+        .program_mut(program_name)
+        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
+        .try_into()
+        .inspect_err(|e| error!("failed to load eBPF program '{}': {}", program_name, e))?;
+    let btf = Btf::from_sys_fs()
+        .inspect_err(|e| error!("failed to read BTF from sysfs for '{}': {}", hook_name, e))?;
+    program
+        .load(hook_name, &btf)
+        .inspect_err(|e| error!("failed to load LSM hook '{}' ({}): {}", hook_name, program_name, e))?;
+    program
+        .attach()
+        .inspect_err(|e| error!("failed to attach LSM hook '{}' ({}): {}", hook_name, program_name, e))?;
 
+    debug!(
+        "attached eBPF LSM hook '{}' (program '{}')",
+        hook_name, program_name
+    );
     Ok(())
 }
 
@@ -690,4 +769,21 @@ pub fn get_parent_pid(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
     let proc = Process::new(pid as i32)?;
     let stat = proc.stat()?;
     Ok(stat.ppid as u32)
+}
+
+/// Get the real UID that owns a process, from /proc/<pid>/status.
+pub fn get_process_uid(pid: u32) -> Option<u32> {
+    Some(Process::new(pid as i32).ok()?.status().ok()?.ruid)
+}
+
+/// Resolve a UID to its username, falling back to "unknown" rather than failing outright
+/// when the UID doesn't map to a known user (e.g. an NSS/LDAP lookup failure) -- the UID
+/// itself is still meaningful even when the name isn't available. This can hit
+/// network-backed NSS, so callers polling many processes in --verbose mode should cache
+/// the result per UID for the duration of a single poll (most processes on a host share a
+/// handful of UIDs), the same way parent-comm lookups are already cached.
+pub fn resolve_username(uid: u32) -> String {
+    get_user_by_uid(uid)
+        .map(|u| u.name().to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".to_string())
 }

@@ -16,10 +16,8 @@ pub const EXECUTABLE_COUNT: usize = 20;
 pub const MINUID: u32 = 0;
 pub const MAXUID: u32 = 999;
 pub const LEN_MAX_PATH: usize = 1024;
-pub const SYSCALL_OFFSET: usize = 8;
 pub const FILENAME_OFFSET: usize = 16;
-pub const ARGS_OFFSET: usize = 24;
-pub const MAX_POSSIBLE_UID: u32 = 4294967294;
+pub const NO_LIST: u8 = 0;
 pub const DENY_LIST: u8 = 1;
 pub const ALLOW_LIST: u8 = 2;
 pub const LIST_MODE: u8 = 255;
@@ -36,9 +34,6 @@ pub struct Readline {
     pub tgid: u32,
     pub command: [u8; 16],
     pub entry: [u8; ARG_SIZE],
-    //pub regs: [u64; 31],
-    //pub task: *const task_struct,
-    //pub fp: [u8; ARG_SIZE],
 }
 
 // Custom struct used for monitoring network usage
@@ -260,33 +255,4 @@ impl core::fmt::Display for ExecveEvent {
         write!(f, "]")?;
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct SocketStats {
-    pub count: u32,
-    pub comm: [u8; 16],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct InetSockSetState {
-    pub common_type: u16,
-    pub common_flags: u8,
-    pub common_preempt_count: u8,
-    pub common_pid: i32,
-    pub common_preempt_lazy_count: u8,
-    _padding: [u8; 7], // Alignment to offset 16
-    pub skaddr: *const core::ffi::c_void,
-    pub oldstate: i32,
-    pub newstate: i32,
-    pub sport: u16,
-    pub dport: u16,
-    pub family: u16,
-    pub protocol: u16,
-    pub saddr: [u8; 4],
-    pub daddr: [u8; 4],
-    pub saddr_v6: [u8; 16],
-    pub daddr_v6: [u8; 16],
 }

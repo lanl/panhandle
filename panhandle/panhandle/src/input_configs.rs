@@ -4,10 +4,10 @@ use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
 // process blocking
-const MAX_PATH_LENGTH: usize = 255;
-const MAX_COMM_LENGTH: usize = 15;
-const MAX_BLOCKED_PATHS: usize = 64;
-const MAX_BLOCKED_COMMS: usize = 64;
+pub(crate) const MAX_PATH_LENGTH: usize = 255;
+pub(crate) const MAX_COMM_LENGTH: usize = 15;
+pub(crate) const MAX_BLOCKED_PATHS: usize = 64;
+pub(crate) const MAX_BLOCKED_COMMS: usize = 64;
 
 /// Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
 /// as well as the ability to monitor specific shells (bash and zsh) on a linux host.
@@ -88,7 +88,8 @@ pub struct RawArgs {
     #[serde(default)]
     pub shells: bool,
 
-    /// Verbose output.
+    /// Verbose output: adds parent process (PPID/Parent_Comm), owner (UID/Username), and
+    /// process state to the periodic cpu/gpu/io/memory/socket/fault reports.
     #[arg(short, long, global = true)]
     #[serde(default)]
     pub verbose: bool,
@@ -302,6 +303,35 @@ impl From<ConfigArgs> for RawArgs {
             config: None,
         }
     }
+}
+
+/// Whether the default execve-syscall monitor should run: either explicitly requested via
+/// --syscall-execve, or implicitly as the fallback when no other monitoring flag was given
+/// at all. Takes individual fields rather than `&RawArgs` so the check can be evaluated at
+/// its natural call site, after other code in `main()` has partially moved fields out of
+/// `args` (e.g. `args.output`, `args.executables`), without forcing an early hoist.
+pub fn should_run_default_execve_monitor(
+    syscall_execve: bool,
+    bash: bool,
+    zsh: bool,
+    memory_faults_set: bool,
+    socket: bool,
+    memory: bool,
+    cpu: bool,
+    gpu: bool,
+    io: bool,
+    syscalls_set: bool,
+) -> bool {
+    syscall_execve
+        || (!bash
+            && !zsh
+            && !memory_faults_set
+            && !socket
+            && !memory
+            && !cpu
+            && !gpu
+            && !io
+            && !syscalls_set)
 }
 
 // function to load all args given. Merges config and cli args with cli args overwriting those given in the config file.

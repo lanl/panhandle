@@ -2,7 +2,10 @@
 mod tests {
     use std::path::PathBuf;
 
-    use crate::{helpers::*, input_configs::*, monitor_cpu_usage::*};
+    use clap::Parser;
+
+    use crate::{helpers::*, input_configs::*, monitor_cpu_usage::*, monitor_network_usage::*};
+    use panhandle_common::*;
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
     #[tokio::test]
@@ -220,25 +223,40 @@ mod tests {
         assert_eq!(expected, merge_args(cli, config).await);
     }
 
-    // test that valid syslog addresses return as Ok
+    // test that valid syslog addresses return as Ok. Uses "localhost" plus a locally
+    // bound ephemeral port rather than any real remote syslog server, so this doesn't
+    // depend on LANL-internal infrastructure (or any network access at all) being
+    // reachable from wherever the test suite runs.
     #[tokio::test]
     async fn test_syslog_valid() {
-        let valid_addr_tcp = "hpcsyslog.lanl.gov:514/tcp";
-        let valid_addr_udp = "hpcsyslog.lanl.gov:514/udp";
+        // kept alive for the duration of the test so the TCP-reachability check below
+        // has something real to connect to
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let valid_addr_tcp = format!("localhost:{port}/tcp");
+        // UDP is connectionless, so validate_syslog never actually probes reachability
+        // for it -- only DNS resolution of the hostname matters, so no listener is
+        // needed here
+        let valid_addr_udp = "localhost:9/udp";
         let valid_local1 = "unix";
         let valid_local2 = "/dev/log";
 
-        assert!(validate_syslog(valid_addr_tcp).await.is_ok());
+        assert!(validate_syslog(&valid_addr_tcp).await.is_ok());
         assert!(validate_syslog(valid_addr_udp).await.is_ok());
         assert!(validate_syslog(valid_local1).await.is_ok());
         assert!(validate_syslog(valid_local2).await.is_ok());
+
+        drop(listener);
     }
 
-    // test that invalid syslog arguments receive the correct errors
+    // test that invalid syslog arguments receive the correct errors. Like
+    // test_syslog_valid, this avoids depending on any real remote host.
     #[tokio::test]
     async fn test_syslog_invalid() {
-        // test that an invalid hostname returns the correct error
-        let addr_invalid_hostname = "invalid_host.lanl.gov:514/tcp";
+        // test that an invalid hostname returns the correct error. ".invalid" is a
+        // reserved TLD (RFC 2606) guaranteed to never resolve, so this doesn't depend
+        // on any specific DNS zone's current (and potentially changing) behavior.
+        let addr_invalid_hostname = "nonexistent-host.invalid:514/tcp";
         let expected_invalid_hostname = Err("\nSYSLOG: Invalid remote address hostname provided. \
                         \nBe sure to enter in the format: --syslog <hostname>:<port>/tcp or /udp"
             .to_string());
@@ -247,14 +265,21 @@ mod tests {
             validate_syslog(addr_invalid_hostname).await
         );
 
-        // test that an invalid TCP port number returns the correct error
-        let addr_invalid_port = "hpcsyslog.lanl.gov:214/tcp";
+        // test that an unreachable TCP port returns the correct error. Bind then
+        // immediately release a local ephemeral port so it's guaranteed nothing is
+        // listening there, rather than depending on a specific remote host/port
+        // happening to reject connections.
+        let closed_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        }; // listener dropped here, so the port is no longer bound
+        let addr_invalid_port = format!("localhost:{closed_port}/tcp");
         let expected_invalid_port = Err("\nSYSLOG: Provided TCP port number is not reachable. \
                         \nBe sure to enter in the format: --syslog <hostname>:<port>/tcp or /udp"
             .to_string());
         assert_eq!(
             expected_invalid_port,
-            validate_syslog(addr_invalid_port).await
+            validate_syslog(&addr_invalid_port).await
         );
 
         // test general syslog error
@@ -366,6 +391,23 @@ mod tests {
         assert_eq!(original, reconstructed);
     }
 
+    // test that calc_delta distinguishes "never observed this value before" from
+    // "previously observed as exactly 0", so the first sample after monitoring starts
+    // doesn't report a delta spanning the process/system's entire lifetime
+    #[test]
+    fn test_calc_delta() {
+        // no prior observation: must not compute a delta against an implicit 0 baseline
+        assert_eq!(calc_delta(1_000_000_000, None), 0);
+        assert_eq!(calc_delta(0, None), 0);
+        // normal case: delta against a real prior observation
+        assert_eq!(calc_delta(100, Some(40)), 60);
+        // no change since last observation
+        assert_eq!(calc_delta(50, Some(50)), 0);
+        // counter went backwards (e.g. PID reuse observed a lower value): saturates to 0
+        // rather than underflowing
+        assert_eq!(calc_delta(100, Some(150)), 0);
+    }
+
     // test the per-PID CPU% formula: 100% = one core fully busy for the whole interval
     #[test]
     fn test_calc_cpu_percent() {
@@ -404,5 +446,720 @@ mod tests {
             calc_system_cpu_percent(1_000_000_000, 1_000_000_000, 0),
             0.0
         );
+    }
+
+    // test which conditions activate the default execve monitor: explicit request, or
+    // fallback when no other monitoring flag was given at all
+    #[test]
+    fn test_should_run_default_execve_monitor() {
+        // local helper so the test can still express cases as a RawArgs, even though the
+        // function itself takes individual fields (see its doc comment for why)
+        fn check(args: &RawArgs) -> bool {
+            should_run_default_execve_monitor(
+                args.syscall_execve,
+                args.bash,
+                args.zsh,
+                args.memory_faults.is_some(),
+                args.socket,
+                args.memory,
+                args.cpu,
+                args.gpu,
+                args.io,
+                args.syscalls.is_some(),
+            )
+        }
+
+        // explicitly requested: always runs, regardless of what else is set
+        let args = RawArgs {
+            syscall_execve: true,
+            cpu: true,
+            ..Default::default()
+        };
+        assert!(check(&args));
+
+        // nothing else selected: runs as the fallback default
+        assert!(check(&RawArgs::default()));
+
+        // any other monitoring flag selected: the default execve monitor does not run
+        let args = RawArgs {
+            cpu: true,
+            ..Default::default()
+        };
+        assert!(!check(&args));
+
+        let args = RawArgs {
+            bash: true,
+            ..Default::default()
+        };
+        assert!(!check(&args));
+
+        let args = RawArgs {
+            syscalls: Some(vec!["execve".to_string()]),
+            ..Default::default()
+        };
+        assert!(!check(&args));
+    }
+
+    // test that RawArgs parses with sensible defaults when no flags are given
+    #[test]
+    fn test_raw_args_parse_defaults() {
+        let args = RawArgs::try_parse_from(["panhandle"]).unwrap();
+        assert!(!args.bash);
+        assert!(!args.cpu);
+        assert_eq!(args.poll, None);
+        assert_eq!(args.executables, None);
+    }
+
+    // test that boolean flags and a value-taking option parse correctly together
+    #[test]
+    fn test_raw_args_parse_flags_and_value() {
+        let args =
+            RawArgs::try_parse_from(["panhandle", "--cpu", "--gpu", "--verbose", "--poll", "10"])
+                .unwrap();
+        assert!(args.cpu);
+        assert!(args.gpu);
+        assert!(args.verbose);
+        assert_eq!(args.poll, Some(10));
+    }
+
+    // test that a comma-separated list option parses into the expected Vec
+    #[test]
+    fn test_raw_args_parse_comma_separated_list() {
+        let args =
+            RawArgs::try_parse_from(["panhandle", "--executables", "/bin/ls,/bin/cat,/bin/echo"])
+                .unwrap();
+        assert_eq!(
+            args.executables,
+            Some(vec![
+                "/bin/ls".to_string(),
+                "/bin/cat".to_string(),
+                "/bin/echo".to_string()
+            ])
+        );
+    }
+
+    // test that the `output` subcommand and its --http/--syslog options parse correctly,
+    // including a bare --syslog with no value
+    #[test]
+    fn test_raw_args_parse_output_subcommand() {
+        let args = RawArgs::try_parse_from([
+            "panhandle",
+            "output",
+            "--http",
+            "http://localhost:8080",
+            "--syslog",
+        ])
+        .unwrap();
+        match args.output {
+            Some(OutputCommand::Output { http, syslog, .. }) => {
+                assert_eq!(http, Some("http://localhost:8080".to_string()));
+                // bare --syslog with no value parses as Some(None)
+                assert_eq!(syslog, Some(None));
+            }
+            None => panic!("expected an output subcommand to be parsed"),
+        }
+    }
+
+    // test that --poll's value_parser range (1..) rejects 0 at parse time
+    #[test]
+    fn test_raw_args_parse_poll_rejects_zero() {
+        assert!(RawArgs::try_parse_from(["panhandle", "--poll", "0"]).is_err());
+    }
+
+    // test that resolve_comm_list_mode picks the right mode for each list combination, and
+    // errors when both --comm-deny and --comm-allow are provided rather than silently
+    // preferring one
+    #[test]
+    fn test_resolve_comm_list_mode() {
+        assert_eq!(
+            resolve_comm_list_mode(&None, &None),
+            Ok((NO_LIST, Vec::new()))
+        );
+
+        let deny = Some(vec!["bash".to_string()]);
+        assert_eq!(
+            resolve_comm_list_mode(&deny, &None),
+            Ok((DENY_LIST, vec!["bash".to_string()]))
+        );
+
+        let allow = Some(vec!["sh".to_string()]);
+        assert_eq!(
+            resolve_comm_list_mode(&None, &allow),
+            Ok((ALLOW_LIST, vec!["sh".to_string()]))
+        );
+
+        // both provided: must error rather than silently picking one
+        assert!(resolve_comm_list_mode(&deny, &allow).is_err());
+    }
+
+    // test the executable-count and uid-count limit checks at and past their boundary
+    #[test]
+    fn test_validate_count_executables() {
+        assert!(validate_count(EXECUTABLE_COUNT, EXECUTABLE_COUNT, "executables").is_ok());
+        assert!(validate_count(EXECUTABLE_COUNT + 1, EXECUTABLE_COUNT, "executables").is_err());
+    }
+
+    #[test]
+    fn test_validate_count_uids() {
+        assert!(validate_count(UID_COUNT, UID_COUNT, "UIDs").is_ok());
+        assert!(validate_count(UID_COUNT + 1, UID_COUNT, "UIDs").is_err());
+    }
+
+    // test the same boundary against the process-blocking count limits, which main()
+    // enforces at runtime (via validate_count) since clap can't reject an over-limit
+    // comma-separated --block-paths/--comm-allow/--comm-deny list at parse time
+    #[test]
+    fn test_validate_count_block_paths() {
+        assert!(
+            validate_count(MAX_BLOCKED_PATHS, MAX_BLOCKED_PATHS, "block-paths entries").is_ok()
+        );
+        assert!(
+            validate_count(
+                MAX_BLOCKED_PATHS + 1,
+                MAX_BLOCKED_PATHS,
+                "block-paths entries"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_validate_count_comm_lists() {
+        assert!(
+            validate_count(
+                MAX_BLOCKED_COMMS,
+                MAX_BLOCKED_COMMS,
+                "comm-allow/comm-deny entries"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_count(
+                MAX_BLOCKED_COMMS + 1,
+                MAX_BLOCKED_COMMS,
+                "comm-allow/comm-deny entries"
+            )
+            .is_err()
+        );
+    }
+
+    // test that get_canonical_executable_list keeps the original path, adds a distinct
+    // canonical form when the input resolves through a symlink, and doesn't choke on a
+    // nonexistent path
+    #[test]
+    fn test_get_canonical_executable_list() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!(
+            "panhandle_test_geel_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+
+        let real_file = base.join("mybin");
+        std::fs::write(&real_file, b"").unwrap();
+
+        let symlink_path = base.join("mybin_link");
+        symlink(&real_file, &symlink_path).unwrap();
+
+        let nonexistent = base.join("does_not_exist");
+
+        let input = vec![
+            symlink_path.to_string_lossy().to_string(),
+            nonexistent.to_string_lossy().to_string(),
+        ];
+
+        let result = get_canonical_executable_list(&input);
+
+        // the originally-provided path is always kept, even after canonicalization
+        assert!(result.contains(&symlink_path.to_string_lossy().to_string()));
+        // a symlink resolves to an additional canonical entry pointing at the real file
+        let canonical_real = std::fs::canonicalize(&real_file).unwrap();
+        assert!(result.contains(&canonical_real.to_string_lossy().to_string()));
+        // a nonexistent path yields no canonical form beyond itself
+        assert!(result.contains(&nonexistent.to_string_lossy().to_string()));
+        assert_eq!(result.len(), 3);
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    // test that --syscalls, --memory-faults, --exclude-min-uid/--exclude-max-uid,
+    // --pid-list, and --include-uid all parse into their expected typed values
+    #[test]
+    fn test_raw_args_parse_remaining_scalar_and_list_options() {
+        let args = RawArgs::try_parse_from([
+            "panhandle",
+            "--syscalls",
+            "openat,connect",
+            "--memory-faults",
+            "100",
+            "--exclude-min-uid",
+            "1",
+            "--exclude-max-uid",
+            "998",
+            "--pid-list",
+            "123,456",
+            "--include-uid",
+            "1000,1001",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            args.syscalls,
+            Some(vec!["openat".to_string(), "connect".to_string()])
+        );
+        assert_eq!(args.memory_faults, Some(100));
+        assert_eq!(args.exclude_min_uid, Some(1));
+        assert_eq!(args.exclude_max_uid, Some(998));
+        assert_eq!(args.pid_list, Some(vec![123, 456]));
+        assert_eq!(
+            args.include_uid,
+            Some(vec!["1000".to_string(), "1001".to_string()])
+        );
+    }
+
+    // test that the process-blocking list options (--block-paths, --comm-allow,
+    // --comm-deny) parse correctly
+    #[test]
+    fn test_raw_args_parse_block_paths_and_comm_lists() {
+        let args = RawArgs::try_parse_from([
+            "panhandle",
+            "--block-paths",
+            "/usr/bin/nc,/bin/sh",
+            "--comm-allow",
+            "bash,zsh",
+            "--comm-deny",
+            "nc,ncat",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            args.block_paths,
+            Some(vec!["/usr/bin/nc".to_string(), "/bin/sh".to_string()])
+        );
+        assert_eq!(
+            args.comm_allow,
+            Some(vec!["bash".to_string(), "zsh".to_string()])
+        );
+        assert_eq!(
+            args.comm_deny,
+            Some(vec!["nc".to_string(), "ncat".to_string()])
+        );
+    }
+
+    // test that --block-paths entries are accepted right up to MAX_PATH_LENGTH bytes and
+    // rejected one byte past it, rather than silently truncating
+    #[test]
+    fn test_raw_args_parse_block_paths_length_boundary() {
+        let at_limit = "a".repeat(MAX_PATH_LENGTH);
+        assert!(RawArgs::try_parse_from(["panhandle", "--block-paths", &at_limit]).is_ok());
+
+        let over_limit = "a".repeat(MAX_PATH_LENGTH + 1);
+        assert!(RawArgs::try_parse_from(["panhandle", "--block-paths", &over_limit]).is_err());
+    }
+
+    // test that --comm-allow/--comm-deny entries are accepted right up to MAX_COMM_LENGTH
+    // bytes and rejected one byte past it
+    #[test]
+    fn test_raw_args_parse_comm_length_boundary() {
+        let at_limit = "a".repeat(MAX_COMM_LENGTH);
+        assert!(RawArgs::try_parse_from(["panhandle", "--comm-allow", &at_limit]).is_ok());
+        assert!(RawArgs::try_parse_from(["panhandle", "--comm-deny", &at_limit]).is_ok());
+
+        let over_limit = "a".repeat(MAX_COMM_LENGTH + 1);
+        assert!(RawArgs::try_parse_from(["panhandle", "--comm-allow", &over_limit]).is_err());
+        assert!(RawArgs::try_parse_from(["panhandle", "--comm-deny", &over_limit]).is_err());
+    }
+
+    // test that --block-paths accepts exactly MAX_BLOCKED_PATHS entries and rejects one
+    // more, enforced by clap's num_args upper bound
+    #[test]
+    fn test_raw_args_parse_block_paths_count_boundary() {
+        let at_limit: Vec<String> = (0..MAX_BLOCKED_PATHS)
+            .map(|i| format!("/bin/p{i}"))
+            .collect();
+        assert!(
+            RawArgs::try_parse_from(["panhandle", "--block-paths", &at_limit.join(",")]).is_ok()
+        );
+
+        // NOTE: clap's num_args upper bound is enforced per raw CLI token, not per
+        // value_delimiter-split entry, so it can't reject an over-limit comma-separated
+        // list at parse time. The actual limit is enforced downstream in main() via
+        // validate_count against MAX_BLOCKED_PATHS -- see test_validate_count_block_paths.
+        let over_limit: Vec<String> = (0..MAX_BLOCKED_PATHS + 1)
+            .map(|i| format!("/bin/p{i}"))
+            .collect();
+        let parsed =
+            RawArgs::try_parse_from(["panhandle", "--block-paths", &over_limit.join(",")]).unwrap();
+        assert_eq!(parsed.block_paths.unwrap().len(), MAX_BLOCKED_PATHS + 1);
+    }
+
+    // test that --comm-allow parses at and past MAX_BLOCKED_COMMS entries; like
+    // --block-paths, clap's num_args upper bound doesn't reject an over-limit
+    // comma-separated list at parse time (see test_raw_args_parse_block_paths_count_boundary),
+    // so the actual limit is enforced downstream via validate_count -- see
+    // test_validate_count_comm_lists
+    #[test]
+    fn test_raw_args_parse_comm_allow_count_boundary() {
+        let at_limit: Vec<String> = (0..MAX_BLOCKED_COMMS).map(|i| format!("c{i}")).collect();
+        let parsed =
+            RawArgs::try_parse_from(["panhandle", "--comm-allow", &at_limit.join(",")]).unwrap();
+        assert_eq!(parsed.comm_allow.unwrap().len(), MAX_BLOCKED_COMMS);
+
+        let over_limit: Vec<String> = (0..MAX_BLOCKED_COMMS + 1)
+            .map(|i| format!("c{i}"))
+            .collect();
+        let parsed =
+            RawArgs::try_parse_from(["panhandle", "--comm-allow", &over_limit.join(",")]).unwrap();
+        assert_eq!(parsed.comm_allow.unwrap().len(), MAX_BLOCKED_COMMS + 1);
+    }
+
+    // regression test covering every non-bool CLI override field in merge_args at once,
+    // so a field that's added later but forgotten in the override list (a copy-paste-prone
+    // block of ~10 near-identical `if cli_args.X.is_some() { ... }` statements) is caught
+    // here instead of only showing up as a confusing end-to-end config-file bug
+    #[tokio::test]
+    async fn test_merge_args_overrides_all_scalar_and_list_fields() {
+        let config = ConfigArgs {
+            exclude_min_uid: Some(1),
+            exclude_max_uid: Some(500),
+            executables: Some(vec!["/bin/old".to_string()]),
+            include_uid: Some(vec!["1".to_string()]),
+            memory_faults: Some(1),
+            poll: Some(5),
+            pid_list: Some(vec![1]),
+            syscalls: Some(vec!["old_syscall".to_string()]),
+            block_paths: Some(vec!["/old/path".to_string()]),
+            comm_allow: Some(vec!["old_allow".to_string()]),
+            comm_deny: Some(vec!["old_deny".to_string()]),
+            ..Default::default()
+        };
+
+        let cli = RawArgs {
+            exclude_min_uid: Some(2),
+            exclude_max_uid: Some(600),
+            executables: Some(vec!["/bin/new".to_string()]),
+            include_uid: Some(vec!["2".to_string()]),
+            memory_faults: Some(2),
+            poll: Some(10),
+            pid_list: Some(vec![2]),
+            syscalls: Some(vec!["new_syscall".to_string()]),
+            block_paths: Some(vec!["/new/path".to_string()]),
+            comm_allow: Some(vec!["new_allow".to_string()]),
+            comm_deny: Some(vec!["new_deny".to_string()]),
+            ..Default::default()
+        };
+
+        let merged = merge_args(cli, config).await;
+
+        assert_eq!(merged.exclude_min_uid, Some(2));
+        assert_eq!(merged.exclude_max_uid, Some(600));
+        assert_eq!(merged.executables, Some(vec!["/bin/new".to_string()]));
+        assert_eq!(merged.include_uid, Some(vec!["2".to_string()]));
+        assert_eq!(merged.memory_faults, Some(2));
+        assert_eq!(merged.poll, Some(10));
+        assert_eq!(merged.pid_list, Some(vec![2]));
+        assert_eq!(merged.syscalls, Some(vec!["new_syscall".to_string()]));
+        assert_eq!(merged.block_paths, Some(vec!["/new/path".to_string()]));
+        assert_eq!(merged.comm_allow, Some(vec!["new_allow".to_string()]));
+        assert_eq!(merged.comm_deny, Some(vec!["new_deny".to_string()]));
+    }
+
+    // test that fields left unset on the CLI pass the config file's value through
+    // unchanged, rather than being wiped out by an unconditional overwrite
+    #[tokio::test]
+    async fn test_merge_args_preserves_config_when_cli_field_unset() {
+        let config = ConfigArgs {
+            pid_list: Some(vec![42]),
+            syscalls: Some(vec!["execve".to_string()]),
+            block_paths: Some(vec!["/etc/shadow".to_string()]),
+            comm_allow: Some(vec!["sshd".to_string()]),
+            ..Default::default()
+        };
+        let cli = RawArgs {
+            ..Default::default()
+        };
+
+        let merged = merge_args(cli, config).await;
+
+        assert_eq!(merged.pid_list, Some(vec![42]));
+        assert_eq!(merged.syscalls, Some(vec!["execve".to_string()]));
+        assert_eq!(merged.block_paths, Some(vec!["/etc/shadow".to_string()]));
+        assert_eq!(merged.comm_allow, Some(vec!["sshd".to_string()]));
+    }
+
+    // test that hex_to_interface decodes an IPv4 hex address (as found in /proc/net/tcp),
+    // matches it to the owning interface, excludes loopback addresses, and returns None
+    // for both IPv6-length hex and malformed input
+    #[test]
+    fn test_hex_to_interface() {
+        use std::net::Ipv4Addr;
+
+        use network_interface::{Addr, NetworkInterface, V4IfAddr};
+
+        let iface = NetworkInterface {
+            name: "eth0".to_string(),
+            addr: vec![Addr::V4(V4IfAddr {
+                ip: Ipv4Addr::new(10, 0, 0, 5),
+                broadcast: None,
+                netmask: None,
+            })],
+            mac_addr: Some("aa:bb:cc:dd:ee:ff".to_string()),
+            index: 1,
+            internal: false,
+        };
+        let interfaces = vec![iface];
+
+        // loopback (127.0.0.1 in /proc/net/tcp's little-endian hex form) is always
+        // excluded, even though no interface here happens to match it
+        assert_eq!(hex_to_interface("0100007F", &interfaces), None);
+
+        // 10.0.0.5 encoded the same way resolves to the matching interface
+        assert_eq!(
+            hex_to_interface("0500000A", &interfaces),
+            Some(("eth0".to_string(), "10.0.0.5".to_string()))
+        );
+
+        // a well-formed address that matches no known interface returns None
+        assert_eq!(hex_to_interface("01000A0A", &interfaces), None);
+
+        // IPv6-length hex (32 chars) is skipped entirely rather than misparsed
+        assert_eq!(hex_to_interface(&"0".repeat(32), &interfaces), None);
+
+        // malformed hex yields None rather than panicking
+        assert_eq!(hex_to_interface("not_hex!", &interfaces), None);
+    }
+
+    // test get_network_info's fallback chain: an all-unknown result when there's no
+    // matching connection and no usable non-loopback interface, then falling back to the
+    // first non-"lo" interface with an address once one is available
+    #[test]
+    fn test_get_network_info_fallback_and_unknown() {
+        use std::net::Ipv4Addr;
+
+        use network_interface::{Addr, NetworkInterface, V4IfAddr};
+
+        // guaranteed not to be a real running process, so get_active_connection_info's
+        // /proc/<pid>/net/{tcp,tcp6,udp} reads all fail and it deterministically returns
+        // None, exercising get_network_info's fallback path
+        let nonexistent_pid = u32::MAX;
+
+        // no interfaces at all -> fully unknown fallback
+        assert_eq!(
+            get_network_info(nonexistent_pid, &[]),
+            (
+                "unknown".to_string(),
+                "0.0.0.0".to_string(),
+                "00:00:00:00:00:00".to_string()
+            )
+        );
+
+        // only "lo" present -> still falls through to fully unknown, since the fallback
+        // loop explicitly skips "lo"
+        let lo = NetworkInterface {
+            name: "lo".to_string(),
+            addr: vec![Addr::V4(V4IfAddr {
+                ip: Ipv4Addr::new(127, 0, 0, 1),
+                broadcast: None,
+                netmask: None,
+            })],
+            mac_addr: None,
+            index: 1,
+            internal: true,
+        };
+        assert_eq!(
+            get_network_info(nonexistent_pid, std::slice::from_ref(&lo)),
+            (
+                "unknown".to_string(),
+                "0.0.0.0".to_string(),
+                "00:00:00:00:00:00".to_string()
+            )
+        );
+
+        // a non-"lo" interface with an address is used as the fallback default
+        let eth0 = NetworkInterface {
+            name: "eth0".to_string(),
+            addr: vec![Addr::V4(V4IfAddr {
+                ip: Ipv4Addr::new(192, 168, 1, 10),
+                broadcast: None,
+                netmask: None,
+            })],
+            mac_addr: Some("11:22:33:44:55:66".to_string()),
+            index: 2,
+            internal: false,
+        };
+        assert_eq!(
+            get_network_info(nonexistent_pid, &[lo, eth0]),
+            (
+                "eth0".to_string(),
+                "192.168.1.10".to_string(),
+                "11:22:33:44:55:66".to_string()
+            )
+        );
+    }
+
+    // test that get_process_name resolves the current process's own comm, and returns
+    // None for a PID that can't possibly exist
+    #[test]
+    fn test_get_process_name() {
+        let pid = std::process::id();
+        let name = get_process_name(pid);
+        assert!(name.is_some_and(|n| !n.is_empty()));
+
+        assert_eq!(get_process_name(u32::MAX), None);
+    }
+
+    // test that get_parent_pid returns the same value as independently reading
+    // /proc/self/status's PPid field, and errors for a PID that can't possibly exist
+    #[test]
+    fn test_get_parent_pid() {
+        let pid = std::process::id();
+        let ppid = get_parent_pid(pid).expect("stat should succeed for the current process");
+
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let expected_ppid: u32 = status
+            .lines()
+            .find_map(|l| l.strip_prefix("PPid:"))
+            .expect("PPid field should be present in /proc/self/status")
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(ppid, expected_ppid);
+
+        assert!(get_parent_pid(u32::MAX).is_err());
+    }
+
+    // test that get_process_uid returns the same value as independently reading
+    // /proc/self/status's real UID (the first of the four values on the "Uid:" line), and
+    // None for a PID that can't possibly exist
+    #[test]
+    fn test_get_process_uid() {
+        let pid = std::process::id();
+        let uid = get_process_uid(pid).expect("status should succeed for the current process");
+
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let expected_uid: u32 = status
+            .lines()
+            .find_map(|l| l.strip_prefix("Uid:"))
+            .expect("Uid field should be present in /proc/self/status")
+            .split_whitespace()
+            .next()
+            .expect("Uid field should have at least one value")
+            .parse()
+            .unwrap();
+        assert_eq!(uid, expected_uid);
+
+        assert_eq!(get_process_uid(u32::MAX), None);
+    }
+
+    // test that resolve_username resolves the current process's own real UID to a
+    // non-empty name, and falls back to "unknown" (rather than panicking) for a UID that
+    // can't possibly map to a real user
+    #[test]
+    fn test_resolve_username() {
+        let pid = std::process::id();
+        let uid = get_process_uid(pid).expect("status should succeed for the current process");
+        assert!(!resolve_username(uid).is_empty());
+
+        assert_eq!(resolve_username(u32::MAX), "unknown");
+    }
+
+    // test format_owner's rendering for every combination of resolved/unresolved
+    // uid/username -- in particular that a resolvable uid of 0 (root) renders as "0", not
+    // "unknown", so it stays distinguishable from a genuinely unresolved uid
+    #[test]
+    fn test_format_owner() {
+        assert_eq!(
+            format_owner(Some(0), Some("root")),
+            ("0".to_string(), "root".to_string())
+        );
+        assert_eq!(
+            format_owner(Some(1000), Some("dmcgee")),
+            ("1000".to_string(), "dmcgee".to_string())
+        );
+        // uid resolved but username lookup failed
+        assert_eq!(
+            format_owner(Some(100998), Some("unknown")),
+            ("100998".to_string(), "unknown".to_string())
+        );
+        // uid itself couldn't be resolved at all
+        assert_eq!(
+            format_owner(None, Some("unknown")),
+            ("unknown".to_string(), "unknown".to_string())
+        );
+        assert_eq!(
+            format_owner(None, None),
+            ("unknown".to_string(), "unknown".to_string())
+        );
+    }
+
+    // test format_state's rendering of a present vs. absent process state
+    #[test]
+    fn test_format_state() {
+        assert_eq!(format_state(Some('R')), "R");
+        assert_eq!(format_state(Some('S')), "S");
+        assert_eq!(format_state(None), "");
+    }
+
+    // test that build_found_entry converts ticks to ns correctly, treats a missing prior
+    // sample as a zero delta (the first-sample-spike fix covered end-to-end by
+    // test_calc_delta), and accumulates running avg/max correctly across repeated samples
+    #[test]
+    fn test_build_found_entry_delta_and_accumulation() {
+        use std::collections::HashMap;
+
+        use procfs::process::Process;
+
+        let pid = std::process::id();
+        let stat = Process::new(pid as i32)
+            .and_then(|p| p.stat())
+            .expect("stat should succeed for the current process");
+        let ticks_per_second = procfs::ticks_per_second();
+        let expected_cpu_time = (stat.utime + stat.stime) * 1_000_000_000 / ticks_per_second;
+        let interval_ns = 1_000_000_000u64;
+
+        let mut last_pid_times: HashMap<u32, u64> = HashMap::new();
+        // seed a "last" of 0 so the first call sees the full cpu_time as its delta
+        last_pid_times.insert(pid, 0);
+        let mut pid_stats = HashMap::new();
+
+        let e1 = build_found_entry(
+            pid,
+            stat.clone(),
+            None,
+            None,
+            ticks_per_second,
+            interval_ns,
+            &mut last_pid_times,
+            &mut pid_stats,
+        );
+        assert_eq!(e1.cpu_time, expected_cpu_time);
+        assert_eq!(e1.delta, expected_cpu_time);
+        let expected_percent1 = calc_cpu_percent(expected_cpu_time, interval_ns);
+        assert_eq!(e1.cpu_percent, expected_percent1);
+        assert_eq!(e1.avg_cpu_percent, expected_percent1);
+        assert_eq!(e1.max_cpu_percent, expected_percent1);
+        assert_eq!(last_pid_times[&pid], expected_cpu_time);
+
+        // second sample of the identical stat snapshot -> zero elapsed cpu time, so cpu%
+        // drops to 0 while avg reflects both samples and max holds the first sample's peak
+        let e2 = build_found_entry(
+            pid,
+            stat.clone(),
+            None,
+            None,
+            ticks_per_second,
+            interval_ns,
+            &mut last_pid_times,
+            &mut pid_stats,
+        );
+        assert_eq!(e2.delta, 0);
+        assert_eq!(e2.cpu_percent, 0.0);
+        assert_eq!(e2.avg_cpu_percent, expected_percent1 / 2.0);
+        assert_eq!(e2.max_cpu_percent, expected_percent1);
     }
 }

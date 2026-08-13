@@ -17,7 +17,8 @@ build-job:
     - rustup toolchain install nightly --component rust-src
     - rustup component add clippy
     - rustup update
-    - cargo install bpf-linker
+    - cargo install cargo-binstall
+    - cargo binstall bpf-linker
     - cargo update
     - cargo install cargo-sbom
   script:
@@ -37,7 +38,8 @@ lint-test-job:
     - rustup toolchain install nightly --component rust-src
     - rustup component add clippy
     - rustup update
-    - cargo install bpf-linker
+    - cargo install cargo-binstall
+    - cargo binstall bpf-linker
     - cargo update
   script:
     - cargo clippy --all-targets --all-features -- -D warnings -A clippy::too_many_arguments
@@ -51,7 +53,8 @@ test-test-job:
     - rustup toolchain install nightly --component rust-src
     - rustup component add clippy
     - rustup update
-    - cargo install bpf-linker
+    - cargo install cargo-binstall
+    - cargo binstall bpf-linker
     - cargo update
     - rm -rf .cargo
     - cargo build --config ../.runner-config.toml --release
@@ -77,8 +80,9 @@ deny-test-job:
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
     - rustup update
-    - cargo install bpf-linker 
-    - cargo install --locked cargo-deny
+    - cargo install cargo-binstall
+    - cargo binstall bpf-linker
+    - cargo install cargo-deny
     - cargo update
     - cargo build --config ../.runner-config.toml 
   script:
@@ -107,7 +111,8 @@ build-rpm-el8_x86_64:
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
-    - ~/.cargo/bin/cargo install bpf-linker
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
   script:
     # x86_64 build
     - ~/.cargo/bin/rustup target add x86_64-unknown-linux-gnu
@@ -138,7 +143,8 @@ build-rpm-el8_aarch64:
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
-    - ~/.cargo/bin/cargo install bpf-linker
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
   script:
     ## aarch64 build
     - ~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu
@@ -173,7 +179,8 @@ build-rpm-el9_x86_64:
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
-    - ~/.cargo/bin/cargo install bpf-linker
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
   script:
     # x86_64 build
     - ~/.cargo/bin/rustup target add x86_64-unknown-linux-gnu
@@ -204,7 +211,8 @@ build-rpm-el9_aarch64:
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
-    - ~/.cargo/bin/cargo install bpf-linker
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
   script:
     ## aarch64 build
     - ~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu
@@ -239,7 +247,8 @@ build-rpm-el10_x86_64:
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
-    - ~/.cargo/bin/cargo install bpf-linker
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
   script:
     # x86_64 build
     - ~/.cargo/bin/rustup target add x86_64-unknown-linux-gnu
@@ -270,7 +279,8 @@ build-rpm-el10_aarch64:
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
-    - ~/.cargo/bin/cargo install bpf-linker
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
   script:
     ## aarch64 build
     - ~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu
@@ -304,7 +314,9 @@ build-rpm-suse-15.5_x86_64:
     - cd panhandle/
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
-    - ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
+    - ~/.cargo/bin/cargo install cargo-generate-rpmbuild
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
     - ~/.cargo/bin/cargo update
   script:
     # x86_64 build
@@ -335,7 +347,9 @@ build-rpm-suse-15.5_aarch64:
     - cd panhandle/
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
-    - ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
+    - ~/.cargo/bin/cargo install cargo-generate-rpmbuild
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
     - ~/.cargo/bin/cargo update
   script:
     ## aarch64 build
@@ -370,7 +384,9 @@ build-rpm-suse-15.7_x86_64:
     - cd panhandle/
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
-    - ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
+    - ~/.cargo/bin/cargo install cargo-generate-rpm
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
     - ~/.cargo/bin/cargo update
   script:
     # x86_64 build
@@ -401,7 +417,9 @@ build-rpm-suse-15.7_aarch64:
     - cd panhandle/
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
-    - ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker
+    - ~/.cargo/bin/cargo install cargo-generate-rpm
+    - ~/.cargo install cargo-binstall
+    - ~/.cargo binstall bpf-linker
     - ~/.cargo/bin/cargo update
   script:
     ## aarch64 build

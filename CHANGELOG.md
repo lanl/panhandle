@@ -12,6 +12,8 @@
 - --verbose now also reports each process's owner (UID and resolved username) and current state (running/sleeping/etc) alongside the existing PPID/Parent_Comm, across the --cpu, --gpu, --io, --socket, --memory, and --memory-faults reports; username resolution is cached per poll to avoid repeat NSS/LDAP lookups for processes sharing a UID
 - added test coverage for the new owner/state resolution (get_process_uid, resolve_username) and formatting (format_owner, format_state) helpers
 - --debug now logs each eBPF program's load/attach outcome by name (uprobes, kprobes, tracepoints, and LSM hooks) instead of leaving success silent and failure to surface only as a generic top-level error; attach failures are always logged, not just under --debug
+- standardized json outputs to use json numbers instead of strings
+- extracted json generators to standardize with tests instead of using debug formatting which can be error prone
 
 ### v1.0.17
 

@@ -79,7 +79,7 @@ pub async fn consume_shell_ebpf_map(
             }
 
             // get the moniker of the uid of the event
-            let user = get_user_by_uid(data.uid).unwrap();
+            let user = resolve_username(data.uid);
 
             // timestamp
             let utc: DateTime<Utc> = Utc::now();
@@ -87,23 +87,19 @@ pub async fn consume_shell_ebpf_map(
 
             // if json string is desired
             if json {
-                let json_string = format!(
-                    "{{\"application\": \"panhandle\", \"hostname\": \"{}\", \"moniker\": \"{}\", \"entry\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": \"{}\"}}",
-                    hostname,
-                    user.name().to_string_lossy(),
+                let json_string = format_shell_event_json(
+                    &hostname,
+                    &user,
                     core::str::from_utf8(&data.entry)
                         .unwrap_or_default()
                         .trim_end_matches("\0")
                         .trim(),
-                    core::str::from_utf8(&data.command)
-                        .unwrap_or_default()
-                        .trim_end_matches("\0")
-                        .trim(),
+                    command,
                     data.uid,
                     data.pid,
                     data.gid,
                     data.tgid,
-                    formatted_utc
+                    &formatted_utc,
                 );
                 if http {
                     let http_string = Arc::new(json_string.clone());
@@ -141,7 +137,7 @@ pub async fn consume_shell_ebpf_map(
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
                     hostname,
-                    user.name().to_string_lossy(),
+                    user,
                     data,
                     formatted_utc
                 );
@@ -237,7 +233,7 @@ pub async fn consume_execve_ebpf_map(
             }
 
             // get the moniker of the uid of the event
-            let user: uzers::User = get_user_by_uid(data.uid).unwrap();
+            let user = resolve_username(data.uid);
 
             // timestamp
             let utc: DateTime<Utc> = Utc::now();
@@ -265,19 +261,18 @@ pub async fn consume_execve_ebpf_map(
                         argvec.push(arg.trim_end_matches('\0'));
                     }
                 }
-                let json_string: String = format!(
-                    "{{\"application\": \"panhandle\", \"hostname\": \"{}\", \"moniker\": \"{}\", \"filename\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"args\": {:?}, \"envs\": {:?}, \"ts_utc\": {:?} }}",
-                    hostname,
-                    user.name().to_string_lossy(),
+                let json_string: String = format_execve_event_json(
+                    &hostname,
+                    &user,
                     filename,
                     command,
                     data.uid,
                     data.pid,
                     data.gid,
                     data.tgid,
-                    argvec,
-                    envvec,
-                    formatted_utc
+                    &argvec,
+                    &envvec,
+                    &formatted_utc,
                 );
                 if http {
                     let http_string: Arc<String> = Arc::new(json_string.clone());
@@ -312,7 +307,7 @@ pub async fn consume_execve_ebpf_map(
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
                     hostname,
-                    user.name().to_string_lossy(),
+                    user,
                     data,
                     formatted_utc
                 );
@@ -344,6 +339,67 @@ pub async fn consume_execve_ebpf_map(
             }
         }
     }
+}
+
+/// JSON rendering of a shell (bash/zsh) readline event. All free-form string fields
+/// (hostname, moniker, entry, command, ts) are escaped so the document stays valid
+/// even if a command or entry contains quotes, backslashes, or control characters.
+/// The uid/pid/gid/tgid render as quoted strings, matching the established schema.
+pub fn format_shell_event_json(
+    hostname: &str,
+    moniker: &str,
+    entry: &str,
+    command: &str,
+    uid: u32,
+    pid: u32,
+    gid: u32,
+    tgid: u32,
+    ts_utc: &str,
+) -> String {
+    format!(
+        "{{\"application\": \"panhandle\", \"hostname\": {}, \"moniker\": {}, \"entry\": {}, \"command\": {}, \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": {}}}",
+        json_quoted(hostname),
+        json_quoted(moniker),
+        json_quoted(entry),
+        json_quoted(command),
+        uid,
+        pid,
+        gid,
+        tgid,
+        json_quoted(ts_utc)
+    )
+}
+
+/// JSON rendering of an execve event. Args and envs serialize as proper JSON arrays
+/// (the previous `{:?}` debug formatting produced Rust-style escapes like `\u{1b}`
+/// that are not valid JSON), and all free-form strings are escaped the same way.
+pub fn format_execve_event_json(
+    hostname: &str,
+    moniker: &str,
+    filename: &str,
+    command: &str,
+    uid: u32,
+    pid: u32,
+    gid: u32,
+    tgid: u32,
+    args: &[&str],
+    envs: &[&str],
+    ts_utc: &str,
+) -> String {
+    format!(
+        "{{\"application\": \"panhandle\", \"hostname\": {}, \"moniker\": {}, \"filename\": {}, \"command\": {}, \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"args\": {}, \"envs\": {}, \"ts_utc\": {}}}",
+        json_quoted(hostname),
+        json_quoted(moniker),
+        json_quoted(filename),
+        json_quoted(command),
+        uid,
+        pid,
+        gid,
+        tgid,
+        serde_json::to_string(args).unwrap_or_else(|_| "[]".to_string()),
+        serde_json::to_string(envs).unwrap_or_else(|_| "[]".to_string()),
+        json_quoted(ts_utc)
+    )
 }
 
 /// send to specified syslog address.
@@ -614,6 +670,14 @@ pub fn output_needs(http: bool, syslog: bool, json_output: bool, debug: bool) ->
     let needs_plain = !json_output && (!debug || http || syslog);
     let needs_json = json_output || debug;
     (needs_plain, needs_json)
+}
+
+/// JSON-escape a string field (including its surrounding quotes) so it can be interpolated
+/// into a hand-built JSON object template without breaking the document when the value
+/// contains quotes, backslashes, or control characters. Serializing a `&str` cannot fail,
+/// so the expect is unreachable in practice.
+pub fn json_quoted(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a &str cannot fail")
 }
 
 /// Render a process owner for --verbose output. The UID renders as "unknown" rather than

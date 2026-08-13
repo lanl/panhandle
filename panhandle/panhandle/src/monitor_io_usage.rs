@@ -84,6 +84,64 @@ pub fn format_io_prose(
     }
 }
 
+/// JSON rendering of an IO stats entry, mirroring `format_io_prose`. `verbose` includes
+/// parent/owner/state fields; the compact form keeps just PID/comm plus the IO counters.
+/// Built via the `json!` macro, so every string field is escaped by serde_json and the
+/// document is always valid JSON.
+pub fn format_io_json(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    read_count: u64,
+    write_count: u64,
+    read_mb: u64,
+    write_mb: u64,
+    open_fds: usize,
+    unique_inodes: usize,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_val = format_state(state);
+        json!({
+            "Type": "io",
+            "PID": pid,
+            "Comm": comm,
+            "PPID": ppid_val,
+            "Parent_Comm": parent_comm_val,
+            "UID": uid_val,
+            "Username": username_val,
+            "State": state_val,
+            "Read_Count": read_count,
+            "Write_Count": write_count,
+            "Read_MB": read_mb,
+            "Write_MB": write_mb,
+            "Open_FDs": open_fds,
+            "Unique_Inodes": unique_inodes,
+        })
+        .to_string()
+    } else {
+        json!({
+            "Type": "io",
+            "PID": pid,
+            "Comm": comm,
+            "Read_Count": read_count,
+            "Write_Count": write_count,
+            "Read_MB": read_mb,
+            "Write_MB": write_mb,
+            "Open_FDs": open_fds,
+            "Unique_Inodes": unique_inodes,
+        })
+        .to_string()
+    }
+}
+
 pub async fn monitor_io_usage(
     json_output: &bool,
     http: &bool,
@@ -278,11 +336,6 @@ async fn report_io_and_inode_stats(
     let write_mb = write_bytes / (1024 * 1024);
 
     let (plain_string, json_string) = if *verbose {
-        let ppid_val = ppid.unwrap_or(0);
-        let parent_comm_val = parent_comm.unwrap_or("unknown");
-        let (uid_val, username_val) = format_owner(uid, username);
-        let state_val = format_state(state);
-
         let plain = if needs_plain {
             format_io_prose(
                 true,
@@ -305,23 +358,22 @@ async fn report_io_and_inode_stats(
         };
 
         let json_string = if needs_json {
-            json!({
-                "Type": "io",
-                "PID": pid,
-                "Comm": comm,
-                "PPID": ppid_val,
-                "Parent_Comm": parent_comm_val,
-                "UID": uid_val,
-                "Username": username_val,
-                "State": state_val,
-                "Read_Count": read_count,
-                "Write_Count": write_count,
-                "Read_MB": read_mb,
-                "Write_MB": write_mb,
-                "Open_FDs": open_fds,
-                "Unique_Inodes": unique_inodes,
-            })
-            .to_string()
+            format_io_json(
+                true,
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
+                read_count,
+                write_count,
+                read_mb,
+                write_mb,
+                open_fds,
+                unique_inodes,
+            )
         } else {
             String::new()
         };
@@ -350,18 +402,22 @@ async fn report_io_and_inode_stats(
         };
 
         let json_string = if needs_json {
-            json!({
-                "Type": "io",
-                "PID": pid,
-                "Comm": comm,
-                "Read_Count": read_count,
-                "Write_Count": write_count,
-                "Read_MB": read_mb,
-                "Write_MB": write_mb,
-                "Open_FDs": open_fds,
-                "Unique_Inodes": unique_inodes,
-            })
-            .to_string()
+            format_io_json(
+                false,
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
+                read_count,
+                write_count,
+                read_mb,
+                write_mb,
+                open_fds,
+                unique_inodes,
+            )
         } else {
             String::new()
         };

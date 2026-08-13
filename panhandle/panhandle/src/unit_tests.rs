@@ -1180,6 +1180,17 @@ mod tests {
         assert_eq!(compact, "Type: cpu, PID: 42, Comm: bash, Status: not_found");
     }
 
+    // test the system-wide CPU summary builder: 100% = all cores busy, with the core
+    // count and busy delta rendered alongside the percentage
+    #[test]
+    fn test_format_system_cpu_prose() {
+        let summary = format_system_cpu_prose(25.0, 4, 1000.0);
+        assert_eq!(
+            summary,
+            "Type: cpu, CPU: 25.00%, CPUs: 4, Busy Delta: 1000.00 ms"
+        );
+    }
+
     // test the per-process GPU plain-text builder in both modes
     #[test]
     fn test_format_gpu_prose() {
@@ -1544,5 +1555,323 @@ mod tests {
         let s = format!("{}", evt);
         assert!(s.contains("args: []"));
         assert!(s.contains("envs: []"));
+    }
+
+    // helper shared by the JSON-validity tests: every format_*_json builder must emit a
+    // document that serde_json can parse back, so each one gets a parse assertion here
+    fn assert_valid_json(json: &str) {
+        serde_json::from_str::<serde_json::Value>(json)
+            .unwrap_or_else(|e| panic!("builder emitted invalid JSON: {e}\njson: {json}"));
+    }
+
+    // every CPU JSON builder emits parseable documents in both verbose and compact modes,
+    // including for a comm containing quotes/backslashes/control chars, and the escaped
+    // value round-trips through the parser unchanged
+    #[test]
+    fn test_cpu_json_valid() {
+        let hostile = "ba\"sh\\\u{1b}[31m";
+
+        let verbose = format_cpu_json(
+            true,
+            42,
+            hostile,
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            1234.5,
+            56.25,
+            12.5,
+            7.25,
+            90.0,
+        );
+        assert_valid_json(&verbose);
+
+        let compact = format_cpu_json(
+            false,
+            42,
+            hostile,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.0,
+            0.0,
+            12.5,
+            7.25,
+            90.0,
+        );
+        assert_valid_json(&compact);
+        let parsed: serde_json::Value = serde_json::from_str(&compact).unwrap();
+        assert_eq!(parsed["Comm"], hostile);
+        assert_eq!(parsed["Type"], "cpu");
+
+        let not_found_verbose = format_cpu_not_found_json(
+            true,
+            42,
+            hostile,
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+        );
+        assert_valid_json(&not_found_verbose);
+
+        let not_found_compact = format_cpu_not_found_json(false, 42, hostile, None, None, None, None);
+        assert_valid_json(&not_found_compact);
+
+        let system = format_system_cpu_json(42.5, 8, 1234.5);
+        assert_valid_json(&system);
+    }
+
+    // the GPU builders must emit parseable documents in both modes; the summary in
+    // particular must quote the NVML UUID-style GPU_ID (regression: the old unquoted
+    // interpolation emitted invalid JSON for UUID ids)
+    #[test]
+    fn test_gpu_json_valid() {
+        let hostile = "nvidia-smi\"\\\u{1b}";
+
+        let verbose = format_gpu_process_json(
+            true,
+            42,
+            hostile,
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            0,
+            25,
+            10,
+            5,
+        );
+        assert_valid_json(&verbose);
+
+        let compact = format_gpu_process_json(
+            false, 42, hostile, None, None, None, None, 0, 25, 10, 5,
+        );
+        assert_valid_json(&compact);
+        let parsed: serde_json::Value = serde_json::from_str(&compact).unwrap();
+        assert_eq!(parsed["Comm"], hostile);
+
+        let uuid = "GPU-6e6f2c5a-6c1e-8b3a-4a2f-0d2c1b4a9e8f";
+        let summary = format_gpu_summary_json(uuid, 90, 80, 4096, 30, 20, 65);
+        assert_valid_json(&summary);
+        let parsed: serde_json::Value = serde_json::from_str(&summary).unwrap();
+        assert_eq!(parsed["GPU_ID"], uuid);
+        assert_eq!(parsed["Temperature_C"], 65);
+    }
+
+    // the IO JSON builder emits parseable documents in both modes, with the hostile
+    // comm escaping through the parser unchanged
+    #[test]
+    fn test_io_json_valid() {
+        let hostile = "bash\"\\\u{1b}[31m";
+
+        let verbose = format_io_json(
+            true,
+            42,
+            hostile,
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            100,
+            50,
+            1024,
+            512,
+            12,
+            10,
+        );
+        assert_valid_json(&verbose);
+
+        let compact = format_io_json(
+            false,
+            42,
+            hostile,
+            None,
+            None,
+            None,
+            None,
+            None,
+            100,
+            50,
+            1024,
+            512,
+            12,
+            10,
+        );
+        assert_valid_json(&compact);
+        let parsed: serde_json::Value = serde_json::from_str(&compact).unwrap();
+        assert_eq!(parsed["Comm"], hostile);
+        assert_eq!(parsed["Open_FDs"], 12);
+    }
+
+    // the socket JSON builder emits parseable documents in both modes, with NIC/IP/MAC
+    // strings escaping through the parser unchanged
+    #[test]
+    fn test_socket_json_valid() {
+        let stats = NetStats {
+            tcp_established: 5,
+            tcp_syn_recv: 1,
+            tcp_close_wait: 2,
+            tcp_time_wait: 3,
+            tcp_fin_wait: 4,
+            udp_sockets: 6,
+            bytes_sent: 10 * 1024 * 1024,
+            bytes_recv: 20 * 1024 * 1024,
+            packets_sent: 100,
+            packets_recv: 200,
+        };
+        let hostile = "sshd\"\\\u{1b}[31m";
+
+        let verbose = format_socket_json(
+            true,
+            42,
+            hostile,
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            "eth0",
+            "192.168.1.10",
+            "aa:bb:cc:dd:ee:ff",
+            &stats,
+            10,
+            20,
+        );
+        assert_valid_json(&verbose);
+
+        let compact = format_socket_json(
+            false,
+            42,
+            hostile,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "eth0",
+            "192.168.1.10",
+            "aa:bb:cc:dd:ee:ff",
+            &stats,
+            10,
+            20,
+        );
+        assert_valid_json(&compact);
+        let parsed: serde_json::Value = serde_json::from_str(&compact).unwrap();
+        assert_eq!(parsed["Comm"], hostile);
+        assert_eq!(parsed["MAC"], "aa:bb:cc:dd:ee:ff");
+        assert_eq!(parsed["ESTAB"], 5);
+    }
+
+    // the faults and memory JSON builders emit parseable documents in both modes
+    #[test]
+    fn test_faults_and_mem_json_valid() {
+        let hostile = "bash\"\\\u{1b}";
+
+        let faults_verbose = format_faults_json(
+            true,
+            42,
+            hostile,
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            1234,
+            5678,
+        );
+        assert_valid_json(&faults_verbose);
+
+        let faults_compact = format_faults_json(
+            false, 42, hostile, None, None, None, None, None, 1234, 5678,
+        );
+        assert_valid_json(&faults_compact);
+
+        let mem_verbose = format_mem_json(
+            true,
+            42,
+            hostile,
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            128,
+            32768,
+            256,
+            1024,
+            64,
+            32,
+        );
+        assert_valid_json(&mem_verbose);
+
+        let mem_compact = format_mem_json(
+            false,
+            42,
+            hostile,
+            None,
+            None,
+            None,
+            None,
+            None,
+            128,
+            32768,
+            256,
+            1024,
+            64,
+            32,
+        );
+        assert_valid_json(&mem_compact);
+        let parsed: serde_json::Value = serde_json::from_str(&mem_compact).unwrap();
+        assert_eq!(parsed["Comm"], hostile);
+        assert_eq!(parsed["RSS_MB"], 128);
+    }
+
+    // the shell and execve event JSON builders emit parseable documents when the
+    // free-form command/entry/args/envs contain quotes, backslashes, and control chars
+    #[test]
+    fn test_shell_and_execve_json_valid() {
+        let hostile_entry = "echo \"hi\" \\\u{1b}[31m";
+
+        let shell = format_shell_event_json(
+            "node1",
+            "dmcgee",
+            hostile_entry,
+            "bash -c 'x'",
+            1000,
+            42,
+            100,
+            42,
+            "2026-08-13_10:00:00",
+        );
+        assert_valid_json(&shell);
+        let parsed: serde_json::Value = serde_json::from_str(&shell).unwrap();
+        assert_eq!(parsed["entry"], hostile_entry);
+
+        let execve = format_execve_event_json(
+            "node1",
+            "dmcgee",
+            "/bin/echo",
+            "echo \"hi\"",
+            1000,
+            42,
+            100,
+            42,
+            &["-c", "\"quoted\""],
+            &["PATH=/usr/bin", "TERM=\u{1b}[31m"],
+            "2026-08-13_10:00:00",
+        );
+        assert_valid_json(&execve);
+        let parsed: serde_json::Value = serde_json::from_str(&execve).unwrap();
+        assert_eq!(parsed["args"], serde_json::json!(["-c", "\"quoted\""]));
+        assert_eq!(
+            parsed["envs"],
+            serde_json::json!(["PATH=/usr/bin", "TERM=\u{1b}[31m"])
+        );
     }
 }

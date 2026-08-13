@@ -128,6 +128,117 @@ pub fn format_cpu_not_found_prose(
     }
 }
 
+/// JSON rendering of a found CPU entry, mirroring `format_cpu_prose`. `verbose` includes
+/// parent/owner/state and timing fields; the compact form keeps just PID/comm plus the
+/// CPU percentages. All string fields are escaped via `json_quoted` so the document is
+/// always valid JSON even if a comm or username contains quotes or control characters.
+pub fn format_cpu_json(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    cpu_time_ms: f64,
+    delta_ms: f64,
+    cpu_percent: f64,
+    avg_cpu_percent: f64,
+    max_cpu_percent: f64,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_val = format_state(state);
+        format!(
+            "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": {}, \"PPID\": {}, \"Parent_Comm\": {}, \"UID\": {}, \"Username\": {}, \"State\": {}, \"Total_Time_ms\": {:.2}, \"Delta_Time_ms\": {:.2}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
+            pid,
+            json_quoted(comm),
+            ppid_val,
+            json_quoted(parent_comm_val),
+            json_quoted(&uid_val),
+            json_quoted(&username_val),
+            json_quoted(&state_val),
+            cpu_time_ms,
+            delta_ms,
+            cpu_percent,
+            avg_cpu_percent,
+            max_cpu_percent
+        )
+    } else {
+        format!(
+            "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": {}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
+            pid,
+            json_quoted(comm),
+            cpu_percent,
+            avg_cpu_percent,
+            max_cpu_percent
+        )
+    }
+}
+
+/// JSON rendering of a process that disappeared between the scan and report phases,
+/// mirroring `format_cpu_not_found_prose`. All string fields are escaped via
+/// `json_quoted` so the document is always valid JSON.
+pub fn format_cpu_not_found_json(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        format!(
+            "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": {}, \"PPID\": {}, \"Parent_Comm\": {}, \"UID\": {}, \"Username\": {}, \"Status\": \"not_found\"}}",
+            pid,
+            json_quoted(comm),
+            ppid_val,
+            json_quoted(parent_comm_val),
+            json_quoted(&uid_val),
+            json_quoted(&username_val)
+        )
+    } else {
+        format!(
+            "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": {}, \"Status\": \"not_found\"}}",
+            pid,
+            json_quoted(comm)
+        )
+    }
+}
+
+/// Plain-text rendering of the system-wide CPU% summary line, mirroring
+/// `format_system_cpu_json`.
+pub fn format_system_cpu_prose(
+    system_cpu_percent: f64,
+    num_cpus: usize,
+    busy_delta_ms: f64,
+) -> String {
+    format!(
+        "Type: cpu, CPU: {:.2}%, CPUs: {}, Busy Delta: {:.2} ms",
+        system_cpu_percent, num_cpus, busy_delta_ms
+    )
+}
+
+/// JSON rendering of the system-wide CPU% summary line. All values are numeric, so no
+/// string escaping is needed.
+pub fn format_system_cpu_json(
+    system_cpu_percent: f64,
+    num_cpus: usize,
+    busy_delta_ms: f64,
+) -> String {
+    format!(
+        "{{\"Type\": \"cpu\", \"CPU%\": {:.2}, \"Num_CPUs\": {}, \"Busy_Delta_ms\": {:.2}}}",
+        system_cpu_percent, num_cpus, busy_delta_ms
+    )
+}
+
 // cpu monitoring helper function
 pub async fn monitor_cpu_usage(
     pid_filter: &Option<Vec<u32>>,
@@ -335,89 +446,44 @@ pub async fn monitor_cpu_usage(
     for entry in entries {
         if entry.found {
             // Build messages conditionally based on verbose flag
-            let (plain_string, json_string) = if *verbose {
-                let ppid_val = entry.ppid.unwrap_or(0);
-                let parent_comm_val = entry.parent_comm.as_deref().unwrap_or("unknown");
-                let (uid_val, username_val) = format_owner(entry.uid, entry.username.as_deref());
-                let state_val = format_state(entry.state);
-
-                let plain = if needs_plain {
-                    format_cpu_prose(
-                        true,
-                        entry.pid,
-                        &entry.comm,
-                        entry.ppid,
-                        entry.parent_comm.as_deref(),
-                        entry.uid,
-                        entry.username.as_deref(),
-                        entry.state,
-                        entry.cpu_time as f64 / 1_000_000.0,
-                        entry.delta as f64 / 1_000_000.0,
-                        entry.cpu_percent,
-                        entry.avg_cpu_percent,
-                        entry.max_cpu_percent,
-                    )
-                } else {
-                    String::new()
-                };
-
-                let json = if needs_json {
-                    format!(
-                        "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"Total_Time_ms\": {:.2}, \"Delta_Time_ms\": {:.2}, \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
-                        entry.pid,
-                        entry.comm,
-                        ppid_val,
-                        parent_comm_val,
-                        uid_val,
-                        username_val,
-                        state_val,
-                        entry.cpu_time as f64 / 1_000_000.0,
-                        entry.delta as f64 / 1_000_000.0,
-                        entry.cpu_percent,
-                        entry.avg_cpu_percent,
-                        entry.max_cpu_percent
-                    )
-                } else {
-                    String::new()
-                };
-
-                (plain, json)
+            let plain_string = if needs_plain {
+                format_cpu_prose(
+                    *verbose,
+                    entry.pid,
+                    &entry.comm,
+                    entry.ppid,
+                    entry.parent_comm.as_deref(),
+                    entry.uid,
+                    entry.username.as_deref(),
+                    entry.state,
+                    entry.cpu_time as f64 / 1_000_000.0,
+                    entry.delta as f64 / 1_000_000.0,
+                    entry.cpu_percent,
+                    entry.avg_cpu_percent,
+                    entry.max_cpu_percent,
+                )
             } else {
-                // Non-verbose: exclude parent/owner info
-                let plain = if needs_plain {
-                    format_cpu_prose(
-                        false,
-                        entry.pid,
-                        &entry.comm,
-                        entry.ppid,
-                        entry.parent_comm.as_deref(),
-                        entry.uid,
-                        entry.username.as_deref(),
-                        entry.state,
-                        entry.cpu_time as f64 / 1_000_000.0,
-                        entry.delta as f64 / 1_000_000.0,
-                        entry.cpu_percent,
-                        entry.avg_cpu_percent,
-                        entry.max_cpu_percent,
-                    )
-                } else {
-                    String::new()
-                };
+                String::new()
+            };
 
-                let json = if needs_json {
-                    format!(
-                        "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": \"{}\", \"CPU%\": {:.2}, \"Avg_CPU%\": {:.2}, \"Max_CPU%\": {:.2}}}",
-                        entry.pid,
-                        entry.comm,
-                        entry.cpu_percent,
-                        entry.avg_cpu_percent,
-                        entry.max_cpu_percent
-                    )
-                } else {
-                    String::new()
-                };
-
-                (plain, json)
+            let json_string = if needs_json {
+                format_cpu_json(
+                    *verbose,
+                    entry.pid,
+                    &entry.comm,
+                    entry.ppid,
+                    entry.parent_comm.as_deref(),
+                    entry.uid,
+                    entry.username.as_deref(),
+                    entry.state,
+                    entry.cpu_time as f64 / 1_000_000.0,
+                    entry.delta as f64 / 1_000_000.0,
+                    entry.cpu_percent,
+                    entry.avg_cpu_percent,
+                    entry.max_cpu_percent,
+                )
+            } else {
+                String::new()
             };
 
             output_message(
@@ -434,58 +500,31 @@ pub async fn monitor_cpu_usage(
             )
             .await;
         } else {
-            let (plain_string, json_string) = if *verbose {
-                let ppid_val = entry.ppid.unwrap_or(0);
-                let parent_comm_val = entry.parent_comm.as_deref().unwrap_or("unknown");
-                let (uid_val, username_val) = format_owner(entry.uid, entry.username.as_deref());
-
-                let plain = if needs_plain {
-                    format_cpu_not_found_prose(
-                        true,
-                        entry.pid,
-                        &entry.comm,
-                        entry.ppid,
-                        entry.parent_comm.as_deref(),
-                        entry.uid,
-                        entry.username.as_deref(),
-                    )
-                } else {
-                    String::new()
-                };
-                let json = if needs_json {
-                    format!(
-                        "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"Status\": \"not_found\"}}",
-                        entry.pid, entry.comm, ppid_val, parent_comm_val, uid_val, username_val
-                    )
-                } else {
-                    String::new()
-                };
-
-                (plain, json)
+            let plain_string = if needs_plain {
+                format_cpu_not_found_prose(
+                    *verbose,
+                    entry.pid,
+                    &entry.comm,
+                    entry.ppid,
+                    entry.parent_comm.as_deref(),
+                    entry.uid,
+                    entry.username.as_deref(),
+                )
             } else {
-                let plain = if needs_plain {
-                    format_cpu_not_found_prose(
-                        false,
-                        entry.pid,
-                        &entry.comm,
-                        entry.ppid,
-                        entry.parent_comm.as_deref(),
-                        entry.uid,
-                        entry.username.as_deref(),
-                    )
-                } else {
-                    String::new()
-                };
-                let json = if needs_json {
-                    format!(
-                        "{{\"Type\": \"cpu\", \"PID\": {}, \"Comm\": \"{}\", \"Status\": \"not_found\"}}",
-                        entry.pid, entry.comm
-                    )
-                } else {
-                    String::new()
-                };
-
-                (plain, json)
+                String::new()
+            };
+            let json_string = if needs_json {
+                format_cpu_not_found_json(
+                    *verbose,
+                    entry.pid,
+                    &entry.comm,
+                    entry.ppid,
+                    entry.parent_comm.as_deref(),
+                    entry.uid,
+                    entry.username.as_deref(),
+                )
+            } else {
+                String::new()
             };
 
             output_message(
@@ -516,21 +555,19 @@ pub async fn monitor_cpu_usage(
         let system_cpu_percent = calc_system_cpu_percent(busy_delta, interval_ns, num_cpus);
 
         let plain_string = if needs_plain {
-            format!(
-                "Type: cpu, CPU: {:.2}%, CPUs: {}, Busy Delta: {:.2} ms",
+            format_system_cpu_prose(
                 system_cpu_percent,
                 num_cpus,
-                busy_delta as f64 / 1_000_000.0
+                busy_delta as f64 / 1_000_000.0,
             )
         } else {
             String::new()
         };
         let json_string = if needs_json {
-            format!(
-                "{{\"Type\": \"cpu\", \"CPU%\": {:.2}, \"Num_CPUs\": {}, \"Busy_Delta_ms\": {:.2}}}",
+            format_system_cpu_json(
                 system_cpu_percent,
                 num_cpus,
-                busy_delta as f64 / 1_000_000.0
+                busy_delta as f64 / 1_000_000.0,
             )
         } else {
             String::new()

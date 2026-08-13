@@ -93,6 +93,78 @@ pub fn format_socket_prose(
     }
 }
 
+/// JSON rendering of a socket stats entry, mirroring `format_socket_prose`. `verbose`
+/// includes parent/owner/state fields; the compact form keeps just PID/comm plus the
+/// socket counters. Built via the `json!` macro, so every string field is escaped by
+/// serde_json and the document is always valid JSON.
+pub fn format_socket_json(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    nic: &str,
+    ip: &str,
+    mac: &str,
+    stats: &NetStats,
+    bytes_sent_mb: u64,
+    bytes_recv_mb: u64,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_val = format_state(state);
+        json!({
+            "Type": "sock",
+            "PID": pid,
+            "Comm": comm,
+            "PPID": ppid_val,
+            "Parent_Comm": parent_comm_val,
+            "UID": uid_val,
+            "Username": username_val,
+            "State": state_val,
+            "NIC": nic,
+            "IP": ip,
+            "MAC": mac,
+            "ESTAB": stats.tcp_established,
+            "SYN_RECV": stats.tcp_syn_recv,
+            "CLOSE_WAIT": stats.tcp_close_wait,
+            "FIN_WAIT": stats.tcp_fin_wait,
+            "TIME_WAIT": stats.tcp_time_wait,
+            "UDP": stats.udp_sockets,
+            "MB_Sent": bytes_sent_mb,
+            "MB_Recv": bytes_recv_mb,
+            "Packets_Sent": stats.packets_sent,
+            "Packets_Recv": stats.packets_recv,
+        })
+        .to_string()
+    } else {
+        json!({
+            "Type": "sock",
+            "PID": pid,
+            "Comm": comm,
+            "NIC": nic,
+            "IP": ip,
+            "MAC": mac,
+            "ESTAB": stats.tcp_established,
+            "SYN_RECV": stats.tcp_syn_recv,
+            "CLOSE_WAIT": stats.tcp_close_wait,
+            "FIN_WAIT": stats.tcp_fin_wait,
+            "TIME_WAIT": stats.tcp_time_wait,
+            "UDP": stats.udp_sockets,
+            "MB_Sent": bytes_sent_mb,
+            "MB_Recv": bytes_recv_mb,
+            "Packets_Sent": stats.packets_sent,
+            "Packets_Recv": stats.packets_recv,
+        })
+        .to_string()
+    }
+}
+
 /// Network monitoring main function
 pub async fn monitor_network_usage(
     net_stats_map: &HashMap<aya::maps::MapData, u32, NetStats>,
@@ -255,11 +327,6 @@ async fn report_network_stats(
     // Build messages conditionally based on verbose flag
     let (plain_string, json_string) = if *verbose {
         // Verbose mode: include parent and owner info
-        let ppid_val = ppid.unwrap_or(0);
-        let parent_comm_val = parent_comm.unwrap_or("unknown");
-        let (uid_val, username_val) = format_owner(uid, username);
-        let state_val = format_state(state);
-
         let plain = if needs_plain {
             format_socket_prose(
                 true,
@@ -282,30 +349,22 @@ async fn report_network_stats(
         };
 
         let json_string = if needs_json {
-            json!({
-                "Type": "sock",
-                "PID": pid,
-                "Comm": comm,
-                "PPID": ppid_val,
-                "Parent_Comm": parent_comm_val,
-                "UID": uid_val,
-                "Username": username_val,
-                "State": state_val,
-                "NIC": nic,
-                "IP": ip,
-                "MAC": mac,
-                "ESTAB": stats.tcp_established,
-                "SYN_RECV": stats.tcp_syn_recv,
-                "CLOSE_WAIT": stats.tcp_close_wait,
-                "FIN_WAIT": stats.tcp_fin_wait,
-                "TIME_WAIT": stats.tcp_time_wait,
-                "UDP": stats.udp_sockets,
-                "MB_Sent": bytes_sent_mb,
-                "MB_Recv": bytes_recv_mb,
-                "Packets_Sent": stats.packets_sent,
-                "Packets_Recv": stats.packets_recv,
-            })
-            .to_string()
+            format_socket_json(
+                true,
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
+                nic,
+                ip,
+                mac,
+                stats,
+                bytes_sent_mb,
+                bytes_recv_mb,
+            )
         } else {
             String::new()
         };
@@ -335,25 +394,22 @@ async fn report_network_stats(
         };
 
         let json_string = if needs_json {
-            json!({
-                "Type": "sock",
-                "PID": pid,
-                "Comm": comm,
-                "NIC": nic,
-                "IP": ip,
-                "MAC": mac,
-                "ESTAB": stats.tcp_established,
-                "SYN_RECV": stats.tcp_syn_recv,
-                "CLOSE_WAIT": stats.tcp_close_wait,
-                "FIN_WAIT": stats.tcp_fin_wait,
-                "TIME_WAIT": stats.tcp_time_wait,
-                "UDP": stats.udp_sockets,
-                "MB_Sent": bytes_sent_mb,
-                "MB_Recv": bytes_recv_mb,
-                "Packets_Sent": stats.packets_sent,
-                "Packets_Recv": stats.packets_recv,
-            })
-            .to_string()
+            format_socket_json(
+                false,
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
+                nic,
+                ip,
+                mac,
+                stats,
+                bytes_sent_mb,
+                bytes_recv_mb,
+            )
         } else {
             String::new()
         };

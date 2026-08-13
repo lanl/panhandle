@@ -5,7 +5,7 @@ use reqwest::Client;
 
 use crate::helpers::{
     format_owner, format_state, format_state_prose, get_parent_pid, get_process_name,
-    get_process_uid, output_message, output_needs, resolve_username,
+    get_process_uid, json_quoted, output_message, output_needs, resolve_username,
 };
 
 // Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
@@ -103,75 +103,37 @@ pub async fn get_major_faults(
     });
 
     for entry in entries {
-        let (plain_string, json_string) = if *verbose {
-            let ppid_val = entry.ppid.unwrap_or(0);
-            let parent_comm_val = entry.parent_comm.as_deref().unwrap_or("unknown");
-            let (uid_val, username_val) = format_owner(entry.uid, entry.username.as_deref());
-            let state_val = format_state(entry.state);
-
-            let plain = if needs_plain {
-                format_faults_prose(
-                    true,
-                    entry.pid,
-                    &entry.comm,
-                    entry.ppid,
-                    entry.parent_comm.as_deref(),
-                    entry.uid,
-                    entry.username.as_deref(),
-                    entry.state,
-                    entry.majflt,
-                    entry.cmajflt,
-                )
-            } else {
-                String::new()
-            };
-
-            let json = if needs_json {
-                format!(
-                    "{{\"Type\": \"fault\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"Maj_Faults\": {}, \"Child_Maj_Faults\": {}}}",
-                    entry.pid,
-                    entry.comm,
-                    ppid_val,
-                    parent_comm_val,
-                    uid_val,
-                    username_val,
-                    state_val,
-                    entry.majflt,
-                    entry.cmajflt
-                )
-            } else {
-                String::new()
-            };
-
-            (plain, json)
+        let plain_string = if needs_plain {
+            format_faults_prose(
+                *verbose,
+                entry.pid,
+                &entry.comm,
+                entry.ppid,
+                entry.parent_comm.as_deref(),
+                entry.uid,
+                entry.username.as_deref(),
+                entry.state,
+                entry.majflt,
+                entry.cmajflt,
+            )
         } else {
-            let plain = if needs_plain {
-                format_faults_prose(
-                    false,
-                    entry.pid,
-                    &entry.comm,
-                    entry.ppid,
-                    entry.parent_comm.as_deref(),
-                    entry.uid,
-                    entry.username.as_deref(),
-                    entry.state,
-                    entry.majflt,
-                    entry.cmajflt,
-                )
-            } else {
-                String::new()
-            };
-
-            let json = if needs_json {
-                format!(
-                    "{{\"Type\": \"fault\", \"PID\": {}, \"Comm\": \"{}\", \"Maj_Faults\": {}, \"Child_Maj_Faults\": {}}}",
-                    entry.pid, entry.comm, entry.majflt, entry.cmajflt
-                )
-            } else {
-                String::new()
-            };
-
-            (plain, json)
+            String::new()
+        };
+        let json_string = if needs_json {
+            format_faults_json(
+                *verbose,
+                entry.pid,
+                &entry.comm,
+                entry.ppid,
+                entry.parent_comm.as_deref(),
+                entry.uid,
+                entry.username.as_deref(),
+                entry.state,
+                entry.majflt,
+                entry.cmajflt,
+            )
+        } else {
+            String::new()
         };
 
         output_message(
@@ -247,6 +209,50 @@ pub fn format_faults_prose(
     }
 }
 
+/// JSON rendering of a major-faults entry, mirroring `format_faults_prose`. `verbose`
+/// includes parent/owner/state fields; the compact form keeps just PID/comm plus the
+/// fault counts. All string fields are escaped via `json_quoted` so the document is
+/// always valid JSON even if a comm or username contains quotes or control characters.
+pub fn format_faults_json(
+    verbose: bool,
+    pid: i32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    majflt: u64,
+    cmajflt: u64,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_val = format_state(state);
+        format!(
+            "{{\"Type\": \"fault\", \"PID\": {}, \"Comm\": {}, \"PPID\": {}, \"Parent_Comm\": {}, \"UID\": {}, \"Username\": {}, \"State\": {}, \"Maj_Faults\": {}, \"Child_Maj_Faults\": {}}}",
+            pid,
+            json_quoted(comm),
+            ppid_val,
+            json_quoted(parent_comm_val),
+            json_quoted(&uid_val),
+            json_quoted(&username_val),
+            json_quoted(&state_val),
+            majflt,
+            cmajflt
+        )
+    } else {
+        format!(
+            "{{\"Type\": \"fault\", \"PID\": {}, \"Comm\": {}, \"Maj_Faults\": {}, \"Child_Maj_Faults\": {}}}",
+            pid,
+            json_quoted(comm),
+            majflt,
+            cmajflt
+        )
+    }
+}
+
 /// Plain-text rendering of a memory-usage entry. `verbose` includes parent/owner/state
 /// fields; the compact form keeps just PID/comm plus the memory sizes.
 pub fn format_mem_prose(
@@ -290,6 +296,62 @@ pub fn format_mem_prose(
         format!(
             "Type: mem, PID: {}, Comm: {}, RSS: {} MB ({} pages), Peak RSS: {} MB, Virtual Size: {} MB, Shared: {} MB, Data + Stack: {} MB",
             pid, comm, rss_mb, rss_pages, vm_hwm_mb, vsize_mb, shared_mb, data_mb
+        )
+    }
+}
+
+/// JSON rendering of a memory-usage entry, mirroring `format_mem_prose`. `verbose`
+/// includes parent/owner/state fields; the compact form keeps just PID/comm plus the
+/// memory sizes. All string fields are escaped via `json_quoted` so the document is
+/// always valid JSON even if a comm or username contains quotes or control characters.
+pub fn format_mem_json(
+    verbose: bool,
+    pid: i32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    rss_mb: u64,
+    rss_pages: u64,
+    vm_hwm_mb: u64,
+    vsize_mb: u64,
+    shared_mb: u64,
+    data_mb: u64,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_val = format_state(state);
+        format!(
+            "{{\"Type\": \"mem\", \"PID\": {}, \"Comm\": {}, \"PPID\": {}, \"Parent_Comm\": {}, \"UID\": {}, \"Username\": {}, \"State\": {}, \"RSS_MB\": {}, \"RSS_Pages\": {}, \"Peak_RSS_MB\": {}, \"VSize_MB\": {}, \"Shared_MB\": {}, \"Data_Stack_Size_MB\": {}}}",
+            pid,
+            json_quoted(comm),
+            ppid_val,
+            json_quoted(parent_comm_val),
+            json_quoted(&uid_val),
+            json_quoted(&username_val),
+            json_quoted(&state_val),
+            rss_mb,
+            rss_pages,
+            vm_hwm_mb,
+            vsize_mb,
+            shared_mb,
+            data_mb
+        )
+    } else {
+        format!(
+            "{{\"Type\": \"mem\", \"PID\": {}, \"Comm\": {}, \"RSS_MB\": {}, \"RSS_Pages\": {}, \"Peak_RSS_MB\": {}, \"VSize_MB\": {}, \"Shared_MB\": {}, \"Data_Stack_Size_MB\": {}}}",
+            pid,
+            json_quoted(comm),
+            rss_mb,
+            rss_pages,
+            vm_hwm_mb,
+            vsize_mb,
+            shared_mb,
+            data_mb
         )
     }
 }
@@ -409,94 +471,45 @@ pub async fn get_all_memory_usage(
     });
 
     for entry in entries {
-        let (plain_string, json_string) = if *verbose {
-            let ppid_val = entry.ppid.unwrap_or(0);
-            let parent_comm_val = entry.parent_comm.as_deref().unwrap_or("unknown");
-            let (uid_val, username_val) = format_owner(entry.uid, entry.username.as_deref());
-            let state_val = format_state(entry.state);
-
-            let plain = if needs_plain {
-                format_mem_prose(
-                    true,
-                    entry.pid,
-                    &entry.comm,
-                    entry.ppid,
-                    entry.parent_comm.as_deref(),
-                    entry.uid,
-                    entry.username.as_deref(),
-                    entry.state,
-                    entry.rss_mb,
-                    entry.rss_pages,
-                    entry.vm_hwm_mb,
-                    entry.vsize_mb,
-                    entry.shared_mb,
-                    entry.data_mb,
-                )
-            } else {
-                String::new()
-            };
-
-            let json = if needs_json {
-                format!(
-                    "{{\"Type\": \"mem\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"RSS_MB\": {}, \"RSS_Pages\": {}, \"Peak_RSS_MB\": {}, \"VSize_MB\": {}, \"Shared_MB\": {}, \"Data_Stack_Size_MB\": {}}}",
-                    entry.pid,
-                    entry.comm,
-                    ppid_val,
-                    parent_comm_val,
-                    uid_val,
-                    username_val,
-                    state_val,
-                    entry.rss_mb,
-                    entry.rss_pages,
-                    entry.vm_hwm_mb,
-                    entry.vsize_mb,
-                    entry.shared_mb,
-                    entry.data_mb
-                )
-            } else {
-                String::new()
-            };
-
-            (plain, json)
+        let plain_string = if needs_plain {
+            format_mem_prose(
+                *verbose,
+                entry.pid,
+                &entry.comm,
+                entry.ppid,
+                entry.parent_comm.as_deref(),
+                entry.uid,
+                entry.username.as_deref(),
+                entry.state,
+                entry.rss_mb,
+                entry.rss_pages,
+                entry.vm_hwm_mb,
+                entry.vsize_mb,
+                entry.shared_mb,
+                entry.data_mb,
+            )
         } else {
-            let plain = if needs_plain {
-                format_mem_prose(
-                    false,
-                    entry.pid,
-                    &entry.comm,
-                    entry.ppid,
-                    entry.parent_comm.as_deref(),
-                    entry.uid,
-                    entry.username.as_deref(),
-                    entry.state,
-                    entry.rss_mb,
-                    entry.rss_pages,
-                    entry.vm_hwm_mb,
-                    entry.vsize_mb,
-                    entry.shared_mb,
-                    entry.data_mb,
-                )
-            } else {
-                String::new()
-            };
-
-            let json = if needs_json {
-                format!(
-                    "{{\"Type\": \"mem\", \"PID\": {}, \"Comm\": \"{}\", \"RSS_MB\": {}, \"RSS_Pages\": {}, \"Peak_RSS_MB\": {}, \"VSize_MB\": {}, \"Shared_MB\": {}, \"Data_Stack_Size_MB\": {}}}",
-                    entry.pid,
-                    entry.comm,
-                    entry.rss_mb,
-                    entry.rss_pages,
-                    entry.vm_hwm_mb,
-                    entry.vsize_mb,
-                    entry.shared_mb,
-                    entry.data_mb
-                )
-            } else {
-                String::new()
-            };
-
-            (plain, json)
+            String::new()
+        };
+        let json_string = if needs_json {
+            format_mem_json(
+                *verbose,
+                entry.pid,
+                &entry.comm,
+                entry.ppid,
+                entry.parent_comm.as_deref(),
+                entry.uid,
+                entry.username.as_deref(),
+                entry.state,
+                entry.rss_mb,
+                entry.rss_pages,
+                entry.vm_hwm_mb,
+                entry.vsize_mb,
+                entry.shared_mb,
+                entry.data_mb,
+            )
+        } else {
+            String::new()
         };
 
         output_message(

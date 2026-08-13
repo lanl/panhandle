@@ -108,6 +108,78 @@ pub fn format_gpu_summary_prose(
     )
 }
 
+/// JSON rendering of a per-process GPU entry, mirroring `format_gpu_prose`. `verbose`
+/// includes parent/owner fields; the compact form keeps just PID/comm plus the GPU
+/// percentages. All string fields are escaped via `json_quoted` so the document is
+/// always valid JSON even if a comm or username contains quotes or control characters.
+pub fn format_gpu_process_json(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    gpu_id: u32,
+    vram_percent: u32,
+    encoder_percent: u32,
+    decoder_percent: u32,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        format!(
+            "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": {}, \"PPID\": {}, \"Parent_Comm\": {}, \"UID\": {}, \"Username\": {}, \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+            pid,
+            json_quoted(comm),
+            ppid_val,
+            json_quoted(parent_comm_val),
+            json_quoted(&uid_val),
+            json_quoted(&username_val),
+            gpu_id,
+            vram_percent,
+            encoder_percent,
+            decoder_percent
+        )
+    } else {
+        format!(
+            "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": {}, \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+            pid,
+            json_quoted(comm),
+            gpu_id,
+            vram_percent,
+            encoder_percent,
+            decoder_percent
+        )
+    }
+}
+
+/// JSON rendering of a per-GPU summary line, mirroring `format_gpu_summary_prose`.
+/// The GPU_ID is an NVML UUID string (e.g. "GPU-6e6f..." or "00000000:01:00.0"), so it
+/// must be quoted and escaped via `json_quoted` -- the previous unquoted interpolation
+/// produced invalid JSON whenever the id was a UUID rather than a bare number.
+pub fn format_gpu_summary_json(
+    gpu_id: &str,
+    gpu_percent: u32,
+    vram_percent: u32,
+    vram_mb: u64,
+    encoder_percent: u32,
+    decoder_percent: u32,
+    temperature: u32,
+) -> String {
+    format!(
+        "{{\"Type\": \"gpu\", \"GPU_ID\": {}, \"GPU_Percent\": {}, \"VRAM_Percent\": {}, \"VRAM_MB\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}, \"Temperature_C\": {}}}",
+        json_quoted(gpu_id),
+        gpu_percent,
+        vram_percent,
+        vram_mb,
+        encoder_percent,
+        decoder_percent,
+        temperature
+    )
+}
+
 pub async fn monitor_gpu_usage(
     machine: &Machine,
     json_output: &bool,
@@ -209,11 +281,6 @@ pub async fn monitor_gpu_usage(
     for gpu in gpus {
         for process in gpu.processes {
             let (plain_string, json_string) = if *verbose {
-                let ppid_val = process.ppid.unwrap_or(0);
-                let parent_comm_val = process.parent_comm.as_deref().unwrap_or("unknown");
-                let (uid_val, username_val) =
-                    format_owner(process.uid, process.username.as_deref());
-
                 let plain = if needs_plain {
                     format_gpu_prose(
                         true,
@@ -233,18 +300,18 @@ pub async fn monitor_gpu_usage(
                 };
 
                 let json = if needs_json {
-                    format!(
-                        "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+                    format_gpu_process_json(
+                        true,
                         process.pid,
-                        process.comm,
-                        ppid_val,
-                        parent_comm_val,
-                        uid_val,
-                        username_val,
+                        &process.comm,
+                        process.ppid,
+                        process.parent_comm.as_deref(),
+                        process.uid,
+                        process.username.as_deref(),
                         process.gpu_id,
                         process.vram_percent,
                         process.encoder_percent,
-                        process.decoder_percent
+                        process.decoder_percent,
                     )
                 } else {
                     String::new()
@@ -271,14 +338,18 @@ pub async fn monitor_gpu_usage(
                 };
 
                 let json = if needs_json {
-                    format!(
-                        "{{\"Type\": \"gpu\", \"PID\": {}, \"Comm\": \"{}\", \"GPU_ID\": {}, \"VRAM_Percent\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}}}",
+                    format_gpu_process_json(
+                        false,
                         process.pid,
-                        process.comm,
+                        &process.comm,
+                        process.ppid,
+                        process.parent_comm.as_deref(),
+                        process.uid,
+                        process.username.as_deref(),
                         process.gpu_id,
                         process.vram_percent,
                         process.encoder_percent,
-                        process.decoder_percent
+                        process.decoder_percent,
                     )
                 } else {
                     String::new()
@@ -317,15 +388,14 @@ pub async fn monitor_gpu_usage(
             String::new()
         };
         let json_string = if needs_json {
-            format!(
-                "{{\"Type\": \"gpu\", \"GPU_ID\": {}, \"GPU_Percent\": {}, \"VRAM_Percent\": {}, \"VRAM_MB\": {}, \"Encoder_Percent\": {}, \"Decoder_Percent\": {}, \"Temperature_C\": {}}}",
-                gpu.id,
+            format_gpu_summary_json(
+                &gpu.id,
                 gpu.gpu_percent,
                 gpu.vram_percent,
                 gpu.vram_mb,
                 gpu.encoder_percent,
                 gpu.decoder_percent,
-                gpu.temperature
+                gpu.temperature,
             )
         } else {
             String::new()

@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use clap::Parser;
 
@@ -140,6 +141,43 @@ mod tests {
             }
             Err(returned_error) => assert!(returned_error.contains(expected_error)),
         }
+    }
+
+    // test config files at the edges of what serde will accept: an empty file, a file
+    // with unknown fields (ConfigArgs uses deny_unknown_fields), and a partial config
+    // where unset fields fall back to their defaults
+    #[tokio::test]
+    async fn test_load_config_args_edge_cases() {
+        // an empty config file parses as an empty document and yields all defaults,
+        // consistent with how unset fields fall back to their defaults
+        let empty_yaml = "../../test-configs/empty.yaml";
+        assert_eq!(
+            Ok(ConfigArgs::default()),
+            load_config_args(empty_yaml.to_string()).await
+        );
+
+        // a config file with a field ConfigArgs doesn't declare must be rejected
+        let unknown_yaml = "../../test-configs/unknown-field.yaml";
+        match load_config_args(unknown_yaml.to_string()).await {
+            Ok(_) => panic!("load_config_args should not return Ok for an unknown config field"),
+            Err(returned_error) => assert!(
+                returned_error.contains("Invalid YAML config"),
+                "unexpected error: {}",
+                returned_error
+            ),
+        }
+
+        // a partial config only sets what it declares; everything else keeps defaults
+        let partial_json = "../../test-configs/partial.json";
+        let expected = ConfigArgs {
+            verbose: true,
+            exclude_min_uid: Some(1000),
+            ..Default::default()
+        };
+        assert_eq!(
+            Ok(expected),
+            load_config_args(partial_json.to_string()).await
+        );
     }
 
     // test that two valid ConfigArgs and RawArgs structs are merged correctly according to the logic that cli args should overwrite config args
@@ -313,6 +351,24 @@ mod tests {
         assert!(validate_url(url_invalid).await.is_err());
     }
 
+    // test the url validation edge cases: schemes other than http, empty input,
+    // scheme-less input, and a missing host all behave as expected
+    #[tokio::test]
+    async fn test_url_edge_cases() {
+        // https is accepted alongside http
+        assert!(validate_url("https://example.com").await.is_ok());
+        // any syntactically valid scheme passes; validation is syntax-only
+        assert!(validate_url("ftp://example.com").await.is_ok());
+        // empty input is rejected
+        assert!(validate_url("").await.is_err());
+        // a scheme-less hostname is not a valid absolute URL
+        assert!(validate_url("example.com").await.is_err());
+        // "http://" has no host component
+        assert!(validate_url("http://").await.is_err());
+        // a protocol-relative URL is not absolute either
+        assert!(validate_url("//example.com/path").await.is_err());
+    }
+
     // test that output_needs correctly determines which of plain_string/json_string
     // output_message will actually use, for every meaningfully distinct combination of
     // output channel flags
@@ -336,6 +392,86 @@ mod tests {
         // json_output with no channel enabled but debug on: only the debug terminal path
         // needs json
         assert_eq!(output_needs(false, false, true, true), (false, true));
+    }
+
+    // test that output_message with neither http nor syslog enabled never touches the
+    // network -- it only falls through to the terminal logging branch and returns
+    #[tokio::test]
+    async fn test_output_message_no_channels_noop() {
+        let client = reqwest::Client::new();
+        let hostname = Arc::new("node1".to_string());
+        let syslog_address = Arc::new(String::new());
+        let global_url = Arc::new(String::new());
+        let plain = "plain text".to_string();
+        let json = "{\"a\":1}".to_string();
+
+        output_message(
+            &false,
+            &false,
+            &hostname,
+            &syslog_address,
+            &global_url,
+            &true,
+            &plain,
+            &json,
+            &client,
+            &false,
+        )
+        .await;
+        output_message(
+            &false,
+            &false,
+            &hostname,
+            &syslog_address,
+            &global_url,
+            &false,
+            &plain,
+            &json,
+            &client,
+            &true,
+        )
+        .await;
+    }
+
+    // test that send_http_post rejects a syntactically invalid URL without ever
+    // attempting a connection (reqwest fails at request build time)
+    #[tokio::test]
+    async fn test_send_http_post_invalid_url_errors() {
+        let client = reqwest::Client::new();
+        let url = Arc::new("not a url".to_string());
+        let body = Arc::new("payload".to_string());
+
+        assert!(send_http_post(&client, &url, &body, &false, &false)
+            .await
+            .is_err());
+    }
+
+    // test that send_syslog delivers a plaintext message over UDP to a loopback listener
+    // -- the full round trip through the syslog formatter and writer
+    #[tokio::test]
+    async fn test_send_syslog_udp_loopback() {
+        use std::net::UdpSocket;
+
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("bind loopback UDP socket");
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("set read timeout");
+        let port = socket.local_addr().expect("local addr").port();
+        let syslog_address = Arc::new(format!("127.0.0.1:{}/udp", port));
+        let message = Arc::new("panhandle udp test message".to_string());
+        let hostname = "testhost".to_string();
+
+        let result =
+            send_syslog(&hostname, &message, &syslog_address, &false, &false).await;
+        assert!(result.is_ok());
+
+        let mut buf = [0u8; 2048];
+        let (len, _src) = socket.recv_from(&mut buf).expect("receive syslog datagram");
+        let received = String::from_utf8_lossy(&buf[..len]);
+        assert!(
+            received.contains("panhandle udp test message"),
+            "syslog datagram should carry the message, got: {received}"
+        );
     }
 
     // test that read_ring_item correctly reconstructs a POD struct from its raw bytes,
@@ -497,6 +633,42 @@ mod tests {
         assert!(!check(&args));
 
         let args = RawArgs {
+            zsh: true,
+            ..Default::default()
+        };
+        assert!(!check(&args));
+
+        let args = RawArgs {
+            memory_faults: Some(1),
+            ..Default::default()
+        };
+        assert!(!check(&args));
+
+        let args = RawArgs {
+            socket: true,
+            ..Default::default()
+        };
+        assert!(!check(&args));
+
+        let args = RawArgs {
+            memory: true,
+            ..Default::default()
+        };
+        assert!(!check(&args));
+
+        let args = RawArgs {
+            gpu: true,
+            ..Default::default()
+        };
+        assert!(!check(&args));
+
+        let args = RawArgs {
+            io: true,
+            ..Default::default()
+        };
+        assert!(!check(&args));
+
+        let args = RawArgs {
             syscalls: Some(vec!["execve".to_string()]),
             ..Default::default()
         };
@@ -569,6 +741,20 @@ mod tests {
         assert!(RawArgs::try_parse_from(["panhandle", "--poll", "0"]).is_err());
     }
 
+    // test that the typed value parsers reject malformed scalars at parse time rather
+    // than deferring the failure to runtime
+    #[test]
+    fn test_raw_args_parse_invalid_scalars() {
+        // a negative PID fails the u32 parse for --pid-list
+        assert!(RawArgs::try_parse_from(["panhandle", "--pid-list", "-1"]).is_err());
+        // a non-numeric UID fails the u32 parse for --exclude-min-uid
+        assert!(
+            RawArgs::try_parse_from(["panhandle", "--exclude-min-uid", "notanumber"]).is_err()
+        );
+        // a negative memory-faults threshold fails the u64 parse
+        assert!(RawArgs::try_parse_from(["panhandle", "--memory-faults", "-5"]).is_err());
+    }
+
     // test that resolve_comm_list_mode picks the right mode for each list combination, and
     // errors when both --comm-deny and --comm-allow are provided rather than silently
     // preferring one
@@ -589,6 +775,19 @@ mod tests {
         assert_eq!(
             resolve_comm_list_mode(&None, &allow),
             Ok((ALLOW_LIST, vec!["sh".to_string()]))
+        );
+
+        // an explicitly-provided but empty list still selects its mode with an empty
+        // eBPF map payload: Some(vec![]) is not the same as None
+        let empty_deny = Some(Vec::new());
+        assert_eq!(
+            resolve_comm_list_mode(&empty_deny, &None),
+            Ok((DENY_LIST, Vec::new()))
+        );
+        let empty_allow = Some(Vec::new());
+        assert_eq!(
+            resolve_comm_list_mode(&None, &empty_allow),
+            Ok((ALLOW_LIST, Vec::new()))
         );
 
         // both provided: must error rather than silently picking one
@@ -646,6 +845,30 @@ mod tests {
         );
     }
 
+    // test that the validate_count error message interpolates the label and the limit so
+    // callers can tell which limit was exceeded
+    #[test]
+    fn test_validate_count_error_message() {
+        let err = validate_count(EXECUTABLE_COUNT + 1, EXECUTABLE_COUNT, "executables")
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "The number of executables requested to monitor exceeds the maximum of {}",
+                EXECUTABLE_COUNT
+            )
+        );
+
+        let err = validate_count(UID_COUNT + 1, UID_COUNT, "UIDs").unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "The number of UIDs requested to monitor exceeds the maximum of {}",
+                UID_COUNT
+            )
+        );
+    }
+
     // test that get_canonical_executable_list keeps the original path, adds a distinct
     // canonical form when the input resolves through a symlink, and doesn't choke on a
     // nonexistent path
@@ -686,6 +909,10 @@ mod tests {
         // a nonexistent path yields no canonical form beyond itself
         assert!(result.contains(&nonexistent.to_string_lossy().to_string()));
         assert_eq!(result.len(), 3);
+
+        // an empty input list yields an empty output list without panicking
+        let empty_input: Vec<String> = Vec::new();
+        assert!(get_canonical_executable_list(&empty_input).is_empty());
 
         std::fs::remove_dir_all(&base).ok();
     }
@@ -895,6 +1122,78 @@ mod tests {
         assert_eq!(merged.comm_allow, Some(vec!["sshd".to_string()]));
     }
 
+    // test that merge_args creates the output list from scratch when the config file
+    // declares no outputs at all but the CLI provides one or more
+    #[tokio::test]
+    async fn test_merge_args_creates_outputs_when_config_has_none() {
+        // config with no output section
+        let config = ConfigArgs {
+            ..Default::default()
+        };
+        // CLI specifies file, http, and syslog together
+        let cli = RawArgs {
+            output: Some(OutputCommand::Output {
+                file: Some(PathBuf::from("/tmp/panhandle.log")),
+                http: Some("http://localhost:4319/raw-audit".to_string()),
+                syslog: Some(Some("localhost:514/tcp".to_string())),
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_args(cli, config).await;
+
+        // all three outputs survive the merge into a single OutputCommand
+        assert_eq!(
+            merged.output,
+            Some(OutputCommand::Output {
+                file: Some(PathBuf::from("/tmp/panhandle.log")),
+                http: Some("http://localhost:4319/raw-audit".to_string()),
+                syslog: Some(Some("localhost:514/tcp".to_string())),
+            })
+        );
+    }
+
+    // test that a CLI output subcommand with only some fields set still merges into an
+    // existing config output list without disturbing the other entries
+    #[tokio::test]
+    async fn test_merge_args_output_partial_update_nonempty() {
+        // config declares file + syslog outputs
+        let config = ConfigArgs {
+            output: Some(vec![
+                OutputConfig::File {
+                    file: PathBuf::from("/var/log/panhandle/panhandle.log"),
+                },
+                OutputConfig::Syslog {
+                    syslog: Some(Some("hpcsyslog.lanl.gov:514/tcp".to_string())),
+                },
+            ]),
+            ..Default::default()
+        };
+        // CLI only overrides the syslog destination (matching test_merge_args_valid's
+        // documented intent of keeping the file option untouched)
+        let cli = RawArgs {
+            output: Some(OutputCommand::Output {
+                file: None,
+                http: None,
+                syslog: Some(Some("unix".to_string())),
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_args(cli, config).await;
+
+        // the config's file output survives untouched, only the syslog destination is
+        // overridden, all collapsed into a single OutputCommand
+        assert_eq!(
+            merged.output,
+            Some(OutputCommand::Output {
+                file: Some(PathBuf::from("/var/log/panhandle/panhandle.log")),
+                http: None,
+                syslog: Some(Some("unix".to_string())),
+            })
+        );
+    }
+
     // test that hex_to_interface decodes an IPv4 hex address (as found in /proc/net/tcp),
     // matches it to the owning interface, excludes loopback addresses, and returns None
     // for both IPv6-length hex and malformed input
@@ -1069,6 +1368,26 @@ mod tests {
         assert!(!resolve_username(uid).is_empty());
 
         assert_eq!(resolve_username(u32::MAX), "unknown");
+    }
+
+    // test that json_quoted escapes every JSON-hostile character class (quotes,
+    // backslashes, control chars) and that the escaped output round-trips through a real
+    // serde_json parse back to the original string unchanged
+    #[test]
+    fn test_json_quoted_escaping() {
+        // plain strings pass through wrapped in quotes
+        assert_eq!(json_quoted("plain"), "\"plain\"");
+        // embedded quotes are backslash-escaped
+        assert_eq!(json_quoted("say \"hi\""), "\"say \\\"hi\\\"\"");
+        // backslashes are doubled
+        assert_eq!(json_quoted("a\\b"), "\"a\\\\b\"");
+        // control characters (here ESC) become \u escapes, not raw bytes
+        assert_eq!(json_quoted("esc\u{1b}ape"), "\"esc\\u001bape\"");
+        // the escaped output must parse back to the original, byte for byte
+        let hostile = "q\"\\\u{1b}\n\t";
+        assert_eq!(json_quoted(hostile), serde_json::to_string(hostile).unwrap());
+        let roundtrip: String = serde_json::from_str(&json_quoted(hostile)).unwrap();
+        assert_eq!(roundtrip, hostile);
     }
 
     // test format_owner's rendering for every combination of resolved/unresolved
@@ -1587,6 +1906,13 @@ mod tests {
             90.0,
         );
         assert_valid_json(&verbose);
+        // verbose mode carries the owner/state/accumulation fields with their values
+        let parsed_verbose: serde_json::Value = serde_json::from_str(&verbose).unwrap();
+        assert_eq!(parsed_verbose["PPID"], 1);
+        assert_eq!(parsed_verbose["UID"], "0");
+        assert_eq!(parsed_verbose["State"], "S");
+        assert_eq!(parsed_verbose["Total_Time_ms"], 1234.5);
+        assert_eq!(parsed_verbose["Delta_Time_ms"], 56.25);
 
         let compact = format_cpu_json(
             false,
@@ -1607,6 +1933,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&compact).unwrap();
         assert_eq!(parsed["Comm"], hostile);
         assert_eq!(parsed["Type"], "cpu");
+        // the numeric percentage fields survive the {:.2} formatting unchanged
+        assert_eq!(parsed["CPU%"], 12.5);
+        assert_eq!(parsed["Avg_CPU%"], 7.25);
+        assert_eq!(parsed["Max_CPU%"], 90.0);
 
         let not_found_verbose = format_cpu_not_found_json(
             true,
@@ -1647,6 +1977,12 @@ mod tests {
             5,
         );
         assert_valid_json(&verbose);
+        // verbose mode carries the owner fields with their values
+        let parsed_verbose: serde_json::Value = serde_json::from_str(&verbose).unwrap();
+        assert_eq!(parsed_verbose["PPID"], 1);
+        assert_eq!(parsed_verbose["UID"], "0");
+        assert_eq!(parsed_verbose["Username"], "root");
+        assert_eq!(parsed_verbose["GPU_ID"], 0);
 
         let compact = format_gpu_process_json(
             false, 42, hostile, None, None, None, None, 0, 25, 10, 5,
@@ -1686,6 +2022,12 @@ mod tests {
             10,
         );
         assert_valid_json(&verbose);
+        // verbose mode carries the owner and state fields with their values
+        let parsed_verbose: serde_json::Value = serde_json::from_str(&verbose).unwrap();
+        assert_eq!(parsed_verbose["PPID"], 1);
+        assert_eq!(parsed_verbose["UID"], "0");
+        assert_eq!(parsed_verbose["State"], "S");
+        assert_eq!(parsed_verbose["Open_FDs"], 12);
 
         let compact = format_io_json(
             false,
@@ -1744,6 +2086,12 @@ mod tests {
             20,
         );
         assert_valid_json(&verbose);
+        // verbose mode carries the owner and state fields with their values
+        let parsed_verbose: serde_json::Value = serde_json::from_str(&verbose).unwrap();
+        assert_eq!(parsed_verbose["PPID"], 1);
+        assert_eq!(parsed_verbose["UID"], "0");
+        assert_eq!(parsed_verbose["State"], "S");
+        assert_eq!(parsed_verbose["ESTAB"], 5);
 
         let compact = format_socket_json(
             false,
@@ -1786,6 +2134,13 @@ mod tests {
             5678,
         );
         assert_valid_json(&faults_verbose);
+        // verbose mode carries the owner and state fields with their values
+        let parsed_faults_verbose: serde_json::Value =
+            serde_json::from_str(&faults_verbose).unwrap();
+        assert_eq!(parsed_faults_verbose["PPID"], 1);
+        assert_eq!(parsed_faults_verbose["UID"], "0");
+        assert_eq!(parsed_faults_verbose["State"], "S");
+        assert_eq!(parsed_faults_verbose["Maj_Faults"], 1234);
 
         let faults_compact = format_faults_json(
             false, 42, hostile, None, None, None, None, None, 1234, 5678,
@@ -1809,6 +2164,12 @@ mod tests {
             32,
         );
         assert_valid_json(&mem_verbose);
+        // verbose mode carries the owner and state fields with their values
+        let parsed_mem_verbose: serde_json::Value = serde_json::from_str(&mem_verbose).unwrap();
+        assert_eq!(parsed_mem_verbose["PPID"], 1);
+        assert_eq!(parsed_mem_verbose["UID"], "0");
+        assert_eq!(parsed_mem_verbose["State"], "S");
+        assert_eq!(parsed_mem_verbose["RSS_MB"], 128);
 
         let mem_compact = format_mem_json(
             false,
@@ -1851,7 +2212,17 @@ mod tests {
         );
         assert_valid_json(&shell);
         let parsed: serde_json::Value = serde_json::from_str(&shell).unwrap();
+        // every schema field round-trips with its exact value
+        assert_eq!(parsed["application"], "panhandle");
+        assert_eq!(parsed["hostname"], "node1");
+        assert_eq!(parsed["moniker"], "dmcgee");
         assert_eq!(parsed["entry"], hostile_entry);
+        assert_eq!(parsed["command"], "bash -c 'x'");
+        assert_eq!(parsed["uid"], "1000");
+        assert_eq!(parsed["pid"], "42");
+        assert_eq!(parsed["gid"], "100");
+        assert_eq!(parsed["tgid"], "42");
+        assert_eq!(parsed["ts_utc"], "2026-08-13_10:00:00");
 
         let execve = format_execve_event_json(
             "node1",
@@ -1868,10 +2239,61 @@ mod tests {
         );
         assert_valid_json(&execve);
         let parsed: serde_json::Value = serde_json::from_str(&execve).unwrap();
+        // every schema field round-trips with its exact value
+        assert_eq!(parsed["application"], "panhandle");
+        assert_eq!(parsed["hostname"], "node1");
+        assert_eq!(parsed["moniker"], "dmcgee");
+        assert_eq!(parsed["filename"], "/bin/echo");
+        assert_eq!(parsed["command"], "echo \"hi\"");
+        assert_eq!(parsed["uid"], "1000");
+        assert_eq!(parsed["pid"], "42");
+        assert_eq!(parsed["gid"], "100");
+        assert_eq!(parsed["tgid"], "42");
         assert_eq!(parsed["args"], serde_json::json!(["-c", "\"quoted\""]));
         assert_eq!(
             parsed["envs"],
             serde_json::json!(["PATH=/usr/bin", "TERM=\u{1b}[31m"])
+        );
+        assert_eq!(parsed["ts_utc"], "2026-08-13_10:00:00");
+    }
+
+    // test that Readline's Display impl renders the fixed schema, trimming the trailing
+    // nulls that pad the fixed-size byte arrays (and any surrounding whitespace), while
+    // a zeroed struct still renders a complete, parseable line
+    #[test]
+    fn test_readline_display() {
+        let mut entry = [0u8; ARG_SIZE];
+        let text = b"ls -la";
+        entry[..text.len()].copy_from_slice(text);
+        let mut command = [0u8; 16];
+        command[..4].copy_from_slice(b"bash");
+
+        let line = Readline {
+            timestamp: 1000,
+            uid: 1000,
+            gid: 100,
+            pid: 42,
+            tgid: 42,
+            command,
+            entry,
+        };
+        assert_eq!(
+            line.to_string(),
+            "entry: ls -la, command: bash, uid: 1000, pid: 42, gid: 100, tgid: 42"
+        );
+
+        let zeroed = Readline {
+            timestamp: 0,
+            uid: 0,
+            gid: 0,
+            pid: 0,
+            tgid: 0,
+            command: [0u8; 16],
+            entry: [0u8; ARG_SIZE],
+        };
+        assert_eq!(
+            zeroed.to_string(),
+            "entry: , command: , uid: 0, pid: 0, gid: 0, tgid: 0"
         );
     }
 }

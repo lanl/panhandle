@@ -52,6 +52,62 @@ struct GpuEntry {
     processes: Vec<GpuProcessEntry>,
 }
 
+/// Plain-text rendering of a per-process GPU entry. `verbose` includes parent/owner
+/// fields; the compact form keeps just PID/comm plus the GPU percentages.
+pub fn format_gpu_prose(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    gpu_id: u32,
+    vram_percent: u32,
+    encoder_percent: u32,
+    decoder_percent: u32,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        format!(
+            "Type: gpu, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, User ID: {}, User: {}, GPU: {}, VRAM: {}%, Encoder: {}%, Decoder: {}%",
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            uid_val,
+            username_val,
+            gpu_id,
+            vram_percent,
+            encoder_percent,
+            decoder_percent
+        )
+    } else {
+        format!(
+            "Type: gpu, PID: {}, Comm: {}, GPU: {}, VRAM: {}%, Encoder: {}%, Decoder: {}%",
+            pid, comm, gpu_id, vram_percent, encoder_percent, decoder_percent
+        )
+    }
+}
+
+/// Plain-text rendering of a per-GPU summary line, including the temperature in °C.
+pub fn format_gpu_summary_prose(
+    gpu_id: &str,
+    gpu_percent: u32,
+    vram_percent: u32,
+    vram_mb: u64,
+    encoder_percent: u32,
+    decoder_percent: u32,
+    temperature: u32,
+) -> String {
+    format!(
+        "Type: gpu, GPU: {}, Utilization: {}%, VRAM: {}%, VRAM Used: {} MB, Encoder: {}%, Decoder: {}%, Temperature: {}°C",
+        gpu_id, gpu_percent, vram_percent, vram_mb, encoder_percent, decoder_percent, temperature
+    )
+}
+
 pub async fn monitor_gpu_usage(
     machine: &Machine,
     json_output: &bool,
@@ -159,18 +215,18 @@ pub async fn monitor_gpu_usage(
                     format_owner(process.uid, process.username.as_deref());
 
                 let plain = if needs_plain {
-                    format!(
-                        "Type: gpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
+                    format_gpu_prose(
+                        true,
                         process.pid,
-                        process.comm,
-                        ppid_val,
-                        parent_comm_val,
-                        uid_val,
-                        username_val,
+                        &process.comm,
+                        process.ppid,
+                        process.parent_comm.as_deref(),
+                        process.uid,
+                        process.username.as_deref(),
                         process.gpu_id,
                         process.vram_percent,
                         process.encoder_percent,
-                        process.decoder_percent
+                        process.decoder_percent,
                     )
                 } else {
                     String::new()
@@ -197,14 +253,18 @@ pub async fn monitor_gpu_usage(
                 (plain, json)
             } else {
                 let plain = if needs_plain {
-                    format!(
-                        "Type: gpu, PID: {}, Comm: {}, GPU_ID: {}, VRAM_Percent: {}, Encoder_Percent: {}, Decoder_Percent: {}",
+                    format_gpu_prose(
+                        false,
                         process.pid,
-                        process.comm,
+                        &process.comm,
+                        process.ppid,
+                        process.parent_comm.as_deref(),
+                        process.uid,
+                        process.username.as_deref(),
                         process.gpu_id,
                         process.vram_percent,
                         process.encoder_percent,
-                        process.decoder_percent
+                        process.decoder_percent,
                     )
                 } else {
                     String::new()
@@ -244,15 +304,14 @@ pub async fn monitor_gpu_usage(
 
         // construct the global (per gpu) messages
         let plain_string = if needs_plain {
-            format!(
-                "Type: gpu, GPU_ID: {}, GPU_Percent: {}, VRAM_Percent: {}, VRAM_MB: {}, Encoder_Percent: {}, Decoder_Percent: {}, Temperature_C: {}",
-                gpu.id,
+            format_gpu_summary_prose(
+                &gpu.id,
                 gpu.gpu_percent,
                 gpu.vram_percent,
                 gpu.vram_mb,
                 gpu.encoder_percent,
                 gpu.decoder_percent,
-                gpu.temperature
+                gpu.temperature,
             )
         } else {
             String::new()

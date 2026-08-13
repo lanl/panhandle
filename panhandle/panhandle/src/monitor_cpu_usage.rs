@@ -60,6 +60,74 @@ pub(crate) struct CpuEntry {
     pub(crate) max_cpu_percent: f64,
 }
 
+/// Plain-text rendering of a found CPU entry. `verbose` includes parent/owner/state and
+/// timing fields; the compact form keeps just PID/comm plus the CPU percentages.
+pub fn format_cpu_prose(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    cpu_time_ms: f64,
+    delta_ms: f64,
+    cpu_percent: f64,
+    avg_cpu_percent: f64,
+    max_cpu_percent: f64,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_prose = format_state_prose(state);
+        format!(
+            "Type: cpu, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, User ID: {}, User: {}, State: {}, Total Time: {:.2} ms, Delta Time: {:.2} ms, CPU: {:.2}%, Avg CPU: {:.2}%, Max CPU: {:.2}%",
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            uid_val,
+            username_val,
+            state_prose,
+            cpu_time_ms,
+            delta_ms,
+            cpu_percent,
+            avg_cpu_percent,
+            max_cpu_percent
+        )
+    } else {
+        format!(
+            "Type: cpu, PID: {}, Comm: {}, CPU: {:.2}%, Avg CPU: {:.2}%, Max CPU: {:.2}%",
+            pid, comm, cpu_percent, avg_cpu_percent, max_cpu_percent
+        )
+    }
+}
+
+/// Plain-text rendering of a process that disappeared between the scan and report phases.
+pub fn format_cpu_not_found_prose(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        format!(
+            "Type: cpu, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, User ID: {}, User: {}, Status: not_found",
+            pid, comm, ppid_val, parent_comm_val, uid_val, username_val
+        )
+    } else {
+        format!("Type: cpu, PID: {}, Comm: {}, Status: not_found", pid, comm)
+    }
+}
+
 // cpu monitoring helper function
 pub async fn monitor_cpu_usage(
     pid_filter: &Option<Vec<u32>>,
@@ -274,20 +342,20 @@ pub async fn monitor_cpu_usage(
                 let state_val = format_state(entry.state);
 
                 let plain = if needs_plain {
-                    format!(
-                        "Type: cpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, State: {}, Total_Time_ms: {:.2}, Delta_Time_ms: {:.2}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
+                    format_cpu_prose(
+                        true,
                         entry.pid,
-                        entry.comm,
-                        ppid_val,
-                        parent_comm_val,
-                        uid_val,
-                        username_val,
-                        state_val,
+                        &entry.comm,
+                        entry.ppid,
+                        entry.parent_comm.as_deref(),
+                        entry.uid,
+                        entry.username.as_deref(),
+                        entry.state,
                         entry.cpu_time as f64 / 1_000_000.0,
                         entry.delta as f64 / 1_000_000.0,
                         entry.cpu_percent,
                         entry.avg_cpu_percent,
-                        entry.max_cpu_percent
+                        entry.max_cpu_percent,
                     )
                 } else {
                     String::new()
@@ -317,13 +385,20 @@ pub async fn monitor_cpu_usage(
             } else {
                 // Non-verbose: exclude parent/owner info
                 let plain = if needs_plain {
-                    format!(
-                        "Type: cpu, PID: {}, Comm: {}, CPU%: {:.2}, Avg_CPU%: {:.2}, Max_CPU%: {:.2}",
+                    format_cpu_prose(
+                        false,
                         entry.pid,
-                        entry.comm,
+                        &entry.comm,
+                        entry.ppid,
+                        entry.parent_comm.as_deref(),
+                        entry.uid,
+                        entry.username.as_deref(),
+                        entry.state,
+                        entry.cpu_time as f64 / 1_000_000.0,
+                        entry.delta as f64 / 1_000_000.0,
                         entry.cpu_percent,
                         entry.avg_cpu_percent,
-                        entry.max_cpu_percent
+                        entry.max_cpu_percent,
                     )
                 } else {
                     String::new()
@@ -365,9 +440,14 @@ pub async fn monitor_cpu_usage(
                 let (uid_val, username_val) = format_owner(entry.uid, entry.username.as_deref());
 
                 let plain = if needs_plain {
-                    format!(
-                        "Type: cpu, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, Status: not_found",
-                        entry.pid, entry.comm, ppid_val, parent_comm_val, uid_val, username_val
+                    format_cpu_not_found_prose(
+                        true,
+                        entry.pid,
+                        &entry.comm,
+                        entry.ppid,
+                        entry.parent_comm.as_deref(),
+                        entry.uid,
+                        entry.username.as_deref(),
                     )
                 } else {
                     String::new()
@@ -384,9 +464,14 @@ pub async fn monitor_cpu_usage(
                 (plain, json)
             } else {
                 let plain = if needs_plain {
-                    format!(
-                        "cpu: PID: {}, Comm: {}, Status: not_found",
-                        entry.pid, entry.comm
+                    format_cpu_not_found_prose(
+                        false,
+                        entry.pid,
+                        &entry.comm,
+                        entry.ppid,
+                        entry.parent_comm.as_deref(),
+                        entry.uid,
+                        entry.username.as_deref(),
                     )
                 } else {
                     String::new()
@@ -432,7 +517,7 @@ pub async fn monitor_cpu_usage(
 
         let plain_string = if needs_plain {
             format!(
-                "Type: cpu_system, CPU%: {:.2}, Num_CPUs: {}, Busy_Delta_ms: {:.2}",
+                "Type: cpu, CPU: {:.2}%, CPUs: {}, Busy Delta: {:.2} ms",
                 system_cpu_percent,
                 num_cpus,
                 busy_delta as f64 / 1_000_000.0
@@ -442,7 +527,7 @@ pub async fn monitor_cpu_usage(
         };
         let json_string = if needs_json {
             format!(
-                "{{\"Type\": \"cpu_system\", \"CPU%\": {:.2}, \"Num_CPUs\": {}, \"Busy_Delta_ms\": {:.2}}}",
+                "{{\"Type\": \"cpu\", \"CPU%\": {:.2}, \"Num_CPUs\": {}, \"Busy_Delta_ms\": {:.2}}}",
                 system_cpu_percent,
                 num_cpus,
                 busy_delta as f64 / 1_000_000.0

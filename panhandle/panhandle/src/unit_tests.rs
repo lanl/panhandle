@@ -4,7 +4,10 @@ mod tests {
 
     use clap::Parser;
 
-    use crate::{helpers::*, input_configs::*, monitor_cpu_usage::*, monitor_network_usage::*};
+    use crate::{
+        helpers::*, input_configs::*, monitor_cpu_usage::*, monitor_gpu_usage::*,
+        monitor_io_usage::*, monitor_network_usage::*, procfs_helpers::*,
+    };
     use panhandle_common::*;
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
@@ -321,15 +324,15 @@ mod tests {
         assert_eq!(output_needs(false, false, false, true), (false, true));
         // http on, non-json: http uses plain, terminal (non-debug) uses plain
         assert_eq!(output_needs(true, false, false, false), (true, false));
-        // http on, json requested: http uses json, terminal (non-debug) still uses plain
-        assert_eq!(output_needs(true, false, true, false), (true, true));
+        // http on, json requested: http and the terminal (non-debug) both use json
+        assert_eq!(output_needs(true, false, true, false), (false, true));
         // http on, json requested, debug on: plain is unused by either channel now
         assert_eq!(output_needs(true, false, true, true), (false, true));
         // syslog behaves the same as http for channel selection
         assert_eq!(output_needs(false, true, false, false), (true, false));
-        // json_output with no channel enabled has no effect: terminal (non-debug) still
-        // only needs plain, and nothing needs json
-        assert_eq!(output_needs(false, false, true, false), (true, false));
+        // json_output with no channel enabled: the terminal (non-debug) now needs json,
+        // since --json applies to the terminal log as well
+        assert_eq!(output_needs(false, false, true, false), (false, true));
         // json_output with no channel enabled but debug on: only the debug terminal path
         // needs json
         assert_eq!(output_needs(false, false, true, true), (false, true));
@@ -1105,6 +1108,283 @@ mod tests {
         assert_eq!(format_state(None), "");
     }
 
+    // test format_state_prose's human-readable rendering of every /proc state char,
+    // including the fallback for an unrecognized or absent state
+    #[test]
+    fn test_format_state_prose() {
+        assert_eq!(format_state_prose(Some('R')), "running");
+        assert_eq!(format_state_prose(Some('S')), "sleeping");
+        assert_eq!(format_state_prose(Some('D')), "disk sleep");
+        assert_eq!(format_state_prose(Some('Z')), "zombie");
+        assert_eq!(format_state_prose(Some('T')), "stopped");
+        assert_eq!(format_state_prose(Some('t')), "tracing stop");
+        assert_eq!(format_state_prose(Some('X')), "dead");
+        assert_eq!(format_state_prose(Some('I')), "idle");
+        assert_eq!(format_state_prose(Some('P')), "parked");
+        assert_eq!(format_state_prose(Some('?')), "unknown");
+        assert_eq!(format_state_prose(None), "unknown");
+    }
+
+    // test the CPU plain-text builder: verbose mode carries parent/owner/state and timing
+    // fields, compact mode keeps just PID/comm plus the CPU percentages
+    #[test]
+    fn test_format_cpu_prose() {
+        let verbose = format_cpu_prose(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            1234.5,
+            56.25,
+            12.5,
+            7.25,
+            90.0,
+        );
+        assert_eq!(
+            verbose,
+            "Type: cpu, PID: 42, Comm: bash, Parent PID: 1, Parent Comm: systemd, User ID: 0, User: root, State: sleeping, Total Time: 1234.50 ms, Delta Time: 56.25 ms, CPU: 12.50%, Avg CPU: 7.25%, Max CPU: 90.00%"
+        );
+
+        let compact = format_cpu_prose(
+            false, 42, "bash", None, None, None, None, None, 0.0, 0.0, 12.5, 7.25, 90.0,
+        );
+        assert_eq!(
+            compact,
+            "Type: cpu, PID: 42, Comm: bash, CPU: 12.50%, Avg CPU: 7.25%, Max CPU: 90.00%"
+        );
+    }
+
+    // test the CPU not-found builder, which reports a process that vanished between the
+    // scan and report phases
+    #[test]
+    fn test_format_cpu_not_found_prose() {
+        let verbose = format_cpu_not_found_prose(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+        );
+        assert_eq!(
+            verbose,
+            "Type: cpu, PID: 42, Comm: bash, Parent PID: 1, Parent Comm: systemd, User ID: 0, User: root, Status: not_found"
+        );
+
+        let compact = format_cpu_not_found_prose(false, 42, "bash", None, None, None, None);
+        assert_eq!(compact, "Type: cpu, PID: 42, Comm: bash, Status: not_found");
+    }
+
+    // test the per-process GPU plain-text builder in both modes
+    #[test]
+    fn test_format_gpu_prose() {
+        let verbose = format_gpu_prose(
+            true,
+            42,
+            "nvidia-smi",
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            0,
+            25,
+            10,
+            5,
+        );
+        assert_eq!(
+            verbose,
+            "Type: gpu, PID: 42, Comm: nvidia-smi, Parent PID: 1, Parent Comm: systemd, User ID: 0, User: root, GPU: 0, VRAM: 25%, Encoder: 10%, Decoder: 5%"
+        );
+
+        let compact = format_gpu_prose(
+            false,
+            42,
+            "nvidia-smi",
+            None,
+            None,
+            None,
+            None,
+            0,
+            25,
+            10,
+            5,
+        );
+        assert_eq!(
+            compact,
+            "Type: gpu, PID: 42, Comm: nvidia-smi, GPU: 0, VRAM: 25%, Encoder: 10%, Decoder: 5%"
+        );
+    }
+
+    // test the per-GPU summary builder, in particular that the temperature renders with a
+    // degree symbol and no space before it
+    #[test]
+    fn test_format_gpu_summary_prose() {
+        let summary = format_gpu_summary_prose("0", 90, 80, 4096, 30, 20, 65);
+        assert_eq!(
+            summary,
+            "Type: gpu, GPU: 0, Utilization: 90%, VRAM: 80%, VRAM Used: 4096 MB, Encoder: 30%, Decoder: 20%, Temperature: 65°C"
+        );
+    }
+
+    // test the IO plain-text builder in both modes
+    #[test]
+    fn test_format_io_prose() {
+        let verbose = format_io_prose(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            100,
+            50,
+            1024,
+            512,
+            12,
+            10,
+        );
+        assert_eq!(
+            verbose,
+            "Type: io, PID: 42, Comm: bash, Parent PID: 1, Parent Comm: systemd, User ID: 0, User: root, State: sleeping, Read Count: 100, Write Count: 50, Read: 1024 MB, Write: 512 MB, Open FDs: 12, Unique Inodes: 10"
+        );
+
+        let compact = format_io_prose(
+            false, 42, "bash", None, None, None, None, None, 100, 50, 1024, 512, 12, 10,
+        );
+        assert_eq!(
+            compact,
+            "Type: io, PID: 42, Comm: bash, Read Count: 100, Write Count: 50, Read: 1024 MB, Write: 512 MB, Open FDs: 12, Unique Inodes: 10"
+        );
+    }
+
+    // test the major-faults plain-text builder in both modes
+    #[test]
+    fn test_format_faults_prose() {
+        let verbose = format_faults_prose(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            1234,
+            5678,
+        );
+        assert_eq!(
+            verbose,
+            "Type: fault, PID: 42, Comm: bash, Parent PID: 1, Parent Comm: systemd, User ID: 0, User: root, State: sleeping, Major Faults: 1234, Child Major Faults: 5678"
+        );
+
+        let compact =
+            format_faults_prose(false, 42, "bash", None, None, None, None, None, 1234, 5678);
+        assert_eq!(
+            compact,
+            "Type: fault, PID: 42, Comm: bash, Major Faults: 1234, Child Major Faults: 5678"
+        );
+    }
+
+    // test the memory plain-text builder in both modes
+    #[test]
+    fn test_format_mem_prose() {
+        let verbose = format_mem_prose(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            128,
+            32768,
+            256,
+            1024,
+            64,
+            32,
+        );
+        assert_eq!(
+            verbose,
+            "Type: mem, PID: 42, Comm: bash, Parent PID: 1, Parent Comm: systemd, User ID: 0, User: root, State: sleeping, RSS: 128 MB (32768 pages), Peak RSS: 256 MB, Virtual Size: 1024 MB, Shared: 64 MB, Data + Stack: 32 MB"
+        );
+
+        let compact = format_mem_prose(
+            false, 42, "bash", None, None, None, None, None, 128, 32768, 256, 1024, 64, 32,
+        );
+        assert_eq!(
+            compact,
+            "Type: mem, PID: 42, Comm: bash, RSS: 128 MB (32768 pages), Peak RSS: 256 MB, Virtual Size: 1024 MB, Shared: 64 MB, Data + Stack: 32 MB"
+        );
+    }
+
+    // test the socket plain-text builder in both modes, including the MB conversion of
+    // the byte counters performed by the caller
+    #[test]
+    fn test_format_socket_prose() {
+        let stats = NetStats {
+            tcp_established: 5,
+            tcp_syn_recv: 1,
+            tcp_close_wait: 2,
+            tcp_time_wait: 3,
+            tcp_fin_wait: 4,
+            udp_sockets: 6,
+            bytes_sent: 10 * 1024 * 1024,
+            bytes_recv: 20 * 1024 * 1024,
+            packets_sent: 100,
+            packets_recv: 200,
+        };
+
+        let verbose = format_socket_prose(
+            true,
+            42,
+            "sshd",
+            Some(1),
+            Some("systemd"),
+            Some(0),
+            Some("root"),
+            Some('S'),
+            "eth0",
+            "192.168.1.10",
+            "aa:bb:cc:dd:ee:ff",
+            &stats,
+            10,
+            20,
+        );
+        assert_eq!(
+            verbose,
+            "Type: sock, PID: 42, Comm: sshd, Parent PID: 1, Parent Comm: systemd, User ID: 0, User: root, State: sleeping, NIC: eth0, IP: 192.168.1.10, MAC: aa:bb:cc:dd:ee:ff, Established: 5, Syn Recv: 1, Close Wait: 2, Fin Wait: 4, Time Wait: 3, UDP: 6, Sent: 10 MB, Received: 20 MB, Packets Sent: 100, Packets Received: 200"
+        );
+
+        let compact = format_socket_prose(
+            false,
+            42,
+            "sshd",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "eth0",
+            "192.168.1.10",
+            "aa:bb:cc:dd:ee:ff",
+            &stats,
+            10,
+            20,
+        );
+        assert_eq!(
+            compact,
+            "Type: sock, PID: 42, Comm: sshd, NIC: eth0, IP: 192.168.1.10, MAC: aa:bb:cc:dd:ee:ff, Established: 5, Syn Recv: 1, Close Wait: 2, Fin Wait: 4, Time Wait: 3, UDP: 6, Sent: 10 MB, Received: 20 MB, Packets Sent: 100, Packets Received: 200"
+        );
+    }
+
     // test that build_found_entry converts ticks to ns correctly, treats a missing prior
     // sample as a zero delta (the first-sample-spike fix covered end-to-end by
     // test_calc_delta), and accumulates running avg/max correctly across repeated samples
@@ -1161,5 +1441,108 @@ mod tests {
         assert_eq!(e2.cpu_percent, 0.0);
         assert_eq!(e2.avg_cpu_percent, expected_percent1 / 2.0);
         assert_eq!(e2.max_cpu_percent, expected_percent1);
+    }
+
+    fn zero_execve_event() -> ExecveEvent {
+        ExecveEvent {
+            timestamp: 0,
+            argv: [[0u8; ARG_SIZE]; ARG_COUNT],
+            envp: [[0u8; ENV_SIZE]; ENV_COUNT],
+            pid: 42,
+            gid: 100,
+            uid: 1000,
+            tgid: 42,
+            command: [0u8; 16],
+            filename: [0u8; LEN_MAX_PATH],
+        }
+    }
+
+    // Debug of a fully zeroed event must not panic: the old two-pass count/write logic
+    // underflowed `item_count - 1` when the first scratch slot was already the NUL
+    // terminator (panic in debug builds, garbage output in release).
+    #[test]
+    fn test_execve_event_debug_zeroed() {
+        let evt = zero_execve_event();
+        let s = format!("{:?}", evt);
+        let expected = format!(
+            "{{\"filename\": \"{}\", \"command\": \"{}\", \"uid\": \"1000\", \"pid\": \"42\", \"gid\": \"100\", \"tgid\": \"42\", \"args\": [], \"envs\": []}}",
+            "\0".repeat(LEN_MAX_PATH),
+            "\0".repeat(16),
+        );
+        assert_eq!(s, expected);
+    }
+
+    // Debug of a populated event renders args and envs in order, NUL-padded to the
+    // fixed slot sizes, joined with ", ".
+    #[test]
+    fn test_execve_event_debug_populated() {
+        let mut evt = zero_execve_event();
+        evt.argv[0][..2].copy_from_slice(b"-c");
+        evt.argv[1][..4].copy_from_slice(b"echo");
+        evt.envp[0][..5].copy_from_slice(b"PATH=");
+        let s = format!("{:?}", evt);
+        let expected = format!(
+            "{{\"filename\": \"{}\", \"command\": \"{}\", \"uid\": \"1000\", \"pid\": \"42\", \"gid\": \"100\", \"tgid\": \"42\", \"args\": [\"-c{}\", \"echo{}\"], \"envs\": [\"PATH={}\"]}}",
+            "\0".repeat(LEN_MAX_PATH),
+            "\0".repeat(16),
+            "\0".repeat(ARG_SIZE - 2),
+            "\0".repeat(ARG_SIZE - 4),
+            "\0".repeat(ENV_SIZE - 5),
+        );
+        assert_eq!(s, expected);
+    }
+
+    // Invalid UTF-8 in a scratch slot used to panic via `.chars().nth(0).unwrap()`
+    // (from_utf8 fails -> unwrap_or_default -> empty string). The list must instead
+    // end at the first unparseable slot without panicking.
+    #[test]
+    fn test_execve_event_debug_invalid_utf8() {
+        let mut evt = zero_execve_event();
+        evt.argv[0][..2].copy_from_slice(b"-c");
+        evt.argv[1][0] = 0xFF; // invalid UTF-8 start byte in the second slot
+        let s = format!("{:?}", evt);
+        assert!(s.contains("\"args\": [\"-c"));
+        assert!(!s.contains("echo"));
+        assert!(s.contains("\"envs\": []"));
+    }
+
+    // Display must survive the same zeroed/invalid-UTF-8 inputs without panicking.
+    #[test]
+    fn test_execve_event_display_zeroed() {
+        let evt = zero_execve_event();
+        let s = format!("{}", evt);
+        let expected = format!(
+            "filename: {}, command: {}, uid: 1000, pid: 42, gid: 100, tgid: 42, args: [], envs: []",
+            "\0".repeat(LEN_MAX_PATH),
+            "\0".repeat(16),
+        );
+        assert_eq!(s, expected);
+    }
+
+    #[test]
+    fn test_execve_event_display_populated() {
+        let mut evt = zero_execve_event();
+        evt.argv[0][..2].copy_from_slice(b"-c");
+        evt.argv[1][..4].copy_from_slice(b"echo");
+        evt.envp[0][..5].copy_from_slice(b"PATH=");
+        let s = format!("{}", evt);
+        let expected = format!(
+            "filename: {}, command: {}, uid: 1000, pid: 42, gid: 100, tgid: 42, args: [-c{},echo{},], envs: [PATH={},]",
+            "\0".repeat(LEN_MAX_PATH),
+            "\0".repeat(16),
+            "\0".repeat(ARG_SIZE - 2),
+            "\0".repeat(ARG_SIZE - 4),
+            "\0".repeat(ENV_SIZE - 5),
+        );
+        assert_eq!(s, expected);
+    }
+
+    #[test]
+    fn test_execve_event_display_invalid_utf8() {
+        let mut evt = zero_execve_event();
+        evt.argv[0][0] = 0xFF;
+        let s = format!("{}", evt);
+        assert!(s.contains("args: []"));
+        assert!(s.contains("envs: []"));
     }
 }

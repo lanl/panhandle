@@ -4,8 +4,8 @@ use procfs::process::all_processes;
 use reqwest::Client;
 
 use crate::helpers::{
-    format_owner, format_state, get_parent_pid, get_process_name, get_process_uid, output_message,
-    output_needs, resolve_username,
+    format_owner, format_state, format_state_prose, get_parent_pid, get_process_name,
+    get_process_uid, output_message, output_needs, resolve_username,
 };
 
 // Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
@@ -110,17 +110,17 @@ pub async fn get_major_faults(
             let state_val = format_state(entry.state);
 
             let plain = if needs_plain {
-                format!(
-                    "Type: mem, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, State: {}, Maj_Faults: {}, Child_Maj_Faults: {}",
+                format_faults_prose(
+                    true,
                     entry.pid,
-                    entry.comm,
-                    ppid_val,
-                    parent_comm_val,
-                    uid_val,
-                    username_val,
-                    state_val,
+                    &entry.comm,
+                    entry.ppid,
+                    entry.parent_comm.as_deref(),
+                    entry.uid,
+                    entry.username.as_deref(),
+                    entry.state,
                     entry.majflt,
-                    entry.cmajflt
+                    entry.cmajflt,
                 )
             } else {
                 String::new()
@@ -128,7 +128,7 @@ pub async fn get_major_faults(
 
             let json = if needs_json {
                 format!(
-                    "{{\"Type\": \"fault\", \"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"Maj_Faults\": \"{}\", \"Child_Maj_Faults\": \"{}\"}}",
+                    "{{\"Type\": \"fault\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"Maj_Faults\": {}, \"Child_Maj_Faults\": {}}}",
                     entry.pid,
                     entry.comm,
                     ppid_val,
@@ -146,9 +146,17 @@ pub async fn get_major_faults(
             (plain, json)
         } else {
             let plain = if needs_plain {
-                format!(
-                    "Type: fault, PID: {}, Comm: {}, Maj_Faults: {}, Child_Maj_Faults: {}",
-                    entry.pid, entry.comm, entry.majflt, entry.cmajflt
+                format_faults_prose(
+                    false,
+                    entry.pid,
+                    &entry.comm,
+                    entry.ppid,
+                    entry.parent_comm.as_deref(),
+                    entry.uid,
+                    entry.username.as_deref(),
+                    entry.state,
+                    entry.majflt,
+                    entry.cmajflt,
                 )
             } else {
                 String::new()
@@ -156,7 +164,7 @@ pub async fn get_major_faults(
 
             let json = if needs_json {
                 format!(
-                    "{{\"Type\": \"fault\", \"PID\": \"{}\", \"Comm\": \"{}\", \"Maj_Faults\": \"{}\", \"Child_Maj_Faults\": \"{}\"}}",
+                    "{{\"Type\": \"fault\", \"PID\": {}, \"Comm\": \"{}\", \"Maj_Faults\": {}, \"Child_Maj_Faults\": {}}}",
                     entry.pid, entry.comm, entry.majflt, entry.cmajflt
                 )
             } else {
@@ -198,6 +206,92 @@ struct MemoryUsageEntry {
     vsize_mb: u64,
     shared_mb: u64,
     data_mb: u64,
+}
+
+/// Plain-text rendering of a major-faults entry. `verbose` includes parent/owner/state
+/// fields; the compact form keeps just PID/comm plus the fault counts.
+pub fn format_faults_prose(
+    verbose: bool,
+    pid: i32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    majflt: u64,
+    cmajflt: u64,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_prose = format_state_prose(state);
+        format!(
+            "Type: fault, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, User ID: {}, User: {}, State: {}, Major Faults: {}, Child Major Faults: {}",
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            uid_val,
+            username_val,
+            state_prose,
+            majflt,
+            cmajflt
+        )
+    } else {
+        format!(
+            "Type: fault, PID: {}, Comm: {}, Major Faults: {}, Child Major Faults: {}",
+            pid, comm, majflt, cmajflt
+        )
+    }
+}
+
+/// Plain-text rendering of a memory-usage entry. `verbose` includes parent/owner/state
+/// fields; the compact form keeps just PID/comm plus the memory sizes.
+pub fn format_mem_prose(
+    verbose: bool,
+    pid: i32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    rss_mb: u64,
+    rss_pages: u64,
+    vm_hwm_mb: u64,
+    vsize_mb: u64,
+    shared_mb: u64,
+    data_mb: u64,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_prose = format_state_prose(state);
+        format!(
+            "Type: mem, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, User ID: {}, User: {}, State: {}, RSS: {} MB ({} pages), Peak RSS: {} MB, Virtual Size: {} MB, Shared: {} MB, Data + Stack: {} MB",
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            uid_val,
+            username_val,
+            state_prose,
+            rss_mb,
+            rss_pages,
+            vm_hwm_mb,
+            vsize_mb,
+            shared_mb,
+            data_mb
+        )
+    } else {
+        format!(
+            "Type: mem, PID: {}, Comm: {}, RSS: {} MB ({} pages), Peak RSS: {} MB, Virtual Size: {} MB, Shared: {} MB, Data + Stack: {} MB",
+            pid, comm, rss_mb, rss_pages, vm_hwm_mb, vsize_mb, shared_mb, data_mb
+        )
+    }
 }
 
 /*
@@ -322,21 +416,21 @@ pub async fn get_all_memory_usage(
             let state_val = format_state(entry.state);
 
             let plain = if needs_plain {
-                format!(
-                    "Type: mem, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, State: {}, RSS_MB: {}, RSS_Pages: {}, Peak_RSS_MB: {}, VSize_MB: {}, Shared_MB: {}, Data_Stack_Size_MB: {}",
+                format_mem_prose(
+                    true,
                     entry.pid,
-                    entry.comm,
-                    ppid_val,
-                    parent_comm_val,
-                    uid_val,
-                    username_val,
-                    state_val,
+                    &entry.comm,
+                    entry.ppid,
+                    entry.parent_comm.as_deref(),
+                    entry.uid,
+                    entry.username.as_deref(),
+                    entry.state,
                     entry.rss_mb,
                     entry.rss_pages,
                     entry.vm_hwm_mb,
                     entry.vsize_mb,
                     entry.shared_mb,
-                    entry.data_mb
+                    entry.data_mb,
                 )
             } else {
                 String::new()
@@ -344,7 +438,7 @@ pub async fn get_all_memory_usage(
 
             let json = if needs_json {
                 format!(
-                    "{{\"Type\": \"mem\", \"PID\": \"{}\", \"Comm\": \"{}\", \"PPID\": \"{}\", \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_Size_MB\": \"{}\"}}",
+                    "{{\"Type\": \"mem\", \"PID\": {}, \"Comm\": \"{}\", \"PPID\": {}, \"Parent_Comm\": \"{}\", \"UID\": \"{}\", \"Username\": \"{}\", \"State\": \"{}\", \"RSS_MB\": {}, \"RSS_Pages\": {}, \"Peak_RSS_MB\": {}, \"VSize_MB\": {}, \"Shared_MB\": {}, \"Data_Stack_Size_MB\": {}}}",
                     entry.pid,
                     entry.comm,
                     ppid_val,
@@ -366,16 +460,21 @@ pub async fn get_all_memory_usage(
             (plain, json)
         } else {
             let plain = if needs_plain {
-                format!(
-                    "Type: mem, PID: {}, Comm: {}, RSS_MB: {}, RSS_Pages: {}, Peak_RSS_MB: {}, VSize_MB: {}, Shared_MB: {}, Data_Stack_Size_MB: {}",
+                format_mem_prose(
+                    false,
                     entry.pid,
-                    entry.comm,
+                    &entry.comm,
+                    entry.ppid,
+                    entry.parent_comm.as_deref(),
+                    entry.uid,
+                    entry.username.as_deref(),
+                    entry.state,
                     entry.rss_mb,
                     entry.rss_pages,
                     entry.vm_hwm_mb,
                     entry.vsize_mb,
                     entry.shared_mb,
-                    entry.data_mb
+                    entry.data_mb,
                 )
             } else {
                 String::new()
@@ -383,7 +482,7 @@ pub async fn get_all_memory_usage(
 
             let json = if needs_json {
                 format!(
-                    "{{\"Type\": \"mem\", \"PID\": \"{}\", \"Comm\": \"{}\", \"RSS_MB\": \"{}\", \"RSS_Pages\": \"{}\", \"Peak_RSS_MB\": \"{}\", \"VSize_MB\": \"{}\", \"Shared_MB\": \"{}\", \"Data_Stack_Size_MB\": \"{}\"}}",
+                    "{{\"Type\": \"mem\", \"PID\": {}, \"Comm\": \"{}\", \"RSS_MB\": {}, \"RSS_Pages\": {}, \"Peak_RSS_MB\": {}, \"VSize_MB\": {}, \"Shared_MB\": {}, \"Data_Stack_Size_MB\": {}}}",
                     entry.pid,
                     entry.comm,
                     entry.rss_mb,

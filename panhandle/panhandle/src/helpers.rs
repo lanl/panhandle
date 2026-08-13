@@ -146,7 +146,7 @@ pub async fn consume_shell_ebpf_map(
                     formatted_utc
                 );
                 if http {
-                    let http_string = Arc::new(string);
+                    let http_string = Arc::new(string.clone());
                     let result =
                         send_http_post(client, &global_url, &http_string, &json, &debug).await;
                     match result {
@@ -155,8 +155,9 @@ pub async fn consume_shell_ebpf_map(
                             error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                } else if syslog {
-                    let syslog_string = Arc::new(string);
+                }
+                if syslog {
+                    let syslog_string = Arc::new(string.clone());
                     let result =
                         send_syslog(&hostname, &syslog_string, &syslog_address, &json, &debug)
                             .await;
@@ -166,10 +167,9 @@ pub async fn consume_shell_ebpf_map(
                             error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
-                } else {
-                    // this is the human readable output
-                    info!("{}", string);
                 }
+                // this is the human readable output
+                info!("{}", string);
             }
         }
     }
@@ -603,13 +603,16 @@ pub async fn validate_url(url: &str) -> Result<&str, String> {
 
 /// Whether the plain-text and/or JSON form of a message is actually needed, given the
 /// configured output channels. Mirrors `output_message`'s own selection logic below:
-/// `plain_string` is used for non-JSON http/syslog and non-debug terminal output;
-/// `json_string` is used for JSON http/syslog and debug terminal output (debug always
-/// logs the JSON form). Computing this once per report call lets callers skip building
-/// whichever string won't be used.
+/// `plain_string` is used for non-JSON output; `json_string` is used when `--json` is
+/// requested or `--debug` is set (debug always logs the JSON form). Because `--json`
+/// is a global flag, every active channel -- http/syslog transport and the terminal
+/// alike -- uses the same form, so the JSON form is needed whenever it is requested.
+/// The only wrinkle is a non-JSON transport combined with `--debug`, which still sends
+/// the plain form over the wire while the terminal logs the JSON form. Computing this
+/// once per report call lets callers skip building whichever string won't be used.
 pub fn output_needs(http: bool, syslog: bool, json_output: bool, debug: bool) -> (bool, bool) {
-    let needs_plain = (http || syslog) && !json_output || !debug;
-    let needs_json = (http || syslog) && json_output || debug;
+    let needs_plain = !json_output && (!debug || http || syslog);
+    let needs_json = json_output || debug;
     (needs_plain, needs_json)
 }
 
@@ -628,6 +631,24 @@ pub fn format_owner(uid: Option<u32>, username: Option<&str>) -> (String, String
 /// (e.g. the --gpu monitor, which has no Stat read to source a state from).
 pub fn format_state(state: Option<char>) -> String {
     state.map(|s| s.to_string()).unwrap_or_default()
+}
+
+/// Human-readable name for a /proc process state char, for the --verbose plain-text
+/// output. The JSON form keeps the raw state char via `format_state`.
+pub fn format_state_prose(state: Option<char>) -> String {
+    let word = match state {
+        Some('R') => "running",
+        Some('S') => "sleeping",
+        Some('D') => "disk sleep",
+        Some('Z') => "zombie",
+        Some('T') => "stopped",
+        Some('t') => "tracing stop",
+        Some('X') => "dead",
+        Some('I') => "idle",
+        Some('P') => "parked",
+        _ => "unknown",
+    };
+    word.to_string()
 }
 
 /// Delta since the last observed value. Returns 0 when there's no prior observation yet,
@@ -705,6 +726,8 @@ pub async fn output_message(
     }
     if *debug {
         info!("\\{:#?}\\", json_string);
+    } else if *use_json {
+        info!("{}", json_string);
     } else {
         info!("{}", plain_string);
     }

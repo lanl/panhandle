@@ -25,6 +25,74 @@ struct NetworkEntry {
     stats: NetStats,
 }
 
+/// Plain-text rendering of a socket stats entry. `verbose` includes parent/owner/state
+/// fields; the compact form keeps just PID/comm plus the socket counters.
+pub fn format_socket_prose(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    nic: &str,
+    ip: &str,
+    mac: &str,
+    stats: &NetStats,
+    bytes_sent_mb: u64,
+    bytes_recv_mb: u64,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_prose = format_state_prose(state);
+        format!(
+            "Type: sock, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, User ID: {}, User: {}, State: {}, NIC: {}, IP: {}, MAC: {}, Established: {}, Syn Recv: {}, Close Wait: {}, Fin Wait: {}, Time Wait: {}, UDP: {}, Sent: {} MB, Received: {} MB, Packets Sent: {}, Packets Received: {}",
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            uid_val,
+            username_val,
+            state_prose,
+            nic,
+            ip,
+            mac,
+            stats.tcp_established,
+            stats.tcp_syn_recv,
+            stats.tcp_close_wait,
+            stats.tcp_fin_wait,
+            stats.tcp_time_wait,
+            stats.udp_sockets,
+            bytes_sent_mb,
+            bytes_recv_mb,
+            stats.packets_sent,
+            stats.packets_recv
+        )
+    } else {
+        format!(
+            "Type: sock, PID: {}, Comm: {}, NIC: {}, IP: {}, MAC: {}, Established: {}, Syn Recv: {}, Close Wait: {}, Fin Wait: {}, Time Wait: {}, UDP: {}, Sent: {} MB, Received: {} MB, Packets Sent: {}, Packets Received: {}",
+            pid,
+            comm,
+            nic,
+            ip,
+            mac,
+            stats.tcp_established,
+            stats.tcp_syn_recv,
+            stats.tcp_close_wait,
+            stats.tcp_fin_wait,
+            stats.tcp_time_wait,
+            stats.udp_sockets,
+            bytes_sent_mb,
+            bytes_recv_mb,
+            stats.packets_sent,
+            stats.packets_recv
+        )
+    }
+}
+
 /// Network monitoring main function
 pub async fn monitor_network_usage(
     net_stats_map: &HashMap<aya::maps::MapData, u32, NetStats>,
@@ -187,34 +255,27 @@ async fn report_network_stats(
     // Build messages conditionally based on verbose flag
     let (plain_string, json_string) = if *verbose {
         // Verbose mode: include parent and owner info
-        let ppid = ppid.unwrap_or(0);
-        let parent_comm = parent_comm.unwrap_or("unknown");
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
         let (uid_val, username_val) = format_owner(uid, username);
         let state_val = format_state(state);
 
         let plain = if needs_plain {
-            format!(
-                "Type: sock, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, State: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+            format_socket_prose(
+                true,
                 pid,
                 comm,
                 ppid,
                 parent_comm,
-                uid_val,
-                username_val,
-                state_val,
+                uid,
+                username,
+                state,
                 nic,
                 ip,
                 mac,
-                stats.tcp_established,
-                stats.tcp_syn_recv,
-                stats.tcp_close_wait,
-                stats.tcp_fin_wait,
-                stats.tcp_time_wait,
-                stats.udp_sockets,
+                stats,
                 bytes_sent_mb,
                 bytes_recv_mb,
-                stats.packets_sent,
-                stats.packets_recv
             )
         } else {
             String::new()
@@ -225,8 +286,8 @@ async fn report_network_stats(
                 "Type": "sock",
                 "PID": pid,
                 "Comm": comm,
-                "PPID": ppid,
-                "Parent_Comm": parent_comm,
+                "PPID": ppid_val,
+                "Parent_Comm": parent_comm_val,
                 "UID": uid_val,
                 "Username": username_val,
                 "State": state_val,
@@ -253,23 +314,21 @@ async fn report_network_stats(
     } else {
         // Non-verbose mode: exclude parent info
         let plain = if needs_plain {
-            format!(
-                "Type: sock, PID: {}, Comm: {}, NIC: {}, IP: {}, MAC: {}, ESTAB: {}, SYN_RECV: {}, CLOSE_WAIT: {}, FIN_WAIT: {}, TIME_WAIT: {}, UDP: {}, MB_Sent: {}, MB_Recv: {}, Packets_Sent: {}, Packets_Recv: {}",
+            format_socket_prose(
+                false,
                 pid,
                 comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
                 nic,
                 ip,
                 mac,
-                stats.tcp_established,
-                stats.tcp_syn_recv,
-                stats.tcp_close_wait,
-                stats.tcp_fin_wait,
-                stats.tcp_time_wait,
-                stats.udp_sockets,
+                stats,
                 bytes_sent_mb,
                 bytes_recv_mb,
-                stats.packets_sent,
-                stats.packets_recv
             )
         } else {
             String::new()

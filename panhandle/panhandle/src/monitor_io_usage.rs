@@ -37,6 +37,53 @@ struct IoEntry {
     unique_inodes: usize,
 }
 
+/// Plain-text rendering of an IO stats entry. `verbose` includes parent/owner/state
+/// fields; the compact form keeps just PID/comm plus the IO counters.
+pub fn format_io_prose(
+    verbose: bool,
+    pid: u32,
+    comm: &str,
+    ppid: Option<u32>,
+    parent_comm: Option<&str>,
+    uid: Option<u32>,
+    username: Option<&str>,
+    state: Option<char>,
+    read_count: u64,
+    write_count: u64,
+    read_mb: u64,
+    write_mb: u64,
+    open_fds: usize,
+    unique_inodes: usize,
+) -> String {
+    if verbose {
+        let ppid_val = ppid.unwrap_or(0);
+        let parent_comm_val = parent_comm.unwrap_or("unknown");
+        let (uid_val, username_val) = format_owner(uid, username);
+        let state_prose = format_state_prose(state);
+        format!(
+            "Type: io, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, User ID: {}, User: {}, State: {}, Read Count: {}, Write Count: {}, Read: {} MB, Write: {} MB, Open FDs: {}, Unique Inodes: {}",
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            uid_val,
+            username_val,
+            state_prose,
+            read_count,
+            write_count,
+            read_mb,
+            write_mb,
+            open_fds,
+            unique_inodes
+        )
+    } else {
+        format!(
+            "Type: io, PID: {}, Comm: {}, Read Count: {}, Write Count: {}, Read: {} MB, Write: {} MB, Open FDs: {}, Unique Inodes: {}",
+            pid, comm, read_count, write_count, read_mb, write_mb, open_fds, unique_inodes
+        )
+    }
+}
+
 pub async fn monitor_io_usage(
     json_output: &bool,
     http: &bool,
@@ -237,21 +284,21 @@ async fn report_io_and_inode_stats(
         let state_val = format_state(state);
 
         let plain = if needs_plain {
-            format!(
-                "Type: io, PID: {}, Comm: {}, PPID: {}, Parent_Comm: {}, UID: {}, Username: {}, State: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
+            format_io_prose(
+                true,
                 pid,
                 comm,
-                ppid_val,
-                parent_comm_val,
-                uid_val,
-                username_val,
-                state_val,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
                 read_count,
                 write_count,
                 read_mb,
                 write_mb,
                 open_fds,
-                unique_inodes
+                unique_inodes,
             )
         } else {
             String::new()
@@ -282,9 +329,21 @@ async fn report_io_and_inode_stats(
         (plain, json_string)
     } else {
         let plain = if needs_plain {
-            format!(
-                "Type: io, PID: {}, Comm: {}, Read_Count: {}, Write_Count: {}, Read_MB: {}, Write_MB: {}, Open_FDs: {}, Unique_Inodes: {}",
-                pid, comm, read_count, write_count, read_mb, write_mb, open_fds, unique_inodes
+            format_io_prose(
+                false,
+                pid,
+                comm,
+                ppid,
+                parent_comm,
+                uid,
+                username,
+                state,
+                read_count,
+                write_count,
+                read_mb,
+                write_mb,
+                open_fds,
+                unique_inodes,
             )
         } else {
             String::new()

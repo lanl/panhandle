@@ -1,6 +1,8 @@
 variables:
   YOUR_APP_NAME: "panhandle"
   YOUR_APP_COMMAND: "panhandle"
+  CARGO_HOME: "/root/.cargo"
+  PATH: "/root/.cargo/bin:$PATH"
 
 stages:
   - build

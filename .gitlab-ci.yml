@@ -214,7 +214,7 @@ build-rpm-el9_aarch64:
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
     - ~/.cargo/bin/cargo install cargo-binstall
-     - ~/.cargo/bin/cargo binstall bpf-linker
+    - ~/.cargo/bin/cargo binstall bpf-linker
   script:
     ## aarch64 build
     - ~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu
@@ -282,7 +282,7 @@ build-rpm-el10_aarch64:
     - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo update
     - ~/.cargo/bin/cargo install cargo-binstall
-     - ~/.cargo/bin/cargo binstall bpf-linker
+    - ~/.cargo/bin/cargo binstall bpf-linker
   script:
     ## aarch64 build
     - ~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu
@@ -349,7 +349,7 @@ build-rpm-suse-15.5_aarch64:
     - cd panhandle/
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
-    - ~/.cargo/bin/cargo install cargo-generate-rpmbuild
+    - ~/.cargo/bin/cargo install cargo-generate-rpm
     - ~/.cargo/bin/cargo install cargo-binstall
     - ~/.cargo/bin/cargo binstall bpf-linker
     - ~/.cargo/bin/cargo update

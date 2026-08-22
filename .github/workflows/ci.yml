@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   cross-build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.config.runs_on }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -25,34 +25,34 @@ jobs:
             shortname: 'el8'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
-          #- os_image: 'almalinux:8'
-          #  shortname: 'el8'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+          - os_image: 'almalinux:8'
+            shortname: 'el8'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
           - os_image: 'almalinux:9'
             shortname: 'el9'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
-          #- os_image: 'almalinux:9'
-          #  shortname: 'el9'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+          - os_image: 'almalinux:9'
+            shortname: 'el9'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
           - os_image: 'almalinux:10'
             shortname: 'el10'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
-          #- os_image: 'almalinux:10'
-          #  shortname: 'el10'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
-          #- os_image: 'registry.suse.com/suse/sle15:15.5'
-          #  shortname: 'sle15'
-          #  runs_on: 'ubuntu-latest'
-          #  architecture: 'x86_64'
-          #- os_image: 'registry.suse.com/suse/sle15:15.5'
-          #  shortname: 'sle15'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+          - os_image: 'almalinux:10'
+            shortname: 'el10'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
+          - os_image: 'registry.suse.com/suse/sle15:15.5'
+            shortname: 'sle15'
+            runs_on: 'ubuntu-latest'
+            architecture: 'x86_64'
+          - os_image: 'registry.suse.com/suse/sle15:15.5'
+            shortname: 'sle15'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
         package: ["panhandle"]
 
     container:
@@ -68,18 +68,25 @@ jobs:
               zypper install -y libopenssl-3-devel openssl pkg-config bash
           fi
 
-      - name: Install aarch64 packages (Container Environment))
+      - name: Install aarch64 packages (Container Environment)
         if: matrix.config.architecture == 'aarch64'
         run: |
+          # Runs on a native arm64 hosted runner, so this needs a native
+          # toolchain (not an aarch64 cross-compiler). llvm-devel/llvm-toolset
+          # are still required because bpf-linker has no prebuilt
+          # aarch64-unknown-linux-gnu binary and must be compiled from source.
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libgcc glibc cross-gcc-common llvm-devel llvm-toolset glibc-devel
+              dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset
           fi
+          # No llvm-dev/libclang packages here: unlike AlmaLinux, cargo-binstall
+          # resolves a prebuilt bpf-linker binary for SUSE aarch64 (see the
+          # GitLab CI aarch64 SUSE jobs, which use this same package set).
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc-aarch64-linux-gnu cross-gcc-common llvm-dev glibc libclang-21-dev llvm-toolset glibc-dev
+              zypper install -y gcc gcc7
           fi
 
-      - name: Install x86_64 packages (Container Environment))
+      - name: Install x86_64 packages (Container Environment)
         if: matrix.config.architecture == 'x86_64'
         run: |
           if command -v dnf &> /dev/null; then
@@ -87,7 +94,7 @@ jobs:
               dnf install -y gcc binutils libgcc cross-gcc-common
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7 binutils cross-gcc-common
+              zypper install -y gcc gcc7
           fi
 
       - uses: actions/checkout@v7

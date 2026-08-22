@@ -101,7 +101,7 @@ jobs:
 
       - name: Get package version
         id: get_version
-        shell: bash
+        shell: sh
         run: |
           VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
           RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/release = //; s/"//g')
@@ -122,7 +122,7 @@ jobs:
           cargo binstall --no-confirm bpf-linker
 
       - name: Build Binary & Generate RPM
-        shell: bash
+        shell: sh
         run: |
           . "$HOME/.cargo/env"
           cd ${{ matrix.package }}

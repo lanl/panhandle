@@ -122,7 +122,19 @@ jobs:
           rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm bpf-linker
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
 
       - name: Build Binary & Generate RPM
         shell: sh

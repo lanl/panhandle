@@ -30,7 +30,19 @@ jobs:
           rustup component add clippy
           rustup update
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm bpf-linker
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
           cargo update
           cargo install cargo-sbom
       - name: Build & generate SBOM
@@ -58,7 +70,19 @@ jobs:
           rustup component add clippy
           rustup update
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm bpf-linker
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
           cargo update
       - name: Clippy
         run: |
@@ -80,7 +104,19 @@ jobs:
           rustup component add clippy
           rustup update
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm bpf-linker
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
           cargo update
           rm -rf .cargo
           cargo build --config ../.runner-config.toml --release
@@ -118,7 +154,19 @@ jobs:
           rustup toolchain install nightly --component rust-src
           rustup update
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm bpf-linker
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
           cargo install cargo-deny
           cargo update
           cargo build --config ../.runner-config.toml

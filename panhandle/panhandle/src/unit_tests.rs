@@ -1193,6 +1193,49 @@ mod tests {
         );
     }
 
+    // regression test: a CLI output type the config file never declared must still take
+    // effect. The merge previously only rewrote entries already present in the config's
+    // output list, so an --http endpoint given on the command line against a config
+    // declaring only file/syslog (as the shipped /opt/panhandle/panhandle.yaml does) was
+    // silently discarded, contrary to the documented CLI-overrides-config precedence.
+    #[tokio::test]
+    async fn test_merge_args_adds_cli_output_type_absent_from_config() {
+        // config declares file + syslog, but no http endpoint
+        let config = ConfigArgs {
+            output: Some(vec![
+                OutputConfig::File {
+                    file: PathBuf::from("/var/log/panhandle/panhandle.log"),
+                },
+                OutputConfig::Syslog {
+                    syslog: Some(Some("hpcsyslog.lanl.gov:514/tcp".to_string())),
+                },
+            ]),
+            ..Default::default()
+        };
+        // CLI adds an http endpoint the config never mentioned
+        let cli = RawArgs {
+            output: Some(OutputCommand::Output {
+                file: None,
+                http: Some("http://localhost:4319/raw-audit".to_string()),
+                syslog: None,
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_args(cli, config).await;
+
+        // the config's file/syslog outputs survive untouched and the CLI's http endpoint
+        // is added rather than dropped
+        assert_eq!(
+            merged.output,
+            Some(OutputCommand::Output {
+                file: Some(PathBuf::from("/var/log/panhandle/panhandle.log")),
+                http: Some("http://localhost:4319/raw-audit".to_string()),
+                syslog: Some(Some("hpcsyslog.lanl.gov:514/tcp".to_string())),
+            })
+        );
+    }
+
     // test that hex_to_interface decodes an IPv4 hex address (as found in /proc/net/tcp),
     // matches it to the owning interface, excludes loopback addresses, and returns None
     // for both IPv6-length hex and malformed input

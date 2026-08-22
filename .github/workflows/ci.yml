@@ -53,11 +53,11 @@ jobs:
             runs_on: 'ubuntu-24.04-arm'
             architecture: 'aarch64'
           - os_image: 'registry.suse.com/suse/sle15:15.5'
-            shortname: 'sle15'
+            shortname: 'sles'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
           - os_image: 'registry.suse.com/suse/sle15:15.5'
-            shortname: 'sle15'
+            shortname: 'sles'
             runs_on: 'ubuntu-24.04-arm'
             architecture: 'aarch64'
         package: ["panhandle"]

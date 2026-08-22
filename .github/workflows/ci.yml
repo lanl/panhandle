@@ -118,8 +118,8 @@ jobs:
           rustup toolchain install nightly --component rust-src
           rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm
-          cargo install cargo-binstall
-          cargo binstall bpf-linker
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm bpf-linker
 
       - name: Build Binary & Generate RPM
         shell: bash

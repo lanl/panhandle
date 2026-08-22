@@ -1,0 +1,125 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: |
+          cd panhandle
+          rustup toolchain install stable
+          rustup toolchain install nightly --component rust-src
+          rustup component add clippy
+          rustup update
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm bpf-linker
+          cargo update
+          cargo install cargo-sbom
+      - name: Build & generate SBOM
+        run: |
+          cd panhandle
+          cargo build --config ../.runner-config.toml --release
+          cargo sbom > panhandle-sbom.spdx
+      - uses: actions/upload-artifact@v7
+        with:
+          name: panhandle-sbom
+          path: panhandle/panhandle-sbom.spdx
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: |
+          cd panhandle
+          rustup toolchain install stable
+          rustup toolchain install nightly --component rust-src
+          rustup component add clippy
+          rustup update
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm bpf-linker
+          cargo update
+      - name: Clippy
+        run: |
+          cd panhandle
+          cargo clippy --all-targets --all-features -- -D warnings -A clippy::too_many_arguments
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain & build
+        run: |
+          cd panhandle
+          rustup toolchain install stable
+          rustup toolchain install nightly --component rust-src
+          rustup component add clippy
+          rustup update
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm bpf-linker
+          cargo update
+          rm -rf .cargo
+          cargo build --config ../.runner-config.toml --release
+      - name: Test
+        run: |
+          cd panhandle
+          cargo --config ../.runner-config.toml test
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Audit
+        run: |
+          cd panhandle
+          rustup update
+          cargo update
+          cargo install cargo-audit
+          cargo audit --format terminal
+
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain & build
+        run: |
+          cd panhandle
+          rustup toolchain install stable
+          rustup toolchain install nightly --component rust-src
+          rustup update
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm bpf-linker
+          cargo install cargo-deny
+          cargo update
+          cargo build --config ../.runner-config.toml
+      - name: Deny
+        run: |
+          cd panhandle
+          cargo deny check

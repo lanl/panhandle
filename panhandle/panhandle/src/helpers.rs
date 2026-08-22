@@ -25,6 +25,16 @@ pub(crate) unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
 // this is the local import section
 use panhandle_common::*;
 
+/// Whether an event should be reported, given the `--executables` filter. An empty filter
+/// means "monitor everything", so every event matches.
+///
+/// Callers must skip a non-matching event individually (`continue`), never abandon the
+/// rest of the batch (`break`): a single readable drain of the ring buffer yields many
+/// unrelated events, so one non-match says nothing about the events queued behind it.
+pub fn event_matches_executable_filter(filter: &[String], candidate: &str) -> bool {
+    filter.is_empty() || filter.iter().any(|s| s == candidate)
+}
+
 /// this is a method to handle the display of the shell (bash, zsh) ebpf events
 pub async fn consume_shell_ebpf_map(
     client: &Client,
@@ -69,13 +79,13 @@ pub async fn consume_shell_ebpf_map(
             }
 
             // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.iter().any(|s| s == command) {
+            if !event_matches_executable_filter(&executable_vec, command) {
                 debug!(
                     "skipping event with path: '{}' not in the list to monitor: '{:?}'",
                     command, &executable_vec
                 );
-                // escape iteration of events.read
-                break;
+                // skip only this event, the rest of the drained batch is unrelated to it
+                continue;
             }
 
             // get the moniker of the uid of the event
@@ -223,13 +233,13 @@ pub async fn consume_execve_ebpf_map(
             }
 
             // escape if matching the list of binaries to exclude
-            if !executable_vec.is_empty() && !executable_vec.iter().any(|s| s == filename) {
+            if !event_matches_executable_filter(&executable_vec, filename) {
                 debug!(
                     "skipping event with path: '{}' not in the list to monitor: '{:?}'",
                     filename, &executable_vec
                 );
-                // escape iteration of events.read
-                break;
+                // skip only this event, the rest of the drained batch is unrelated to it
+                continue;
             }
 
             // get the moniker of the uid of the event

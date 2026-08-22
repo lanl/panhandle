@@ -1,5 +1,10 @@
 # CHANGELOG
 
+### v1.0.20
+
+- fixed a bug where `--executables` silently discarded every event queued behind the first non-matching one in a ring buffer batch, so matching events were dropped without any indication; each non-matching event is now skipped individually
+- added test coverage for the `--executables` filter, including the batch-skipping regression
+
 ### v1.0.19
 
 - added ci for arm and sles to the GitHub ci

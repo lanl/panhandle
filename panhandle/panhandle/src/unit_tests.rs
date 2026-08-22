@@ -793,6 +793,47 @@ mod tests {
         assert!(resolve_comm_list_mode(&deny, &allow).is_err());
     }
 
+    // test that an empty --executables list matches everything (the "monitor everything"
+    // default), and that a populated one matches only its exact entries
+    #[test]
+    fn test_event_matches_executable_filter() {
+        // no filter configured: every event is reported
+        assert!(event_matches_executable_filter(&[], "/usr/bin/ssh"));
+        assert!(event_matches_executable_filter(&[], ""));
+
+        let filter = vec!["/usr/bin/ssh".to_string(), "/usr/bin/scp".to_string()];
+        assert!(event_matches_executable_filter(&filter, "/usr/bin/ssh"));
+        assert!(event_matches_executable_filter(&filter, "/usr/bin/scp"));
+        assert!(!event_matches_executable_filter(&filter, "/usr/bin/ls"));
+        // matching is exact, not prefix/substring based
+        assert!(!event_matches_executable_filter(&filter, "/usr/bin"));
+        assert!(!event_matches_executable_filter(&filter, "ssh"));
+        assert!(!event_matches_executable_filter(&filter, ""));
+    }
+
+    // regression test: a batch drained from the ring buffer holds many unrelated events,
+    // so a non-matching event must skip only itself. Previously the filter used `break`,
+    // which abandoned every event queued behind the first non-match -- silently dropping
+    // matching events whenever --executables was set. Mirrors the per-event filtering
+    // loop in consume_shell_ebpf_map/consume_execve_ebpf_map, which can't be driven
+    // directly from a test without a live eBPF ring buffer.
+    #[test]
+    fn test_executable_filter_skips_only_nonmatching_events() {
+        let filter = vec!["/usr/bin/ssh".to_string()];
+        // the non-matching event is deliberately first, ahead of two matching ones
+        let batch = ["/usr/bin/ls", "/usr/bin/ssh", "/usr/bin/ssh"];
+
+        let mut reported = Vec::new();
+        for event in batch {
+            if !event_matches_executable_filter(&filter, event) {
+                continue;
+            }
+            reported.push(event);
+        }
+
+        assert_eq!(reported, vec!["/usr/bin/ssh", "/usr/bin/ssh"]);
+    }
+
     // test the executable-count and uid-count limit checks at and past their boundary
     #[test]
     fn test_validate_count_executables() {

@@ -1,5 +1,9 @@
 # CHANGELOG
 
+### v1.0.19
+
+- added ci for arm and sles to the GitHub ci
+
 ### v1.0.18
 
 - fixed a bug where the first CPU% sample after starting --cpu could spike (or clamp to 100%) because there was no prior sample yet to compare against

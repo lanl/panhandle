@@ -1,10 +1,11 @@
 name: packaging
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,8 +16,15 @@ concurrency:
 
 jobs:
   cross-build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.config.runs_on }}
     timeout-minutes: 30
+    # GITHUB_PATH additions don't reliably merge with the container's base
+    # PATH for later docker execs in container jobs (a known GitHub Actions
+    # limitation - it can end up as *only* the appended entries, losing
+    # /usr/bin et al). Set PATH explicitly instead so every step's exec
+    # sees both the cargo bin dirs and a full standard PATH.
+    env:
+      PATH: /root/.cargo/bin:/github/home/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     strategy:
       fail-fast: false
       matrix:
@@ -25,34 +33,34 @@ jobs:
             shortname: 'el8'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
-          #- os_image: 'almalinux:8'
-          #  shortname: 'el8'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+          - os_image: 'almalinux:8'
+            shortname: 'el8'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
           - os_image: 'almalinux:9'
             shortname: 'el9'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
-          #- os_image: 'almalinux:9'
-          #  shortname: 'el9'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+          - os_image: 'almalinux:9'
+            shortname: 'el9'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
           - os_image: 'almalinux:10'
             shortname: 'el10'
             runs_on: 'ubuntu-latest'
             architecture: 'x86_64'
-          #- os_image: 'almalinux:10'
-          #  shortname: 'el10'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
-          #- os_image: 'registry.suse.com/suse/sle15:15.5'
-          #  shortname: 'sle15'
-          #  runs_on: 'ubuntu-latest'
-          #  architecture: 'x86_64'
-          #- os_image: 'registry.suse.com/suse/sle15:15.5'
-          #  shortname: 'sle15'
-          #  runs_on: 'ubuntu-latest-arm'
-          #  architecture: 'aarch64'
+          - os_image: 'almalinux:10'
+            shortname: 'el10'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
+          - os_image: 'registry.suse.com/suse/sle15:15.5'
+            shortname: 'sles'
+            runs_on: 'ubuntu-latest'
+            architecture: 'x86_64'
+          - os_image: 'registry.suse.com/suse/sle15:15.5'
+            shortname: 'sles'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
         package: ["panhandle"]
 
     container:
@@ -68,18 +76,22 @@ jobs:
               zypper install -y libopenssl-3-devel openssl pkg-config bash
           fi
 
-      - name: Install aarch64 packages (Container Environment))
+      - name: Install aarch64 packages (Container Environment)
         if: matrix.config.architecture == 'aarch64'
         run: |
+          # Runs on a native arm64 hosted runner, so this needs a native
+          # toolchain (not an aarch64 cross-compiler). llvm-devel/llvm-toolset
+          # are still required because bpf-linker has no prebuilt
+          # aarch64-unknown-linux-gnu binary and must be compiled from source.
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libgcc glibc cross-gcc-common llvm-devel llvm-toolset glibc-devel
+              dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc-aarch64-linux-gnu cross-gcc-common llvm-dev glibc libclang-21-dev llvm-toolset glibc-dev
+              zypper install -y gcc gcc7
           fi
 
-      - name: Install x86_64 packages (Container Environment))
+      - name: Install x86_64 packages (Container Environment)
         if: matrix.config.architecture == 'x86_64'
         run: |
           if command -v dnf &> /dev/null; then
@@ -87,14 +99,14 @@ jobs:
               dnf install -y gcc binutils libgcc cross-gcc-common
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7 binutils cross-gcc-common
+              zypper install -y gcc gcc7
           fi
 
       - uses: actions/checkout@v7
 
       - name: Get package version
         id: get_version
-        shell: bash
+        shell: sh
         run: |
           VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
           RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/release = //; s/"//g')
@@ -105,17 +117,27 @@ jobs:
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo '/root/.cargo/bin' >> $GITHUB_PATH
-          echo '/github/home/.cargo/bin' >> $GITHUB_PATH
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
           rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm
-          cargo install cargo-binstall
-          cargo binstall bpf-linker
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
 
       - name: Build Binary & Generate RPM
-        shell: bash
+        shell: sh
         run: |
           . "$HOME/.cargo/env"
           cd ${{ matrix.package }}

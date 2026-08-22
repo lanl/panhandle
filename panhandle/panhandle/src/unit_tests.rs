@@ -441,9 +441,11 @@ mod tests {
         let url = Arc::new("not a url".to_string());
         let body = Arc::new("payload".to_string());
 
-        assert!(send_http_post(&client, &url, &body, &false, &false)
-            .await
-            .is_err());
+        assert!(
+            send_http_post(&client, &url, &body, &false, &false)
+                .await
+                .is_err()
+        );
     }
 
     // test that send_syslog delivers a plaintext message over UDP to a loopback listener
@@ -461,8 +463,7 @@ mod tests {
         let message = Arc::new("panhandle udp test message".to_string());
         let hostname = "testhost".to_string();
 
-        let result =
-            send_syslog(&hostname, &message, &syslog_address, &false, &false).await;
+        let result = send_syslog(&hostname, &message, &syslog_address, &false, &false).await;
         assert!(result.is_ok());
 
         let mut buf = [0u8; 2048];
@@ -748,9 +749,7 @@ mod tests {
         // a negative PID fails the u32 parse for --pid-list
         assert!(RawArgs::try_parse_from(["panhandle", "--pid-list", "-1"]).is_err());
         // a non-numeric UID fails the u32 parse for --exclude-min-uid
-        assert!(
-            RawArgs::try_parse_from(["panhandle", "--exclude-min-uid", "notanumber"]).is_err()
-        );
+        assert!(RawArgs::try_parse_from(["panhandle", "--exclude-min-uid", "notanumber"]).is_err());
         // a negative memory-faults threshold fails the u64 parse
         assert!(RawArgs::try_parse_from(["panhandle", "--memory-faults", "-5"]).is_err());
     }
@@ -849,8 +848,8 @@ mod tests {
     // callers can tell which limit was exceeded
     #[test]
     fn test_validate_count_error_message() {
-        let err = validate_count(EXECUTABLE_COUNT + 1, EXECUTABLE_COUNT, "executables")
-            .unwrap_err();
+        let err =
+            validate_count(EXECUTABLE_COUNT + 1, EXECUTABLE_COUNT, "executables").unwrap_err();
         assert_eq!(
             err,
             format!(
@@ -1385,7 +1384,10 @@ mod tests {
         assert_eq!(json_quoted("esc\u{1b}ape"), "\"esc\\u001bape\"");
         // the escaped output must parse back to the original, byte for byte
         let hostile = "q\"\\\u{1b}\n\t";
-        assert_eq!(json_quoted(hostile), serde_json::to_string(hostile).unwrap());
+        assert_eq!(
+            json_quoted(hostile),
+            serde_json::to_string(hostile).unwrap()
+        );
         let roundtrip: String = serde_json::from_str(&json_quoted(hostile)).unwrap();
         assert_eq!(roundtrip, hostile);
     }
@@ -1915,19 +1917,7 @@ mod tests {
         assert_eq!(parsed_verbose["Delta_Time_ms"], 56.25);
 
         let compact = format_cpu_json(
-            false,
-            42,
-            hostile,
-            None,
-            None,
-            None,
-            None,
-            None,
-            0.0,
-            0.0,
-            12.5,
-            7.25,
-            90.0,
+            false, 42, hostile, None, None, None, None, None, 0.0, 0.0, 12.5, 7.25, 90.0,
         );
         assert_valid_json(&compact);
         let parsed: serde_json::Value = serde_json::from_str(&compact).unwrap();
@@ -1949,7 +1939,8 @@ mod tests {
         );
         assert_valid_json(&not_found_verbose);
 
-        let not_found_compact = format_cpu_not_found_json(false, 42, hostile, None, None, None, None);
+        let not_found_compact =
+            format_cpu_not_found_json(false, 42, hostile, None, None, None, None);
         assert_valid_json(&not_found_compact);
 
         let system = format_system_cpu_json(42.5, 8, 1234.5);
@@ -1984,9 +1975,8 @@ mod tests {
         assert_eq!(parsed_verbose["Username"], "root");
         assert_eq!(parsed_verbose["GPU_ID"], 0);
 
-        let compact = format_gpu_process_json(
-            false, 42, hostile, None, None, None, None, 0, 25, 10, 5,
-        );
+        let compact =
+            format_gpu_process_json(false, 42, hostile, None, None, None, None, 0, 25, 10, 5);
         assert_valid_json(&compact);
         let parsed: serde_json::Value = serde_json::from_str(&compact).unwrap();
         assert_eq!(parsed["Comm"], hostile);
@@ -2030,20 +2020,7 @@ mod tests {
         assert_eq!(parsed_verbose["Open_FDs"], 12);
 
         let compact = format_io_json(
-            false,
-            42,
-            hostile,
-            None,
-            None,
-            None,
-            None,
-            None,
-            100,
-            50,
-            1024,
-            512,
-            12,
-            10,
+            false, 42, hostile, None, None, None, None, None, 100, 50, 1024, 512, 12, 10,
         );
         assert_valid_json(&compact);
         let parsed: serde_json::Value = serde_json::from_str(&compact).unwrap();
@@ -2142,9 +2119,8 @@ mod tests {
         assert_eq!(parsed_faults_verbose["State"], "S");
         assert_eq!(parsed_faults_verbose["Maj_Faults"], 1234);
 
-        let faults_compact = format_faults_json(
-            false, 42, hostile, None, None, None, None, None, 1234, 5678,
-        );
+        let faults_compact =
+            format_faults_json(false, 42, hostile, None, None, None, None, None, 1234, 5678);
         assert_valid_json(&faults_compact);
 
         let mem_verbose = format_mem_json(
@@ -2172,20 +2148,7 @@ mod tests {
         assert_eq!(parsed_mem_verbose["RSS_MB"], 128);
 
         let mem_compact = format_mem_json(
-            false,
-            42,
-            hostile,
-            None,
-            None,
-            None,
-            None,
-            None,
-            128,
-            32768,
-            256,
-            1024,
-            64,
-            32,
+            false, 42, hostile, None, None, None, None, None, 128, 32768, 256, 1024, 64, 32,
         );
         assert_valid_json(&mem_compact);
         let parsed: serde_json::Value = serde_json::from_str(&mem_compact).unwrap();

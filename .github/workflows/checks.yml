@@ -1,0 +1,176 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: |
+          cd panhandle
+          rustup toolchain install stable
+          rustup toolchain install nightly --component rust-src
+          rustup component add clippy
+          rustup update
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
+          cargo update
+          cargo install cargo-sbom
+      - name: Build & generate SBOM
+        run: |
+          cd panhandle
+          cargo build --config ../.runner-config.toml --release
+          cargo sbom > panhandle-sbom.spdx
+      - uses: actions/upload-artifact@v7
+        with:
+          name: panhandle-sbom
+          path: panhandle/panhandle-sbom.spdx
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: |
+          cd panhandle
+          rustup toolchain install stable
+          rustup toolchain install nightly --component rust-src
+          rustup component add clippy
+          rustup update
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
+          cargo update
+      - name: Clippy
+        run: |
+          cd panhandle
+          cargo clippy --all-targets --all-features -- -D warnings -A clippy::too_many_arguments
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain & build
+        run: |
+          cd panhandle
+          rustup toolchain install stable
+          rustup toolchain install nightly --component rust-src
+          rustup component add clippy
+          rustup update
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
+          cargo update
+          rm -rf .cargo
+          cargo build --config ../.runner-config.toml --release
+      - name: Test
+        run: |
+          cd panhandle
+          cargo --config ../.runner-config.toml test
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Audit
+        run: |
+          cd panhandle
+          rustup update
+          cargo update
+          cargo install cargo-audit
+          cargo audit --format terminal
+
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: docker.io/rust
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain & build
+        run: |
+          cd panhandle
+          rustup toolchain install stable
+          rustup toolchain install nightly --component rust-src
+          rustup update
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
+          cargo install cargo-deny
+          cargo update
+          cargo build --config ../.runner-config.toml
+      - name: Deny
+        run: |
+          cd panhandle
+          cargo deny check

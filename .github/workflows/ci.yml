@@ -86,11 +86,13 @@ jobs:
               dnf install -y epel-release
               dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset
           fi
-          # No llvm-dev/libclang packages here: unlike AlmaLinux, cargo-binstall
-          # resolves a prebuilt bpf-linker binary for SUSE aarch64 (see the
-          # GitLab CI aarch64 SUSE jobs, which use this same package set).
           if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7
+              # Best-effort: cargo-binstall's prebuilt bpf-linker download can
+              # time out (seen in CI) and fall back to compiling from source,
+              # which needs LLVM/clang. Not fatal if unavailable in the
+              # SLE_BCI repo - the prebuilt binstall path is still primary.
+              zypper install -y llvm19-devel clang19-devel || true
           fi
 
       - name: Install x86_64 packages (Container Environment)
@@ -102,6 +104,8 @@ jobs:
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7
+              # Best-effort fallback, see the aarch64 packages step above.
+              zypper install -y llvm19-devel clang19-devel || true
           fi
 
       - uses: actions/checkout@v7

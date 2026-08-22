@@ -1,8 +1,6 @@
 name: packaging
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -88,11 +86,6 @@ jobs:
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7
-              # Best-effort: cargo-binstall's prebuilt bpf-linker download can
-              # time out (seen in CI) and fall back to compiling from source,
-              # which needs LLVM/clang. Not fatal if unavailable in the
-              # SLE_BCI repo - the prebuilt binstall path is still primary.
-              zypper install -y llvm19-devel clang19-devel || true
           fi
 
       - name: Install x86_64 packages (Container Environment)
@@ -104,8 +97,6 @@ jobs:
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7
-              # Best-effort fallback, see the aarch64 packages step above.
-              zypper install -y llvm19-devel clang19-devel || true
           fi
 
       - uses: actions/checkout@v7

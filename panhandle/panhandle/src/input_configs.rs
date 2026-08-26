@@ -388,48 +388,53 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
         final_args.comm_deny = cli_args.comm_deny.clone();
     }
 
-    // Merge CLI output into config output, or create it if missing
+    // Merge CLI output into config output, or create it if missing.
+    //
+    // Both sides are collapsed into a single file/http/syslog triple first, then any CLI
+    // value that was actually provided overrides the config's. Doing it this way means a
+    // CLI output type the config file never declared still takes effect: the previous
+    // implementation only rewrote entries that already existed in the config's list, so
+    // e.g. `--config <cfg> output --http <url>` against a config declaring only `file`
+    // silently discarded the `--http` endpoint.
     if let Some(OutputCommand::Output {
         file: cli_file,
         http: cli_http,
         syslog: cli_syslog,
     }) = &cli_args.output
     {
-        let mut outputs = final_args.output.take().unwrap_or_default();
+        let mut file: Option<std::path::PathBuf> = None;
+        let mut http: Option<String> = None;
+        let mut syslog: Option<Option<String>> = None;
 
-        // Merge or add new outputs
-        if outputs.is_empty() {
-            if let Some(f) = cli_file {
-                outputs.push(OutputConfig::File { file: f.clone() });
+        // start from whatever the config file declared
+        for output in final_args.output.take().unwrap_or_default() {
+            match output {
+                OutputConfig::File { file: f } => file = Some(f),
+                OutputConfig::Http { http: h } => http = Some(h),
+                OutputConfig::Syslog { syslog: s } => syslog = s,
             }
-            if let Some(h) = cli_http {
-                outputs.push(OutputConfig::Http { http: h.clone() });
-            }
-            if cli_syslog.is_some() {
-                outputs.push(OutputConfig::Syslog {
-                    syslog: cli_syslog.clone(),
-                });
-            }
-        } else {
-            for output in outputs.iter_mut() {
-                match output {
-                    OutputConfig::File { file } => {
-                        if let Some(f) = cli_file {
-                            *file = f.clone();
-                        }
-                    }
-                    OutputConfig::Http { http } => {
-                        if let Some(h) = cli_http {
-                            *http = h.clone();
-                        }
-                    }
-                    OutputConfig::Syslog { syslog } => {
-                        if cli_syslog.is_some() {
-                            *syslog = cli_syslog.clone();
-                        }
-                    }
-                }
-            }
+        }
+
+        // then let the CLI override it, per the documented precedence
+        if cli_file.is_some() {
+            file = cli_file.clone();
+        }
+        if cli_http.is_some() {
+            http = cli_http.clone();
+        }
+        if cli_syslog.is_some() {
+            syslog = cli_syslog.clone();
+        }
+
+        let mut outputs = Vec::new();
+        if let Some(f) = file {
+            outputs.push(OutputConfig::File { file: f });
+        }
+        if let Some(h) = http {
+            outputs.push(OutputConfig::Http { http: h });
+        }
+        if syslog.is_some() {
+            outputs.push(OutputConfig::Syslog { syslog });
         }
 
         if !outputs.is_empty() {

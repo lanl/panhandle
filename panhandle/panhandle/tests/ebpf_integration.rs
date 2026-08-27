@@ -14,10 +14,7 @@ use aya::Ebpf;
 fn test_ebpf_loads_without_stack_spilling() {
     // The eBPF bytecode is embedded at compile time via aya::include_bytes_aligned!
     // It's located at OUT_DIR/panhandle relative to the panhandle crate root
-    let ebpf_bytes = aya::include_bytes_aligned!(concat!(
-        env!("OUT_DIR"),
-        "/panhandle"
-    ));
+    let ebpf_bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/panhandle"));
 
     // This will fail with "stack spilling" or "LLVM verifier" errors if the
     // #[inline(always)] fix on try_shell_entry is not present
@@ -27,14 +24,15 @@ fn test_ebpf_loads_without_stack_spilling() {
     // Verify all expected programs are present in the loaded bytecode
     // These are the programs defined in panhandle-ebpf/src/main.rs and shell_entry.rs
     let expected_programs = [
-        "panhandle",       // tracepoint for sys_enter_execve
-        "readline",        // uretprobe for bash readline
-        "zlentry",         // uretprobe for zsh zleentry
+        "panhandle",           // tracepoint for sys_enter_execve
+        "readline",            // uretprobe for bash readline
+        "zlentry",             // uretprobe for zsh zleentry
         "inet_sock_set_state", // BTF tracepoint for network
     ];
 
     for prog_name in expected_programs {
-        let prog = ebpf.program(prog_name)
+        let prog = ebpf
+            .program(prog_name)
             .unwrap_or_else(|| panic!("program '{}' should exist in embedded bytecode", prog_name));
         // Verify the program has a valid type (not just that it exists)
         let prog_type = prog.prog_type();
@@ -83,9 +81,16 @@ fn test_binary_exists() {
     } else if debug_path.exists() {
         debug_path
     } else {
-        panic!("panhandle binary not found at {:?} or {:?}", release_path, debug_path);
+        panic!(
+            "panhandle binary not found at {:?} or {:?}",
+            release_path, debug_path
+        );
     };
 
-    assert!(binary_path.exists(), "panhandle binary should exist at {:?}", binary_path);
+    assert!(
+        binary_path.exists(),
+        "panhandle binary should exist at {:?}",
+        binary_path
+    );
     assert!(binary_path.is_file(), "panhandle should be a file");
 }

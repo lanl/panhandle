@@ -25,10 +25,20 @@ fn test_invalid_config_rejected() {
         .output()
         .expect("Failed to execute panhandle");
 
-    assert!(!output.status.success(), "invalid config should cause failure");
-    let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-    assert!(combined.contains("Invalid YAML config") || combined.contains("config"), 
-        "error should mention config/YAML issue, got: {}", combined);
+    assert!(
+        !output.status.success(),
+        "invalid config should cause failure"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Invalid YAML config") || combined.contains("config"),
+        "error should mention config/YAML issue, got: {}",
+        combined
+    );
 }
 
 /// Test that unknown config fields are rejected (deny_unknown_fields)
@@ -42,10 +52,20 @@ fn test_unknown_config_field_rejected() {
         .output()
         .expect("Failed to execute panhandle");
 
-    assert!(!output.status.success(), "unknown field should cause failure");
-    let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-    assert!(combined.contains("unknown") || combined.contains("Invalid"), 
-        "error should mention unknown field, got: {}", combined);
+    assert!(
+        !output.status.success(),
+        "unknown field should cause failure"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("unknown") || combined.contains("Invalid"),
+        "error should mention unknown field, got: {}",
+        combined
+    );
 }
 
 /// Test that config file not found is handled gracefully
@@ -57,9 +77,16 @@ fn test_nonexistent_config_rejected() {
         .expect("Failed to execute panhandle");
 
     assert!(!output.status.success(), "nonexistent config should fail");
-    let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-    assert!(combined.contains("not found") || combined.contains("Config file"), 
-        "error should mention file not found, got: {}", combined);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("not found") || combined.contains("Config file"),
+        "error should mention file not found, got: {}",
+        combined
+    );
 }
 
 /// Test that unsupported config extensions are rejected
@@ -74,9 +101,16 @@ fn test_unsupported_config_extension_rejected() {
         .expect("Failed to execute panhandle");
 
     assert!(!output.status.success(), "XML config should fail");
-    let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-    assert!(combined.contains("Unsupported config type") || combined.contains("xml"), 
-        "error should mention unsupported type, got: {}", combined);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Unsupported config type") || combined.contains("xml"),
+        "error should mention unsupported type, got: {}",
+        combined
+    );
 }
 
 /// Test that the binary outputs version correctly
@@ -89,7 +123,10 @@ fn test_version_output() {
 
     assert!(output.status.success(), "--version should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("panhandle"), "version output should contain binary name");
+    assert!(
+        stdout.contains("panhandle"),
+        "version output should contain binary name"
+    );
 }
 
 /// Test that help output works
@@ -102,7 +139,10 @@ fn test_help_output() {
 
     assert!(output.status.success(), "--help should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--bash"), "help should mention --bash option");
+    assert!(
+        stdout.contains("--bash"),
+        "help should mention --bash option"
+    );
     assert!(stdout.contains("--zsh"), "help should mention --zsh option");
     assert!(stdout.contains("--cpu"), "help should mention --cpu option");
 }
@@ -117,7 +157,16 @@ fn test_output_subcommand_help() {
 
     assert!(output.status.success(), "output --help should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--file"), "output help should mention --file");
-    assert!(stdout.contains("--http"), "output help should mention --http");
-    assert!(stdout.contains("--syslog"), "output help should mention --syslog");
+    assert!(
+        stdout.contains("--file"),
+        "output help should mention --file"
+    );
+    assert!(
+        stdout.contains("--http"),
+        "output help should mention --http"
+    );
+    assert!(
+        stdout.contains("--syslog"),
+        "output help should mention --syslog"
+    );
 }

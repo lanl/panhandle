@@ -1,5 +1,9 @@
 # CHANGELOG
 
+### v1.0.22
+
+- adding integration tests
+
 ### v1.0.21
 
 - fixed the --bash option for newer cpus

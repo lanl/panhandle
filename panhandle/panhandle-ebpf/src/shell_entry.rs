@@ -64,6 +64,7 @@ pub fn zlentry(ctx: RetProbeContext) -> u32 {
     }
 }
 
+#[inline(always)]
 fn try_shell_entry(
     ctx: &RetProbeContext,
     name: &str,

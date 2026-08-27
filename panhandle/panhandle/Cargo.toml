@@ -1,6 +1,6 @@
 [package]
 name = "panhandle"
-version = "1.0.21"
+version = "1.0.22"
 edition = "2024"
 homepage = "https://github.com/lanl/panhandle"
 license = "MIT"
@@ -32,6 +32,9 @@ machine-info = "1.0.9"
 
 [build-dependencies]
 aya-build = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.17"
 
 [[bin]]
 name = "panhandle"

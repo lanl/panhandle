@@ -1,5 +1,9 @@
 # CHANGELOG
 
+### v1.0.21
+
+- fixed the --bash option for newer cpus
+
 ### v1.0.20
 
 - fixed a bug where `--executables` silently discarded every event queued behind the first non-matching one in a ring buffer batch, so matching events were dropped without any indication; each non-matching event is now skipped individually

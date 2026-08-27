@@ -698,6 +698,24 @@ mod tests {
         assert_eq!(args.poll, Some(10));
     }
 
+    // test that the --bash flag parses correctly and enables bash monitoring
+    #[test]
+    fn test_raw_args_parse_bash_flag() {
+        let args = RawArgs::try_parse_from(["panhandle", "--bash"]).unwrap();
+        assert!(args.bash);
+        // verify other flags default to false
+        assert!(!args.zsh);
+        assert!(!args.cpu);
+        assert!(!args.syscall_execve);
+    }
+
+    // test that the short -b flag for bash also works
+    #[test]
+    fn test_raw_args_parse_bash_short_flag() {
+        let args = RawArgs::try_parse_from(["panhandle", "-b"]).unwrap();
+        assert!(args.bash);
+    }
+
     // test that a comma-separated list option parses into the expected Vec
     #[test]
     fn test_raw_args_parse_comma_separated_list() {

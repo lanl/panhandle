@@ -47,7 +47,7 @@ pub struct RawArgs {
     #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
     pub exclude_max_uid: Option<u32>,
 
-    /// Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 10.
+    /// Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 20.
     #[arg(short, long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     pub executables: Option<Vec<String>>,
 
@@ -468,8 +468,9 @@ pub async fn load_config_args(config_path: String) -> Result<ConfigArgs, String>
     }
 }
 
-// Clap validation functions for comm and path lengths for process blocking feature
-fn validate_path_length(s: &str) -> Result<String, String> {
+// Clap validation functions for comm and path lengths for process blocking feature.
+// Also reused directly on config-file-sourced values, which don't go through clap.
+pub(crate) fn validate_path_length(s: &str) -> Result<String, String> {
     if s.len() > MAX_PATH_LENGTH {
         Err(format!(
             "Path exceeds maximum length of {} bytes (got {} bytes): {}",
@@ -482,7 +483,7 @@ fn validate_path_length(s: &str) -> Result<String, String> {
     }
 }
 
-fn validate_comm_length(s: &str) -> Result<String, String> {
+pub(crate) fn validate_comm_length(s: &str) -> Result<String, String> {
     if s.len() > MAX_COMM_LENGTH {
         Err(format!(
             "Process name (comm) exceeds maximum length of {} bytes (got {} bytes): {}",

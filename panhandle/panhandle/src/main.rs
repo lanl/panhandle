@@ -43,6 +43,102 @@ use monitor_io_usage::*;
 use monitor_network_usage::*;
 use panhandle_common::*;
 
+/// Validate every user-controlled numeric/list argument up front, before the
+/// root-privilege check and eBPF load later in `main`. Doing this early means
+/// startup fails fast on bad input (a typo'd config, an oversized list) without
+/// first requiring root or a working eBPF-capable kernel - and it's what makes
+/// these failure modes reachable by a plain subprocess integration test rather
+/// than only by a root-gated one. The actual (re-)validation deeper in `main`,
+/// right before each value is used to populate an eBPF map, is left in place;
+/// this function's checks are strictly redundant with it for a process that
+/// gets this far, but cheap and worth keeping as defense in depth.
+fn validate_args_or_exit(args: &RawArgs) {
+    // clap's value_parser (range(1..)) only rejects 0 when --poll comes from the CLI;
+    // a config-file poll: 0 has no serde-level equivalent and would otherwise reach
+    // Duration::from_secs(0), spinning every enabled monitor loop with no delay.
+    if let Some(poll) = args.poll
+        && poll == 0
+    {
+        eprintln!("--poll must be at least 1 (got 0)");
+        process::exit(1);
+    }
+
+    // Compare the effective range (defaults applied) rather than only the fields that
+    // were actually set, so e.g. --exclude-min-uid 1000 with --exclude-max-uid left at
+    // its default of 999 is still caught, not just the both-explicitly-set case. An
+    // inverted range would otherwise silently exclude nothing instead of what the user
+    // presumably meant to exclude.
+    let effective_min_uid = args.exclude_min_uid.unwrap_or(MINUID);
+    let effective_max_uid = args.exclude_max_uid.unwrap_or(MAXUID);
+    if effective_min_uid > effective_max_uid {
+        eprintln!(
+            "--exclude-min-uid ({}) must not be greater than --exclude-max-uid ({})",
+            effective_min_uid, effective_max_uid
+        );
+        process::exit(1);
+    }
+
+    if let Some(ref executables) = args.executables {
+        let canonical = get_canonical_executable_list(executables);
+        if let Err(e) = validate_count(canonical.len(), EXECUTABLE_COUNT, "executables") {
+            eprintln!("{}", e);
+            process::exit(1);
+        }
+    }
+
+    if let Some(ref include_uid) = args.include_uid {
+        for uid_string in include_uid {
+            if uid_string.parse::<u32>().is_err() {
+                eprintln!(
+                    "Invalid --include-uid value '{}': must be a non-negative integer",
+                    uid_string
+                );
+                process::exit(1);
+            }
+        }
+        if let Err(e) = validate_count(include_uid.len(), UID_COUNT, "UIDs") {
+            eprintln!("{}", e);
+            process::exit(1);
+        }
+    }
+
+    if args.syscalls.is_some() {
+        let (_, comms) = match resolve_comm_list_mode(&args.comm_deny, &args.comm_allow) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                eprintln!("{}", e);
+                process::exit(1);
+            }
+        };
+        if let Err(e) = validate_count(
+            comms.len(),
+            MAX_BLOCKED_COMMS,
+            "comm-allow/comm-deny entries",
+        ) {
+            eprintln!("{}", e);
+            process::exit(1);
+        }
+        for comm in &comms {
+            if let Err(e) = validate_comm_length(comm) {
+                eprintln!("{}", e);
+                process::exit(1);
+            }
+        }
+        if let Some(ref paths) = args.block_paths {
+            if let Err(e) = validate_count(paths.len(), MAX_BLOCKED_PATHS, "block-paths entries") {
+                eprintln!("{}", e);
+                process::exit(1);
+            }
+            for path in paths {
+                if let Err(e) = validate_path_length(path) {
+                    eprintln!("{}", e);
+                    process::exit(1);
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // load_args function in input_config.rs
@@ -64,6 +160,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.verbose {
         println!("Starting Panhandle, using the arguments: \n{:#?}", args);
     }
+
+    validate_args_or_exit(&args);
 
     // remove standard backtrace message if not debug
     if !args.debug {
@@ -230,10 +328,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // set up include uids
     let include_uid_bool = args.include_uid.is_some();
     let only_these_uids_vec: Vec<u32> = match args.include_uid {
-        Some(inc) => inc
-            .iter()
-            .map(|uid_string| uid_string.parse::<u32>().unwrap())
-            .collect(),
+        Some(inc) => {
+            let mut uids = Vec::with_capacity(inc.len());
+            for uid_string in &inc {
+                match uid_string.parse::<u32>() {
+                    Ok(uid) => uids.push(uid),
+                    Err(_) => {
+                        info!(
+                            "Invalid --include-uid value '{}': must be a non-negative integer",
+                            uid_string
+                        );
+                        process::exit(1);
+                    }
+                }
+            }
+            uids
+        }
         None => Vec::new(),
     };
 
@@ -365,9 +475,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         attach_kprobe(&mut ebpf, "udp_sendmsg")?;
         attach_kprobe(&mut ebpf, "udp_recvmsg")?;
 
-        // Load the network stats map
-        let net_stats_map_data = ebpf.take_map("net_stats").unwrap();
-        let net_stats_map: HashMap<_, u32, NetStats> = HashMap::try_from(net_stats_map_data)?;
+        // Socket probes stream per-event deltas over a ring buffer rather than
+        // maintaining shared aggregate state on the kernel side (see socket.rs for
+        // why); this userspace-owned map accumulates them, and monitor_network_usage
+        // both reads and prunes it.
+        let net_stats: SharedNetStats =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
+        let socket_ring_buf =
+            RingBuf::try_from(ebpf.take_map("socket_events").ok_or_else(|| {
+                format!(
+                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                    "socket_events"
+                )
+            })?)?;
+        let socket_async_fd = AsyncFd::with_interest(socket_ring_buf, Interest::READABLE)?;
+        let net_stats_consumer = net_stats.clone();
+        tokio::task::spawn(consume_socket_stats_ebpf_map(
+            socket_async_fd,
+            net_stats_consumer,
+        ));
 
         let json_output = args.json;
         let debug_mode = args.debug;
@@ -384,7 +511,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         socket_handle = Some(tokio::spawn(async move {
             loop {
                 if let Err(e) = monitor_network_usage(
-                    &net_stats_map,
+                    &net_stats,
                     &json_output,
                     &http_bool,
                     &syslog_bool,
@@ -528,11 +655,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("{}", e);
             process::exit(1);
         }
+        // clap's value_parser only validates comm-allow/comm-deny supplied on the CLI,
+        // not ones coming from the config file -- enforce the same length limit here
+        // so an over-long config entry is rejected instead of silently truncated below.
+        for comm in &comms {
+            if let Err(e) = validate_comm_length(comm) {
+                info!("{}", e);
+                process::exit(1);
+            }
+        }
         if let Some(ref paths) = args.block_paths
             && let Err(e) = validate_count(paths.len(), MAX_BLOCKED_PATHS, "block-paths entries")
         {
             info!("{}", e);
             process::exit(1);
+        }
+        // clap's value_parser only validates block-paths supplied on the CLI, not
+        // ones coming from the config file -- enforce the same length limit here so
+        // an over-long config entry can't overflow the fixed-size eBPF map key below.
+        if let Some(ref paths) = args.block_paths {
+            for path in paths {
+                if let Err(e) = validate_path_length(path) {
+                    info!("{}", e);
+                    process::exit(1);
+                }
+            }
         }
 
         let blocked_paths: Vec<String> = if let Some(ref paths) = args.block_paths {
@@ -542,7 +689,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // Get the COMMS map
-        let comms_map = ebpf.take_map("COMMS").unwrap();
+        let comms_map = ebpf.take_map("COMMS").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "COMMS"
+            )
+        })?;
         let mut comm_list: aya::maps::HashMap<_, [u8; 16], u8> =
             aya::maps::HashMap::try_from(comms_map)?;
 
@@ -550,7 +702,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for comm_str in comms {
             let mut comm = [0u8; 16];
             let bytes = comm_str.as_bytes();
-            let len = bytes.len().min(15); // Max 15 chars + null terminator
+            let len = bytes.len().min(15); // Already validated above to be <= MAX_COMM_LENGTH (15); min() is just a defensive clamp
             comm[..len].copy_from_slice(&bytes[..len]);
             comm_list.insert(comm, list_type, 0)?;
         }
@@ -563,7 +715,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Get the BLOCKED_PATHS map
-        let blocked_paths_map = ebpf.take_map("BLOCKED_PATHS").unwrap();
+        let blocked_paths_map = ebpf.take_map("BLOCKED_PATHS").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "BLOCKED_PATHS"
+            )
+        })?;
         let mut path_denylist: aya::maps::HashMap<_, [u8; 256], u8> =
             aya::maps::HashMap::try_from(blocked_paths_map)?;
 
@@ -580,7 +737,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for path_str in blocked_paths {
             let mut path = [0u8; 256];
             let bytes = path_str.as_bytes();
-            let len = bytes.len(); // Already validated to be <= 256
+            let len = bytes.len(); // Already validated above (CLI value_parser or the config-file check) to be <= MAX_PATH_LENGTH (255)
             path[..len].copy_from_slice(&bytes[..len]);
             path_denylist.insert(path, 1, 0)?;
         }
@@ -608,7 +765,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             process::exit(1);
         }
         debug!("found executable: {:?}", file);
-        let file_string = file.into_os_string().into_string().unwrap();
+        let file_string = file.into_os_string().into_string().unwrap_or_else(|os| {
+            error!("Path to bash is not valid UTF-8: {:?}", os);
+            process::exit(1);
+        });
         debug!(
             "converted PathBuf path to this file string: '{}'",
             file_string
@@ -638,21 +798,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         debug!("attached eBPF uprobe 'readline' to '{}'", file_string);
 
         // get the uid_options map from ebpf land
-        let readline_uid_options_map = ebpf.take_map("readline_uid_options").unwrap();
+        let readline_uid_options_map = ebpf.take_map("readline_uid_options").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "readline_uid_options"
+            )
+        })?;
         let mut program_options: HashMap<_, u32, u32> =
             HashMap::try_from(readline_uid_options_map).unwrap();
         // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
         // this is the shells identifier
-        program_options.insert(0, args.shells as u32, 0)?;
+        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
         // this is the min uid identifier
-        program_options.insert(1, args.exclude_min_uid.unwrap_or(MINUID), 0)?;
+        program_options.insert(
+            UID_OPT_EXCLUDE_MIN,
+            args.exclude_min_uid.unwrap_or(MINUID),
+            0,
+        )?;
         // this is the max uid identifier
-        program_options.insert(2, args.exclude_max_uid.unwrap_or(MAXUID), 0)?;
+        program_options.insert(
+            UID_OPT_EXCLUDE_MAX,
+            args.exclude_max_uid.unwrap_or(MAXUID),
+            0,
+        )?;
         // this is the include uid list option identifier
-        program_options.insert(3, include_uid_bool as u32, 0)?;
+        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
 
         // get the uid_include_list map from ebpf land
-        let readline_uid_include_list_map = ebpf.take_map("readline_uid_include_list").unwrap();
+        let readline_uid_include_list_map =
+            ebpf.take_map("readline_uid_include_list").ok_or_else(|| {
+                format!(
+                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                    "readline_uid_include_list"
+                )
+            })?;
         let mut readline_uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
             HashMap::try_from(readline_uid_include_list_map).unwrap();
         // set up defaults of a zero'd array
@@ -669,7 +848,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         readline_uid_list_map.insert(0, zeroed_array, 0)?;
 
         // Process events from the ring buffer
-        let ring_buf = RingBuf::try_from(ebpf.take_map("readline_events").unwrap())?;
+        let ring_buf = RingBuf::try_from(ebpf.take_map("readline_events").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "readline_events"
+            )
+        })?)?;
         let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
@@ -703,7 +887,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             process::exit(1);
         }
         debug!("found executable: {:?}", file);
-        let file_string = file.into_os_string().into_string().unwrap();
+        let file_string = file.into_os_string().into_string().unwrap_or_else(|os| {
+            error!("Path to zsh is not valid UTF-8: {:?}", os);
+            process::exit(1);
+        });
         debug!(
             "converted PathBuf path to this file string: '{}'",
             file_string
@@ -729,21 +916,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         debug!("attached eBPF uprobe 'zlentry' to '{}'", file_string);
 
         // get the uid_options map from ebpf land
-        let zlentry_uid_options_map = ebpf.take_map("zlentry_uid_options").unwrap();
+        let zlentry_uid_options_map = ebpf.take_map("zlentry_uid_options").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "zlentry_uid_options"
+            )
+        })?;
         let mut program_options: HashMap<_, u32, u32> =
             HashMap::try_from(zlentry_uid_options_map).unwrap();
         // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
         // this is the shells identifier
-        program_options.insert(0, args.shells as u32, 0)?;
+        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
         // this is the min uid identifier
-        program_options.insert(1, args.exclude_min_uid.unwrap_or(MINUID), 0)?;
+        program_options.insert(
+            UID_OPT_EXCLUDE_MIN,
+            args.exclude_min_uid.unwrap_or(MINUID),
+            0,
+        )?;
         // this is the max uid identifier
-        program_options.insert(2, args.exclude_max_uid.unwrap_or(MAXUID), 0)?;
+        program_options.insert(
+            UID_OPT_EXCLUDE_MAX,
+            args.exclude_max_uid.unwrap_or(MAXUID),
+            0,
+        )?;
         // this is the include uid list option identifier
-        program_options.insert(3, include_uid_bool as u32, 0)?;
+        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
 
         // get the uid_include_list map from ebpf land
-        let zlentry_uid_include_list_map = ebpf.take_map("zlentry_uid_include_list").unwrap();
+        let zlentry_uid_include_list_map =
+            ebpf.take_map("zlentry_uid_include_list").ok_or_else(|| {
+                format!(
+                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                    "zlentry_uid_include_list"
+                )
+            })?;
         let mut zlentry_uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
             HashMap::try_from(zlentry_uid_include_list_map).unwrap();
         // set up defaults of a zero'd array
@@ -760,7 +966,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zlentry_uid_list_map.insert(0, zeroed_array, 0)?;
 
         // Process events from the ring buffer
-        let ring_buf = RingBuf::try_from(ebpf.take_map("zlentry_events").unwrap())?;
+        let ring_buf = RingBuf::try_from(ebpf.take_map("zlentry_events").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "zlentry_events"
+            )
+        })?)?;
         let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
@@ -815,20 +1026,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         debug!("attached eBPF tracepoint 'syscalls:sys_enter_execve'");
 
         // get the uid_options map from ebpf land
-        let uid_options_map = ebpf.take_map("uid_options").unwrap();
+        let uid_options_map = ebpf.take_map("uid_options").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "uid_options"
+            )
+        })?;
         let mut program_options: HashMap<_, u32, u32> = HashMap::try_from(uid_options_map).unwrap();
         // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
         // this is the shells identifier
-        program_options.insert(0, args.shells as u32, 0)?;
+        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
         // this is the min uid identifier
-        program_options.insert(1, args.exclude_min_uid.unwrap_or(MINUID), 0)?;
+        program_options.insert(
+            UID_OPT_EXCLUDE_MIN,
+            args.exclude_min_uid.unwrap_or(MINUID),
+            0,
+        )?;
         // this is the max uid identifier
-        program_options.insert(2, args.exclude_max_uid.unwrap_or(MAXUID), 0)?;
+        program_options.insert(
+            UID_OPT_EXCLUDE_MAX,
+            args.exclude_max_uid.unwrap_or(MAXUID),
+            0,
+        )?;
         // this is the include uid list option identifier
-        program_options.insert(3, include_uid_bool as u32, 0)?;
+        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
 
         // get the uid_include_list map from ebpf land
-        let uid_include_list_map = ebpf.take_map("uid_include_list").unwrap();
+        let uid_include_list_map = ebpf.take_map("uid_include_list").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "uid_include_list"
+            )
+        })?;
         let mut uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
             HashMap::try_from(uid_include_list_map).unwrap();
         // set up defaults of a zero'd array
@@ -845,7 +1074,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         uid_list_map.insert(0, zeroed_array, 0)?;
 
         // Process events from the ring buffer
-        let ring_buf = RingBuf::try_from(ebpf.take_map("panhandle_execve_events").unwrap())?;
+        let ring_buf =
+            RingBuf::try_from(ebpf.take_map("panhandle_execve_events").ok_or_else(|| {
+                format!(
+                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                    "panhandle_execve_events"
+                )
+            })?)?;
         let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();

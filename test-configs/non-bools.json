@@ -6,6 +6,10 @@
     "executables": ["/path1/user1","/path2/something/files","/path3/somewhere"],
     "pid_list": [1, 2, 3],
     "include_uid": ["uid1"],
+    "poll": 5,
+    "syscalls": ["open", "openat"],
+    "block_paths": ["/usr/bin/su"],
+    "comm_allow": ["bash", "zsh"],
     "output": [
         { "syslog": "hpcsyslog.lanl.gov:514/tcp" }
     ]

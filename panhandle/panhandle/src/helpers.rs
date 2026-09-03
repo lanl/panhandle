@@ -23,6 +23,7 @@ pub(crate) unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
 }
 
 // this is the local import section
+use crate::monitor_network_usage::{SharedNetStats, apply_socket_stats_event};
 use panhandle_common::*;
 
 /// Whether an event should be reported, given the `--executables` filter. An empty filter
@@ -351,6 +352,38 @@ pub async fn consume_execve_ebpf_map(
     }
 }
 
+/// Drain `SocketStatsEvent` deltas off the socket_events ring buffer and fold each one
+/// into `net_stats`, which `monitor_network_usage` reads (and prunes dead pids from)
+/// on its own polling schedule. Kept deliberately simple relative to the execve/shell
+/// consumers above: these events aren't filtered, formatted, or output here - they're
+/// pure accumulation, so the whole rest of the reporting pipeline stays unchanged.
+pub async fn consume_socket_stats_ebpf_map(
+    mut async_fd: AsyncFd<RingBuf<MapData>>,
+    net_stats: SharedNetStats,
+) {
+    loop {
+        let Ok(mut guard) = async_fd.readable_mut().await else {
+            continue;
+        };
+
+        // drain the currently-readable items into owned copies before doing any other
+        // work, since the ring buffer only hands out borrowed slices while the guard is held
+        let mut events: Vec<SocketStatsEvent> = Vec::new();
+        let ring_buf = guard.get_inner_mut();
+        while let Some(item) = ring_buf.next() {
+            if item.len() >= core::mem::size_of::<SocketStatsEvent>() {
+                // SAFETY: this is implemented by a shared struct and zero'd on the ebpf side for consistency
+                events.push(unsafe { read_ring_item::<SocketStatsEvent>(&item) });
+            }
+        }
+        guard.clear_ready();
+
+        for event in &events {
+            apply_socket_stats_event(&net_stats, event);
+        }
+    }
+}
+
 /// JSON rendering of a shell (bash/zsh) readline event. All free-form string fields
 /// (hostname, moniker, entry, command, ts) are escaped so the document stays valid
 /// even if a command or entry contains quotes, backslashes, or control characters.
@@ -419,6 +452,22 @@ pub async fn send_syslog(
     syslog_address: &Arc<String>,
     json: &bool,  // free-form message bool for json vs. text
     debug: &bool, // help with debugging
+) -> Result<(), SyslogError> {
+    // The syslog crate's connect+write calls are synchronous; unlike every procfs-scan
+    // path in this codebase, they weren't isolated from the async executor, so a
+    // slow/firewalled remote TCP target could stall the worker thread (and therefore
+    // execve/shell event processing for every process on the host) for as long as the
+    // OS connect timeout takes. block_in_place tells tokio this closure may block, so
+    // it moves other tasks off this worker thread instead of getting stuck behind it.
+    tokio::task::block_in_place(|| send_syslog_blocking(hostname, arc_string, syslog_address, json, debug))
+}
+
+fn send_syslog_blocking(
+    hostname: &String,
+    arc_string: &Arc<String>,
+    syslog_address: &Arc<String>,
+    json: &bool,
+    debug: &bool,
 ) -> Result<(), SyslogError> {
     // set formatter for syslog message
     let formatter = Formatter3164 {
@@ -530,7 +579,7 @@ pub async fn send_http_post(
                 let message = val.to_string();
                 let _response: Response = client
                     .post(url.to_string().as_str())
-                    .timeout(Duration::from_millis(200))
+                    .timeout(Duration::from_secs(3))
                     .header(CONTENT_TYPE, content_type)
                     .body(message)
                     .send()
@@ -545,7 +594,7 @@ pub async fn send_http_post(
         let message: String = arc_string.to_string();
         let response: Response = client
             .post(url.to_string().as_str())
-            .timeout(Duration::from_millis(200))
+            .timeout(Duration::from_secs(3))
             .header(CONTENT_TYPE, content_type)
             .body(message)
             .send()

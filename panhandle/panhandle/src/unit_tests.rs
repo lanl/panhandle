@@ -85,6 +85,10 @@ mod tests {
             ]),
             pid_list: Some(vec![1, 2, 3]),
             include_uid: Some(vec![String::from("uid1")]),
+            poll: Some(5),
+            syscalls: Some(vec![String::from("open"), String::from("openat")]),
+            block_paths: Some(vec![String::from("/usr/bin/su")]),
+            comm_allow: Some(vec![String::from("bash"), String::from("zsh")]),
             output: Some(vec![OutputConfig::Syslog {
                 syslog: Some(Some("hpcsyslog.lanl.gov:514/tcp".to_string())),
             }]),
@@ -193,6 +197,11 @@ mod tests {
             zsh: true,
             quiet: true,
             shells: true,
+            socket: true,
+            cpu: true,
+            gpu: true,
+            memory: true,
+            io: true,
             ..Default::default()
         };
 
@@ -211,6 +220,11 @@ mod tests {
             zsh: true,
             quiet: true,
             shells: true,
+            socket: true,
+            cpu: true,
+            gpu: true,
+            memory: true,
+            io: true,
             ..Default::default()
         };
 
@@ -449,8 +463,10 @@ mod tests {
     }
 
     // test that send_syslog delivers a plaintext message over UDP to a loopback listener
-    // -- the full round trip through the syslog formatter and writer
-    #[tokio::test]
+    // -- the full round trip through the syslog formatter and writer. send_syslog uses
+    // block_in_place internally, which requires the multi-threaded runtime (matching
+    // production's #[tokio::main], which uses it too since rt-multi-thread is enabled).
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_send_syslog_udp_loopback() {
         use std::net::UdpSocket;
 
@@ -714,6 +730,67 @@ mod tests {
     fn test_raw_args_parse_bash_short_flag() {
         let args = RawArgs::try_parse_from(["panhandle", "-b"]).unwrap();
         assert!(args.bash);
+    }
+
+    // test every remaining boolean flag's long form individually, so a typo'd or
+    // removed #[arg(long)] on any one of them would be caught rather than only being
+    // implicitly exercised (or not) as a side effect of some other test
+    #[test]
+    fn test_raw_args_parse_remaining_bool_flags() {
+        type FlagCase = (&'static str, fn(&RawArgs) -> bool);
+        let cases: [FlagCase; 9] = [
+            ("--zsh", |a: &RawArgs| a.zsh),
+            ("--debug", |a: &RawArgs| a.debug),
+            ("--json", |a: &RawArgs| a.json),
+            ("--quiet", |a: &RawArgs| a.quiet),
+            ("--syscall-execve", |a: &RawArgs| a.syscall_execve),
+            ("--shells", |a: &RawArgs| a.shells),
+            ("--socket", |a: &RawArgs| a.socket),
+            ("--memory", |a: &RawArgs| a.memory),
+            ("--io", |a: &RawArgs| a.io),
+        ];
+        for (flag, get) in cases {
+            let args = RawArgs::try_parse_from(["panhandle", flag])
+                .unwrap_or_else(|e| panic!("{flag} failed to parse: {e}"));
+            assert!(get(&args), "{flag} should set its field to true");
+        }
+    }
+
+    // test the short forms of the remaining flags that have one (mirroring the -b/--bash
+    // short-flag test above)
+    #[test]
+    fn test_raw_args_parse_remaining_short_flags() {
+        let args = RawArgs::try_parse_from(["panhandle", "-z"]).unwrap();
+        assert!(args.zsh);
+        let args = RawArgs::try_parse_from(["panhandle", "-d"]).unwrap();
+        assert!(args.debug);
+        let args = RawArgs::try_parse_from(["panhandle", "-j"]).unwrap();
+        assert!(args.json);
+        let args = RawArgs::try_parse_from(["panhandle", "-q"]).unwrap();
+        assert!(args.quiet);
+        let args = RawArgs::try_parse_from(["panhandle", "-s"]).unwrap();
+        assert!(args.syscall_execve);
+        let args = RawArgs::try_parse_from(["panhandle", "-v"]).unwrap();
+        assert!(args.verbose);
+    }
+
+    // test that the output subcommand's --file option parses to the given path
+    #[test]
+    fn test_raw_args_parse_output_file() {
+        let args =
+            RawArgs::try_parse_from(["panhandle", "output", "--file", "/var/log/panhandle.log"])
+                .unwrap();
+        match args.output {
+            Some(OutputCommand::Output { file, http, syslog }) => {
+                assert_eq!(
+                    file,
+                    Some(std::path::PathBuf::from("/var/log/panhandle.log"))
+                );
+                assert_eq!(http, None);
+                assert_eq!(syslog, None);
+            }
+            None => panic!("expected an output subcommand to be parsed"),
+        }
     }
 
     // test that a comma-separated list option parses into the expected Vec
@@ -1295,46 +1372,167 @@ mod tests {
         );
     }
 
-    // test that hex_to_interface decodes an IPv4 hex address (as found in /proc/net/tcp),
-    // matches it to the owning interface, excludes loopback addresses, and returns None
-    // for both IPv6-length hex and malformed input
+    // test that apply_socket_stats_event folds deltas from the socket_events ring
+    // buffer into the shared per-pid accumulator correctly: repeated events for the
+    // same pid accumulate, a decrement below zero saturates at 0 instead of
+    // underflowing/panicking, udp_sockets_set behaves as OR (sticky) rather than an
+    // overwrite, and different pids get independent entries
     #[test]
-    fn test_hex_to_interface() {
-        use std::net::Ipv4Addr;
+    fn test_apply_socket_stats_event_accumulates() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
 
-        use network_interface::{Addr, NetworkInterface, V4IfAddr};
+        let net_stats: SharedNetStats = Arc::new(Mutex::new(HashMap::new()));
+
+        // first event for pid 100: a new TCP connection plus some bytes sent
+        let mut e1 = SocketStatsEvent::new(100);
+        e1.tcp_established_delta = 1;
+        e1.bytes_sent_delta = 1000;
+        e1.packets_sent_delta = 1;
+        apply_socket_stats_event(&net_stats, &e1);
+
+        // second event, same pid: another established connection, more bytes, and a
+        // UDP socket seen for the first time
+        let mut e2 = SocketStatsEvent::new(100);
+        e2.tcp_established_delta = 1;
+        e2.bytes_sent_delta = 500;
+        e2.bytes_recv_delta = 2000;
+        e2.packets_recv_delta = 3;
+        e2.udp_sockets_set = 1;
+        apply_socket_stats_event(&net_stats, &e2);
+
+        {
+            let map = net_stats.lock().unwrap();
+            let stats = &map[&100];
+            assert_eq!(
+                stats.tcp_established, 2,
+                "established count should accumulate"
+            );
+            assert_eq!(stats.bytes_sent, 1500);
+            assert_eq!(stats.bytes_recv, 2000);
+            assert_eq!(stats.packets_sent, 1);
+            assert_eq!(stats.packets_recv, 3);
+            assert_eq!(stats.udp_sockets, 1);
+        }
+
+        // a decrement (connection closing) brings established back down...
+        let mut e3 = SocketStatsEvent::new(100);
+        e3.tcp_established_delta = -1;
+        apply_socket_stats_event(&net_stats, &e3);
+        assert_eq!(net_stats.lock().unwrap()[&100].tcp_established, 1);
+
+        // ...and a decrement past zero saturates at 0 rather than underflowing/panicking
+        let mut e4 = SocketStatsEvent::new(100);
+        e4.tcp_established_delta = -5;
+        apply_socket_stats_event(&net_stats, &e4);
+        assert_eq!(net_stats.lock().unwrap()[&100].tcp_established, 0);
+
+        // udp_sockets_set is sticky: an event that doesn't set it shouldn't clear it
+        // back to 0 once it's been observed
+        let e5 = SocketStatsEvent::new(100);
+        apply_socket_stats_event(&net_stats, &e5);
+        assert_eq!(net_stats.lock().unwrap()[&100].udp_sockets, 1);
+
+        // a different pid gets its own independent entry, untouched by pid 100's events
+        let mut e6 = SocketStatsEvent::new(200);
+        e6.bytes_sent_delta = 42;
+        apply_socket_stats_event(&net_stats, &e6);
+        let map = net_stats.lock().unwrap();
+        assert_eq!(map[&200].bytes_sent, 42);
+        assert_eq!(map[&200].tcp_established, 0);
+        assert_eq!(map.len(), 2, "pid 100 and pid 200 should both be present");
+    }
+
+    // test that prune_dead_pids removes exactly the given pids from the shared
+    // accumulator, leaves everything else untouched, and is a no-op (in particular,
+    // doesn't panic trying to lock/iterate) on an empty dead_pids list -- without this,
+    // a pid that ever sent/received data would stay in the map forever, growing it
+    // unboundedly on a long-running host
+    #[test]
+    fn test_prune_dead_pids() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let net_stats: SharedNetStats = Arc::new(Mutex::new(HashMap::from([
+            (1, NetStats::new()),
+            (2, NetStats::new()),
+            (3, NetStats::new()),
+        ])));
+
+        // pid 2 is gone; 1 and 3 are still live
+        prune_dead_pids(&net_stats, vec![2]);
+        {
+            let map = net_stats.lock().unwrap();
+            assert_eq!(
+                map.keys()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>(),
+                std::collections::HashSet::from([1, 3]),
+                "only pid 2 should have been removed"
+            );
+        }
+
+        // an empty dead_pids list changes nothing
+        prune_dead_pids(&net_stats, vec![]);
+        assert_eq!(net_stats.lock().unwrap().len(), 2);
+
+        // pruning a pid that isn't present is a harmless no-op, not an error
+        prune_dead_pids(&net_stats, vec![999]);
+        assert_eq!(net_stats.lock().unwrap().len(), 2);
+
+        // pruning everything empties the map
+        prune_dead_pids(&net_stats, vec![1, 3]);
+        assert!(net_stats.lock().unwrap().is_empty());
+    }
+
+    // test that ip_to_interface matches both IPv4 and IPv6 addresses to their owning
+    // interface, and returns None for an address matching no known interface
+    #[test]
+    fn test_ip_to_interface() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+        use network_interface::{Addr, NetworkInterface, V4IfAddr, V6IfAddr};
 
         let iface = NetworkInterface {
             name: "eth0".to_string(),
-            addr: vec![Addr::V4(V4IfAddr {
-                ip: Ipv4Addr::new(10, 0, 0, 5),
-                broadcast: None,
-                netmask: None,
-            })],
+            addr: vec![
+                Addr::V4(V4IfAddr {
+                    ip: Ipv4Addr::new(10, 0, 0, 5),
+                    broadcast: None,
+                    netmask: None,
+                }),
+                Addr::V6(V6IfAddr {
+                    ip: Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+                    broadcast: None,
+                    netmask: None,
+                }),
+            ],
             mac_addr: Some("aa:bb:cc:dd:ee:ff".to_string()),
             index: 1,
             internal: false,
         };
         let interfaces = vec![iface];
 
-        // loopback (127.0.0.1 in /proc/net/tcp's little-endian hex form) is always
-        // excluded, even though no interface here happens to match it
-        assert_eq!(hex_to_interface("0100007F", &interfaces), None);
-
-        // 10.0.0.5 encoded the same way resolves to the matching interface
+        // IPv4 address resolves to the matching interface
         assert_eq!(
-            hex_to_interface("0500000A", &interfaces),
+            ip_to_interface(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)), &interfaces),
             Some(("eth0".to_string(), "10.0.0.5".to_string()))
         );
 
-        // a well-formed address that matches no known interface returns None
-        assert_eq!(hex_to_interface("01000A0A", &interfaces), None);
+        // IPv6 address resolves to the matching interface too
+        assert_eq!(
+            ip_to_interface(
+                IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)),
+                &interfaces
+            ),
+            Some(("eth0".to_string(), "fe80::1".to_string()))
+        );
 
-        // IPv6-length hex (32 chars) is skipped entirely rather than misparsed
-        assert_eq!(hex_to_interface(&"0".repeat(32), &interfaces), None);
-
-        // malformed hex yields None rather than panicking
-        assert_eq!(hex_to_interface("not_hex!", &interfaces), None);
+        // an address that matches no known interface returns None
+        assert_eq!(
+            ip_to_interface(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 10)), &interfaces),
+            None
+        );
     }
 
     // test get_network_info's fallback chain: an all-unknown result when there's no
@@ -1819,6 +2017,45 @@ mod tests {
         );
     }
 
+    // test that evict_stale_pids drops tracking state for PIDs no longer live, leaves
+    // still-live PIDs untouched, and is a no-op when everything is still live -
+    // regression test for the CHANGELOG v1.0.18 memory-growth-leak fix (stale PIDs were
+    // never dropped from these maps, so they grew unbounded on a long-running host)
+    #[test]
+    fn test_evict_stale_pids() {
+        use std::collections::{HashMap, HashSet};
+
+        let mut last_pid_times: HashMap<u32, u64> = HashMap::from([(1, 100), (2, 200), (3, 300)]);
+        let mut pid_stats: HashMap<u32, PidStats> =
+            HashMap::from([(1, PidStats::default()), (2, PidStats::default())]);
+
+        // pid 3 has left the live set (and was never in pid_stats to begin with -
+        // e.g. a process that only ever got one poll before exiting)
+        let live_pids: HashSet<u32> = HashSet::from([1, 2]);
+        evict_stale_pids(&mut last_pid_times, &mut pid_stats, &live_pids);
+
+        assert_eq!(
+            last_pid_times.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([1, 2]),
+            "pid 3 should be evicted from last_pid_times"
+        );
+        assert_eq!(
+            pid_stats.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([1, 2]),
+            "pid_stats should be untouched for still-live pids"
+        );
+
+        // a second call with the same live set is a no-op - nothing further is evicted
+        evict_stale_pids(&mut last_pid_times, &mut pid_stats, &live_pids);
+        assert_eq!(last_pid_times.len(), 2);
+        assert_eq!(pid_stats.len(), 2);
+
+        // evicting down to an empty live set drops everything
+        evict_stale_pids(&mut last_pid_times, &mut pid_stats, &HashSet::new());
+        assert!(last_pid_times.is_empty());
+        assert!(pid_stats.is_empty());
+    }
+
     // test that build_found_entry converts ticks to ns correctly, treats a missing prior
     // sample as a zero delta (the first-sample-spike fix covered end-to-end by
     // test_calc_delta), and accumulates running avg/max correctly across repeated samples
@@ -1898,11 +2135,7 @@ mod tests {
     fn test_execve_event_debug_zeroed() {
         let evt = zero_execve_event();
         let s = format!("{:?}", evt);
-        let expected = format!(
-            "{{\"filename\": \"{}\", \"command\": \"{}\", \"uid\": \"1000\", \"pid\": \"42\", \"gid\": \"100\", \"tgid\": \"42\", \"args\": [], \"envs\": []}}",
-            "\0".repeat(LEN_MAX_PATH),
-            "\0".repeat(16),
-        );
+        let expected = "{\"filename\": \"\", \"command\": \"\", \"uid\": \"1000\", \"pid\": \"42\", \"gid\": \"100\", \"tgid\": \"42\", \"args\": [], \"envs\": []}";
         assert_eq!(s, expected);
     }
 
@@ -1915,14 +2148,7 @@ mod tests {
         evt.argv[1][..4].copy_from_slice(b"echo");
         evt.envp[0][..5].copy_from_slice(b"PATH=");
         let s = format!("{:?}", evt);
-        let expected = format!(
-            "{{\"filename\": \"{}\", \"command\": \"{}\", \"uid\": \"1000\", \"pid\": \"42\", \"gid\": \"100\", \"tgid\": \"42\", \"args\": [\"-c{}\", \"echo{}\"], \"envs\": [\"PATH={}\"]}}",
-            "\0".repeat(LEN_MAX_PATH),
-            "\0".repeat(16),
-            "\0".repeat(ARG_SIZE - 2),
-            "\0".repeat(ARG_SIZE - 4),
-            "\0".repeat(ENV_SIZE - 5),
-        );
+        let expected = "{\"filename\": \"\", \"command\": \"\", \"uid\": \"1000\", \"pid\": \"42\", \"gid\": \"100\", \"tgid\": \"42\", \"args\": [\"-c\", \"echo\"], \"envs\": [\"PATH=\"]}";
         assert_eq!(s, expected);
     }
 
@@ -1945,11 +2171,8 @@ mod tests {
     fn test_execve_event_display_zeroed() {
         let evt = zero_execve_event();
         let s = format!("{}", evt);
-        let expected = format!(
-            "filename: {}, command: {}, uid: 1000, pid: 42, gid: 100, tgid: 42, args: [], envs: []",
-            "\0".repeat(LEN_MAX_PATH),
-            "\0".repeat(16),
-        );
+        let expected =
+            "filename: , command: , uid: 1000, pid: 42, gid: 100, tgid: 42, args: [], envs: []";
         assert_eq!(s, expected);
     }
 
@@ -1960,14 +2183,7 @@ mod tests {
         evt.argv[1][..4].copy_from_slice(b"echo");
         evt.envp[0][..5].copy_from_slice(b"PATH=");
         let s = format!("{}", evt);
-        let expected = format!(
-            "filename: {}, command: {}, uid: 1000, pid: 42, gid: 100, tgid: 42, args: [-c{},echo{},], envs: [PATH={},]",
-            "\0".repeat(LEN_MAX_PATH),
-            "\0".repeat(16),
-            "\0".repeat(ARG_SIZE - 2),
-            "\0".repeat(ARG_SIZE - 4),
-            "\0".repeat(ENV_SIZE - 5),
-        );
+        let expected = "filename: , command: , uid: 1000, pid: 42, gid: 100, tgid: 42, args: [-c,echo,], envs: [PATH=,]";
         assert_eq!(s, expected);
     }
 

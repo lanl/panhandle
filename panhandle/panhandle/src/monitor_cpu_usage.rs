@@ -19,6 +19,21 @@ pub struct PidStats {
     pub avg_cpu_percent: f64, // Running average of CPU percentage
 }
 
+/// Drop tracking state for any PID no longer in `live_pids`, so `last_pid_times` and
+/// `pid_stats` don't grow unbounded on a long-running host as PIDs come and go, and a
+/// reused PID doesn't inherit a departed process's stale stats. Extracted so this
+/// (previously inline, duplicated at both call sites) eviction logic can be unit
+/// tested directly - see CHANGELOG v1.0.18's memory-growth-leak fix, which this
+/// protects against regressing.
+pub(crate) fn evict_stale_pids(
+    last_pid_times: &mut HashMap<u32, u64>,
+    pid_stats: &mut HashMap<u32, PidStats>,
+    live_pids: &HashSet<u32>,
+) {
+    last_pid_times.retain(|pid, _| live_pids.contains(pid));
+    pid_stats.retain(|pid, _| live_pids.contains(pid));
+}
+
 /// Per-PID CPU%, 100% = fully using one core, 200% = fully using two cores, etc.
 pub(crate) fn calc_cpu_percent(delta_ns: u64, interval_ns: u64) -> f64 {
     if interval_ns > 0 {
@@ -333,8 +348,7 @@ pub async fn monitor_cpu_usage(
                 // Prune tracking state for PIDs no longer in the filter, so these maps
                 // don't grow unbounded and a reused PID doesn't inherit stale stats.
                 let live_pids: HashSet<u32> = filter.iter().copied().collect();
-                last_pid_times.retain(|pid, _| live_pids.contains(pid));
-                pid_stats.retain(|pid, _| live_pids.contains(pid));
+                evict_stale_pids(last_pid_times, pid_stats, &live_pids);
 
                 for &pid in filter {
                     if let Ok(proc) = Process::new(pid as i32)
@@ -401,8 +415,7 @@ pub async fn monitor_cpu_usage(
                     .unwrap_or_default();
 
                 let live_pids: HashSet<u32> = procs.iter().map(|p| p.pid() as u32).collect();
-                last_pid_times.retain(|pid, _| live_pids.contains(pid));
-                pid_stats.retain(|pid, _| live_pids.contains(pid));
+                evict_stale_pids(last_pid_times, pid_stats, &live_pids);
 
                 for proc in procs {
                     let pid = proc.pid() as u32;

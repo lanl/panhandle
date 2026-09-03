@@ -43,5 +43,5 @@ cargo run -- --cpu --pid-list $pid_list --poll 3
 # Cleanup
 echo -e "\n==========================================================" >&2
 echo "Cleaning up test processes..." >&2
-kill $⋆⋆⋆⋆⋆_pid $medium_pid $heavy_pid 2>/dev/null
+kill $light_pid $medium_pid $heavy_pid 2>/dev/null
 echo "Test processes terminated." >&2

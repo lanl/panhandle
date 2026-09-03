@@ -23,7 +23,7 @@ The RPMs in the build artifacts provide:
 ## Configuration & Implementation
 
 1. Install the appropriate RPM for your Linux version.
-2. If log monitoring by a SEIM or Splunk server is desired, please add the logfile `/var/log/panhandle/panhandle.log` to your monitored rsyslog file inputs.
+2. If log monitoring by a SIEM or Splunk server is desired, please add the logfile `/var/log/panhandle/panhandle.log` to your monitored rsyslog file inputs.
 3. Enable and start the panhandle systemd service with: `systemctl enable --now panhandle` or your configuration manager of choice.
 
 ## Releasability

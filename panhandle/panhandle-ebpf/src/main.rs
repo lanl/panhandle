@@ -56,7 +56,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     };
 
     // filter out commands if shells
-    let shells: bool = get_bool(0, &UID_OPTIONS);
+    let shells: bool = get_bool(UID_OPT_SHELLS, &UID_OPTIONS);
     if shells {
         // let's make sure the shell matches the shells we are looking for
         let shell_bool: bool = check_shells(command);
@@ -69,7 +69,7 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
 
     // skip if not in the include uids list
     // the uid_options map has an entry for if the uid_include_list is defined / desired in userland to reduce overhead
-    if get_bool(3, &UID_OPTIONS) {
+    if get_bool(UID_OPT_INCLUDE_ENABLED, &UID_OPTIONS) {
         if !check_uid_in_uidarray(&initial_uid, &UID_INCLUDE_LIST) {
             debug!(
                 &ctx,
@@ -104,16 +104,10 @@ fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
             *ptr = core::mem::zeroed();
             &mut *ptr
         };
-        // Fetch the filename pointer safely without using '?'
-        let filename_ptr = unsafe {
-            match ctx.read_at::<*const u8>(FILENAME_OFFSET) {
-                Ok(ptr) => ptr,
-                Err(_) => {
-                    entry.discard(0); // Clean up the ringbuf reference before exiting!
-                    return Err(-1);
-                }
-            }
-        };
+        // `data.command` is the same pointer FILENAME_OFFSET would re-fetch (it's the
+        // SysEnterExecve field that lands at that offset) - already have it from the
+        // ctx.read_at(0) above, no need for a second raw read.
+        let filename_ptr = data.command;
 
         // SAFETY: this is a core BPF method implemented in Aya
         unsafe {
@@ -202,8 +196,8 @@ fn get_include_uid_array(map_to_get: &HashMap<u32, [u32; UID_COUNT]>) -> [u32; U
 
 /// return a bool to deftermine if the process should be excluded by uid
 fn exclude_uid(uid: u32, hash_map: &HashMap<u32, u32>) -> bool {
-    let min = get_uid(1, hash_map);
-    let max = get_uid(2, hash_map);
+    let min = get_uid(UID_OPT_EXCLUDE_MIN, hash_map);
+    let max = get_uid(UID_OPT_EXCLUDE_MAX, hash_map);
     if (uid >= min) && (uid <= max) {
         return true;
     }
@@ -212,20 +206,20 @@ fn exclude_uid(uid: u32, hash_map: &HashMap<u32, u32>) -> bool {
 
 /// check the command against the list of valid shells we want to monitor, requires byte comparison to avoid string comparisons in ebpf-land
 fn check_shells(command: [u8; 16]) -> bool {
-    let mut check_bool = false;
     // let's make sure the shell matches the shells we are looking for
-    if command[0..2] == *b"sh" {
-        check_bool = true
-    } else if command[0..4] == *b"bash" {
-        check_bool = true
-    } else if command[0..3] == *b"zsh" {
-        check_bool = true
-    } else if command[0..4] == *b"tcsh" {
-        check_bool = true
-    } else if command[0..3] == *b"csh" {
-        check_bool = true
-    }
-    check_bool
+    is_exact_comm(&command, b"sh")
+        || is_exact_comm(&command, b"bash")
+        || is_exact_comm(&command, b"zsh")
+        || is_exact_comm(&command, b"tcsh")
+        || is_exact_comm(&command, b"csh")
+}
+
+/// Returns true if `command` (a NUL-padded comm buffer) is exactly `name` -
+/// i.e. `name` is a prefix of it AND is immediately followed by the NUL
+/// terminator, so e.g. "sh" matches comm "sh" but not "shutdown" or "shred".
+fn is_exact_comm(command: &[u8; 16], name: &[u8]) -> bool {
+    let len = name.len();
+    command[..len] == *name && command[len] == 0
 }
 
 /// check if a given u32 uid matches the list of u32 uids to look for

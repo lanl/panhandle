@@ -12,7 +12,6 @@ use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
 use crate::vmlinux::file;
 
 const PATH_SIZE: usize = 256;
-const PATH_MASK: usize = PATH_SIZE - 1;
 
 // -EPERM: what we return to actually block the operation
 const EPERM: i32 = -1;
@@ -44,6 +43,14 @@ pub fn block_open(ctx: LsmContext) -> i32 {
     }
 }
 
+// Blocking a comm here can be narrowed to specific paths via BLOCKED_PATHS: if that
+// list has real entries, a blocked comm is only denied for opens matching one of
+// those paths (see the is_path_map_empty/path_is_blocked check below) - e.g. "block
+// vim from opening /etc/shadow" rather than "block vim from opening anything". With
+// no path list configured (just the placeholder), a blocked comm is denied for every
+// open. This is deliberately different from block_execve below, which has no such
+// narrowing: a blocked comm can never execute at all, full stop - blocking specific
+// paths doesn't apply to "should this binary be allowed to run".
 fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     // Check if this comm should be blocked based on allow/deny lists
     if !comm_is_blocked() {
@@ -66,11 +73,17 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     let ret: c_long = unsafe { bpf_d_path(path_ptr as *mut _, buf_ptr, PATH_SIZE as u32) };
 
     if ret > 0 {
-        let len = (ret as usize) & PATH_MASK;
-        let path_str = unsafe { core::str::from_utf8_unchecked(&scratch.buf[..len]) };
+        // bpf_d_path's return value includes the trailing NUL and, in the worst
+        // case, could equal PATH_SIZE -- clamp (don't wrap) so a full-length path
+        // is never mistaken for an empty one and slicing stays in-bounds.
+        let len = (ret as usize).min(PATH_SIZE);
+        // Linux paths are arbitrary bytes, not guaranteed valid UTF-8, so compare
+        // raw bytes rather than constructing a &str (which path_is_blocked would
+        // just call .as_bytes() on anyway).
+        let path_bytes = &scratch.buf[..len];
 
         // If path map has real entries (not just placeholder) and this path isn't blocked, allow it
-        if !is_path_map_empty() && !path_is_blocked(&path_str) {
+        if !is_path_map_empty() && !path_is_blocked(path_bytes) {
             return Ok(0); // comm is blocked but the path isn't, return ok
         }
     }
@@ -79,7 +92,8 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     Ok(EPERM)
 }
 
-// hook for strictly blocking execve
+// Hook for strictly blocking execve: unlike try_block_open above, a blocked comm is
+// always denied here with no path-based narrowing.
 #[lsm(hook = "bprm_check_security")]
 pub fn block_execve(ctx: LsmContext) -> i32 {
     match unsafe { try_block_execve(ctx) } {
@@ -147,9 +161,8 @@ fn get_list_mode() -> u8 {
 }
 
 // Returns true if the provided file path is in the forbidden file list
-fn path_is_blocked(filepath: &str) -> bool {
+fn path_is_blocked(path_bytes: &[u8]) -> bool {
     let mut key: [u8; 256] = [0u8; 256];
-    let path_bytes = filepath.as_bytes();
     let len = path_bytes.len().min(256);
     key[..len].copy_from_slice(&path_bytes[..len]);
     unsafe { BLOCKED_PATHS.get(&key).is_some() }

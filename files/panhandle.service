@@ -5,6 +5,7 @@
 Description=Run the panhandle binary via systemd
 Documentation=https://github.com/lanl/panhandle
 Requires=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
@@ -13,6 +14,17 @@ TimeoutSec=5
 ExecStart=/usr/sbin/panhandle --config /opt/panhandle/panhandle.yaml
 StandardOutput=append:/var/log/panhandle/panhandle.log
 StandardError=append:/var/log/panhandle/panhandle_error.log
+
+# panhandle needs full root (loading eBPF tracepoints/kprobes/LSM hooks requires
+# CAP_SYS_ADMIN on RHEL8's 4.18 kernel, which predates the finer-grained CAP_BPF/
+# CAP_PERFMON split - there's no narrower capability set that works across every
+# RHEL8/9/10 and SLE15 target this is packaged for), so capabilities aren't
+# restricted here. These three directives are still safe to set unconditionally:
+# panhandle never execs another binary, never touches /home, and never writes to
+# /tmp, so none of them can affect its actual behavior.
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

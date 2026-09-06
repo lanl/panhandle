@@ -457,15 +457,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .program_mut("inet_sock_set_state")
             .unwrap()
             .try_into()
-            .inspect_err(|e| error!("failed to load eBPF program 'inet_sock_set_state': {}", e))?;
+            .inspect_err(|e| {
+                error!("failed to load eBPF program 'inet_sock_set_state': {}", e);
+            })?;
         program.load("inet_sock_set_state", &btf).inspect_err(|e| {
-            error!("failed to load BTF tracepoint 'inet_sock_set_state': {}", e)
+            error!("failed to load BTF tracepoint 'inet_sock_set_state': {}", e);
         })?;
         program.attach().inspect_err(|e| {
             error!(
                 "failed to attach BTF tracepoint 'inet_sock_set_state': {}",
                 e
-            )
+            );
         })?;
         debug!("attached eBPF BTF tracepoint 'inet_sock_set_state'");
 
@@ -779,10 +781,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .program_mut("readline")
             .unwrap()
             .try_into()
-            .inspect_err(|e| error!("failed to load eBPF program 'readline': {}", e))?;
-        program
-            .load()
-            .inspect_err(|e| error!("failed to load uprobe 'readline': {}", e))?;
+            .inspect_err(|e| {
+                error!("failed to load eBPF program 'readline': {}", e);
+            })?;
+        program.load().inspect_err(|e| {
+            error!("failed to load uprobe 'readline': {}", e);
+        })?;
         program
             .attach(
                 "readline_internal_teardown",
@@ -793,7 +797,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 error!(
                     "failed to attach uprobe 'readline' to '{}': {}",
                     file_string, e
-                )
+                );
             })?;
         debug!("attached eBPF uprobe 'readline' to '{}'", file_string);
 
@@ -901,17 +905,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .program_mut("zlentry")
             .unwrap()
             .try_into()
-            .inspect_err(|e| error!("failed to load eBPF program 'zlentry': {}", e))?;
-        program
-            .load()
-            .inspect_err(|e| error!("failed to load uprobe 'zlentry': {}", e))?;
+            .inspect_err(|e| {
+                error!("failed to load eBPF program 'zlentry': {}", e);
+            })?;
+        program.load().inspect_err(|e| {
+            error!("failed to load uprobe 'zlentry': {}", e);
+        })?;
         program
             .attach("zleentry", &file_string, UProbeScope::AllProcesses)
             .inspect_err(|e| {
                 error!(
                     "failed to attach uprobe 'zlentry' to '{}': {}",
                     file_string, e
-                )
+                );
             })?;
         debug!("attached eBPF uprobe 'zlentry' to '{}'", file_string);
 
@@ -1016,13 +1022,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .program_mut("panhandle")
             .unwrap()
             .try_into()
-            .inspect_err(|e| error!("failed to load eBPF program 'panhandle': {}", e))?;
-        program2
-            .load()
-            .inspect_err(|e| error!("failed to load tracepoint 'sys_enter_execve': {}", e))?;
+            .inspect_err(|e| {
+                error!("failed to load eBPF program 'panhandle': {}", e);
+            })?;
+        program2.load().inspect_err(|e| {
+            error!("failed to load tracepoint 'sys_enter_execve': {}", e);
+        })?;
         program2
             .attach("syscalls", "sys_enter_execve")
-            .inspect_err(|e| error!("failed to attach tracepoint 'sys_enter_execve': {}", e))?;
+            .inspect_err(|e| {
+                error!("failed to attach tracepoint 'sys_enter_execve': {}", e);
+            })?;
         debug!("attached eBPF tracepoint 'syscalls:sys_enter_execve'");
 
         // get the uid_options map from ebpf land

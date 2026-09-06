@@ -862,14 +862,20 @@ pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str) -> Result<(), any
         .program_mut(program_name)
         .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
         .try_into()
-        .inspect_err(|e| error!("failed to load eBPF program '{}': {}", program_name, e))?;
+        .inspect_err(|e| {
+            error!("failed to load eBPF program '{}': {}", program_name, e);
+        })?;
 
     program
         .load()
-        .inspect_err(|e| error!("failed to load kprobe '{}': {}", program_name, e))?;
+        .inspect_err(|e| {
+            error!("failed to load kprobe '{}': {}", program_name, e);
+        })?;
     program
         .attach(program_name, 0)
-        .inspect_err(|e| error!("failed to attach kprobe '{}': {}", program_name, e))?;
+        .inspect_err(|e| {
+            error!("failed to attach kprobe '{}': {}", program_name, e);
+        })?;
 
     debug!("attached eBPF kprobe '{}'", program_name);
     Ok(())
@@ -885,15 +891,24 @@ pub fn attach_lsm_hook(
         .program_mut(program_name)
         .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
         .try_into()
-        .inspect_err(|e| error!("failed to load eBPF program '{}': {}", program_name, e))?;
-    let btf = Btf::from_sys_fs()
-        .inspect_err(|e| error!("failed to read BTF from sysfs for '{}': {}", hook_name, e))?;
-    program
-        .load(hook_name, &btf)
-        .inspect_err(|e| error!("failed to load LSM hook '{}' ({}): {}", hook_name, program_name, e))?;
-    program
-        .attach()
-        .inspect_err(|e| error!("failed to attach LSM hook '{}' ({}): {}", hook_name, program_name, e))?;
+        .inspect_err(|e| {
+            error!("failed to load eBPF program '{}': {}", program_name, e);
+        })?;
+    let btf = Btf::from_sys_fs().inspect_err(|e| {
+        error!("failed to read BTF from sysfs for '{}': {}", hook_name, e);
+    })?;
+    program.load(hook_name, &btf).inspect_err(|e| {
+        error!(
+            "failed to load LSM hook '{}' ({}): {}",
+            hook_name, program_name, e
+        );
+    })?;
+    program.attach().inspect_err(|e| {
+        error!(
+            "failed to attach LSM hook '{}' ({}): {}",
+            hook_name, program_name, e
+        );
+    })?;
 
     debug!(
         "attached eBPF LSM hook '{}' (program '{}')",

@@ -1,5 +1,22 @@
 # CHANGELOG
 
+### v1.0.23
+
+- fixed a startup crash when a `block_paths` or `include_uid` entry supplied via the config file (rather than the CLI) exceeded the length/format limits that were previously only enforced for CLI-sourced values
+- fixed a startup crash when the canonicalized path to `/bin/bash` or `/bin/zsh` wasn't valid UTF-8
+- fixed config-file `comm_allow`/`comm_deny` entries over the length limit being silently truncated instead of rejected, unlike the equivalent CLI-sourced values
+- fixed a `--block-paths` bypass in the file-open blocker where a path exactly filling the internal scratch buffer could be misread as an empty path and allowed through
+- fixed shell-name matching for execve filtering (`sh`, `bash`, `zsh`, `tcsh`, `csh`) to require an exact comm match, so processes like `shutdown` or `shred` no longer false-positive as shells
+- replaced the per-PID socket usage stats map, which was not atomic across CPUs (concurrent updates for the same PID on different cores could lose an update) and never evicted a PID once it had sent or received any data (letting the map fill permanently on a long-running host), with a stateless ring-buffer-based design accumulated in userspace
+- fixed execve event logging embedding raw NUL bytes into JSON output and log lines
+- fixed per-process network connection/interface attribution reporting the same (arbitrary) connection for every process sharing a network namespace instead of that process's own; added IPv6 support to this same lookup, which previously only handled IPv4
+- fixed `--memory`'s shared/data MB figures assuming a 4KB page size, which undercounts on architectures using larger pages
+- fixed syslog output performing blocking socket I/O directly on the async runtime, which could stall event processing for the whole host if the remote syslog target was slow or unreachable
+- raised the HTTP log output timeout from an unrealistic 200ms to 3 seconds, reducing silent event loss to ordinary network latency
+- fixed the RPM uninstall script never actually running (it wasn't wired up); it's now correctly invoked before removal so the service is stopped rather than left running with its files gone
+- added baseline systemd hardening (`NoNewPrivileges`, `ProtectHome`, `PrivateTmp`) to the packaged service unit and fixed a service startup ordering race with `network-online.target`
+- fixed the man page documenting the version flag as `--Version` instead of the actual `--version`
+
 ### v1.0.22
 
 - adding integration tests

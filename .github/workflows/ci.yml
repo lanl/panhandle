@@ -153,3 +153,77 @@ jobs:
         with:
           name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.config.shortname }}.${{ matrix.config.architecture }}.rpm
           path: rpmbuild/${{ matrix.config.shortname }}
+
+  deb-build:
+    runs-on: ${{ matrix.config.runs_on }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          # Ubuntu runs natively on these hosted runners (no container, no
+          # cross-compilation needed for either arch), unlike the RPM matrix above.
+          - shortname: 'ubuntu24.04'
+            runs_on: 'ubuntu-24.04'
+            architecture: 'x86_64'
+          - shortname: 'ubuntu24.04'
+            runs_on: 'ubuntu-24.04-arm'
+            architecture: 'aarch64'
+          # Public preview as of GA'd June 2026 - may see occasional instability.
+          - shortname: 'ubuntu26.04'
+            runs_on: 'ubuntu-26.04'
+            architecture: 'x86_64'
+          - shortname: 'ubuntu26.04'
+            runs_on: 'ubuntu-26.04-arm'
+            architecture: 'aarch64'
+        package: ["panhandle"]
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - uses: actions/checkout@v7
+
+      - name: Get package version
+        id: get_version
+        run: |
+          VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
+          echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "$PACKAGE_VERSION"
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+          rustup toolchain install nightly --component rust-src
+          cargo install cargo-deb
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          success=0
+          for i in 1 2 3; do
+            if cargo binstall --no-confirm --maximum-resolution-timeout 30 bpf-linker; then
+              success=1
+              break
+            fi
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "bpf-linker binstall failed after 3 attempts" >&2
+            exit 1
+          fi
+
+      - name: Build .deb
+        run: |
+          . "$HOME/.cargo/env"
+          cd ${{ matrix.package }}
+          cargo deb --package ${{ matrix.package }} --all-features
+          mkdir -p ../debbuild/${{ matrix.config.shortname }}
+          cp target/debian/*.deb ../debbuild/${{ matrix.config.shortname }}/
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}.${{ matrix.config.shortname }}.${{ matrix.config.architecture }}.deb
+          path: debbuild/${{ matrix.config.shortname }}

@@ -77,7 +77,7 @@ fn test_ebpf_loads_without_stack_spilling() {
         "zlentry_events",
         "zlentry_uid_options",
         "zlentry_uid_include_list",
-        "net_stats",
+        "socket_events",
         "COMMS",
         "BLOCKED_PATHS",
     ];

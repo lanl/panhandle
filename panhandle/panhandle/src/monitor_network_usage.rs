@@ -1,13 +1,50 @@
-use std::{convert::TryInto, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::TryInto,
+    net::IpAddr,
+    sync::{Arc, Mutex},
+};
 
-use aya::maps::HashMap;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use panhandle_common::NetStats;
-use procfs::process::Process;
+use panhandle_common::{NetStats, SocketStatsEvent};
+use procfs::process::{FDTarget, Process};
 use reqwest::Client;
 use serde_json::json;
 
 use crate::helpers::*;
+
+/// Per-pid socket stats accumulated from `SocketStatsEvent` deltas read off the
+/// `socket_events` ring buffer (see `consume_socket_stats_ebpf_map` in helpers.rs).
+/// Shared between that consumer task and the reporting loop in this module.
+pub type SharedNetStats = Arc<Mutex<HashMap<u32, NetStats>>>;
+
+/// Fold one delta event into the accumulated stats for its pid.
+pub fn apply_socket_stats_event(net_stats: &SharedNetStats, event: &SocketStatsEvent) {
+    let mut map = net_stats.lock().unwrap();
+    let entry = map.entry(event.pid).or_default();
+    entry.tcp_established = entry
+        .tcp_established
+        .saturating_add_signed(event.tcp_established_delta);
+    entry.tcp_syn_recv = entry
+        .tcp_syn_recv
+        .saturating_add_signed(event.tcp_syn_recv_delta);
+    entry.tcp_close_wait = entry
+        .tcp_close_wait
+        .saturating_add_signed(event.tcp_close_wait_delta);
+    entry.tcp_time_wait = entry
+        .tcp_time_wait
+        .saturating_add_signed(event.tcp_time_wait_delta);
+    entry.tcp_fin_wait = entry
+        .tcp_fin_wait
+        .saturating_add_signed(event.tcp_fin_wait_delta);
+    if event.udp_sockets_set != 0 {
+        entry.udp_sockets = entry.udp_sockets.max(1);
+    }
+    entry.bytes_sent += event.bytes_sent_delta;
+    entry.bytes_recv += event.bytes_recv_delta;
+    entry.packets_sent += event.packets_sent_delta;
+    entry.packets_recv += event.packets_recv_delta;
+}
 
 // Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
 // loop afterward only needs to do async formatting/output work.
@@ -165,9 +202,24 @@ pub fn format_socket_json(
     }
 }
 
+/// Remove entries for PIDs whose process no longer exists from the shared accumulator.
+/// Without this, a pid that ever sent/received data would stay in `net_stats` forever,
+/// growing it unboundedly on a long-running host - extracted so this eviction step is
+/// independently testable without needing real procfs state to decide which pids are
+/// "dead" (that determination is the caller's job; this just does the removal).
+pub(crate) fn prune_dead_pids(net_stats: &SharedNetStats, dead_pids: Vec<u32>) {
+    if dead_pids.is_empty() {
+        return;
+    }
+    let mut map = net_stats.lock().unwrap();
+    for pid in dead_pids {
+        map.remove(&pid);
+    }
+}
+
 /// Network monitoring main function
 pub async fn monitor_network_usage(
-    net_stats_map: &HashMap<aya::maps::MapData, u32, NetStats>,
+    net_stats: &SharedNetStats,
     json_output: &bool,
     http: &bool,
     syslog: &bool,
@@ -185,16 +237,28 @@ pub async fn monitor_network_usage(
     // loop below only does formatting/output work, keeping blocking I/O off the shared
     // tokio worker threads for as short a window as possible.
     let entries: Vec<NetworkEntry> = tokio::task::block_in_place(|| {
+        // Snapshot the accumulated stats without holding the lock during the procfs
+        // scan below - the ring-buffer consumer task keeps folding new deltas into
+        // this map concurrently, and we don't want to block it (or hold a lock across
+        // blocking syscalls) for the whole scan.
+        let snapshot: Vec<(u32, NetStats)> = {
+            let map = net_stats.lock().unwrap();
+            map.iter().map(|(&pid, &stats)| (pid, stats)).collect()
+        };
+
         // Fetch the interface list once per poll cycle instead of once (or twice) per PID.
         let interfaces = NetworkInterface::show().unwrap_or_default();
         let mut entries = Vec::new();
+        // PIDs whose process no longer exists, pruned from the accumulator below once
+        // the scan is done. Without this, a pid that ever sent/received data would stay
+        // in the map forever, growing it unboundedly on a long-running host.
+        let mut dead_pids = Vec::new();
         // Cache of uid -> username, scoped to this single poll, so N processes owned by
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
-        let mut username_cache: std::collections::HashMap<u32, String> =
-            std::collections::HashMap::new();
+        let mut username_cache: HashMap<u32, String> = HashMap::new();
 
-        for (pid, stats) in net_stats_map.iter().flatten() {
+        for (pid, stats) in snapshot {
             // Skip entries with no activity
             if !stats.has_activity() {
                 continue;
@@ -202,6 +266,7 @@ pub async fn monitor_network_usage(
 
             // Get process information from procfs
             let Ok(proc) = Process::new(pid.try_into().unwrap()) else {
+                dead_pids.push(pid);
                 continue;
             };
             let Ok(stat) = proc.stat() else {
@@ -261,6 +326,8 @@ pub async fn monitor_network_usage(
                 stats,
             });
         }
+
+        prune_dead_pids(net_stats, dead_pids);
 
         entries
     });
@@ -468,53 +535,59 @@ pub(crate) fn get_network_info(
     )
 }
 
-// Get interface name and IP from process connections
+// Get interface name and IP from process connections.
+//
+// /proc/<pid>/net/{tcp,tcp6,udp,udp6} reflect the whole network namespace, not
+// sockets this specific pid owns - for the common case of processes sharing the
+// default netns, every pid would see the exact same table. Cross-reference against
+// this pid's own open file descriptors (/proc/<pid>/fd) to find which socket inodes
+// actually belong to it, then only match those against the (shared) net tables.
 pub(crate) fn get_active_connection_info(
     pid: u32,
     interfaces: &[NetworkInterface],
 ) -> Option<(String, String)> {
-    for path in [
-        format!("/proc/{}/net/tcp", pid),
-        format!("/proc/{}/net/tcp6", pid),
-        format!("/proc/{}/net/udp", pid),
-    ] {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            for line in content.lines().skip(1) {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() < 2 {
-                    continue;
-                }
+    let proc = Process::new(pid.try_into().ok()?).ok()?;
 
-                if let Some(hex) = parts[1].split(':').next()
-                    && let Some((iface, ip)) = hex_to_interface(hex, interfaces)
-                {
-                    return Some((iface, ip));
-                }
-            }
-        }
-    }
-    None
-}
+    let owned_inodes: HashSet<u64> = proc
+        .fd()
+        .ok()?
+        .filter_map(|fd| fd.ok())
+        .filter_map(|fd| match fd.target {
+            FDTarget::Socket(inode) => Some(inode),
+            _ => None,
+        })
+        .collect();
 
-// Convert hex IP to interface name and IP string
-pub(crate) fn hex_to_interface(
-    hex: &str,
-    interfaces: &[NetworkInterface],
-) -> Option<(String, String)> {
-    let ip = if hex.len() == 8 {
-        // IPv4
-        let val = u32::from_str_radix(hex, 16).ok()?;
-        let b = val.to_le_bytes();
-        std::net::IpAddr::from([b[0], b[1], b[2], b[3]])
-    } else {
-        return None; // Skip IPv6 for simplicity
-    };
-
-    if ip.is_loopback() {
+    if owned_inodes.is_empty() {
         return None;
     }
 
-    // Match IP to interface
+    let tcp_ips = proc
+        .tcp()
+        .unwrap_or_default()
+        .into_iter()
+        .chain(proc.tcp6().unwrap_or_default())
+        .filter(|e| owned_inodes.contains(&e.inode))
+        .map(|e| e.local_address.ip());
+    let udp_ips = proc
+        .udp()
+        .unwrap_or_default()
+        .into_iter()
+        .chain(proc.udp6().unwrap_or_default())
+        .filter(|e| owned_inodes.contains(&e.inode))
+        .map(|e| e.local_address.ip());
+
+    tcp_ips
+        .chain(udp_ips)
+        .filter(|ip| !ip.is_loopback())
+        .find_map(|ip| ip_to_interface(ip, interfaces))
+}
+
+// Match an IP address (from either address family) to the interface that owns it.
+pub(crate) fn ip_to_interface(
+    ip: IpAddr,
+    interfaces: &[NetworkInterface],
+) -> Option<(String, String)> {
     for iface in interfaces {
         for addr in &iface.addr {
             if addr.ip() == ip {

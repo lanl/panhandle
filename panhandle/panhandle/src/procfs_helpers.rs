@@ -394,6 +394,12 @@ pub async fn get_all_memory_usage(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // statm reports shared/data in page counts, not bytes -- unlike vm_rss/vm_hwm
+        // (already KB, from /proc/<pid>/status) and stat.vsize (already bytes), so this
+        // is the one conversion that actually depends on the system's page size. Query
+        // it once per poll cycle rather than hardcoding 4 (KB per page), which is wrong
+        // on architectures using 16K/64K pages (e.g. some aarch64 configurations).
+        let page_size_kb = procfs::page_size() / 1024;
 
         if let Ok(procs) = all_processes() {
             for proc_res in procs.flatten() {
@@ -414,8 +420,8 @@ pub async fn get_all_memory_usage(
                     let rss_mb = vm_rss.unwrap_or(0) / 1024;
                     let vsize_mb = stat.vsize / (1024 * 1024);
                     let vm_hwm_mb = vm_hwm.unwrap_or(0) / 1024;
-                    let shared_mb = (statm.shared * 4) / 1024;
-                    let data_mb = (statm.data * 4) / 1024;
+                    let shared_mb = (statm.shared * page_size_kb) / 1024;
+                    let data_mb = (statm.data * page_size_kb) / 1024;
                     let rss_pages = stat.rss;
 
                     // Retrieve parent process info only if verbose flag is set

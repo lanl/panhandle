@@ -87,7 +87,7 @@ fn try_shell_entry(
 
     // skip if not in the include uids list
     // the uid_options map has an entry for if the uid_include_list is defined / desired in userland to reduce overhead
-    if get_bool(3, uid_options) && !check_uid_in_uidarray(&initial_uid, uid_include_list) {
+    if get_bool(UID_OPT_INCLUDE_ENABLED, uid_options) && !check_uid_in_uidarray(&initial_uid, uid_include_list) {
         debug!(
             ctx,
             "{}: skipping, uid {} not in include list", name, initial_uid

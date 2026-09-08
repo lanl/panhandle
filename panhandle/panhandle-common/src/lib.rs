@@ -22,6 +22,15 @@ pub const DENY_LIST: u8 = 1;
 pub const ALLOW_LIST: u8 = 2;
 pub const LIST_MODE: u8 = 255;
 
+// Keys into the uid_options / readline_uid_options / zlentry_uid_options maps, shared
+// between userspace (which populates them, main.rs) and eBPF (which reads them via
+// get_bool/get_uid, main.rs and shell_entry.rs). UID_OPT_SHELLS only means anything to
+// the execve probe; the other three are read by all three probes.
+pub const UID_OPT_SHELLS: u32 = 0;
+pub const UID_OPT_EXCLUDE_MIN: u32 = 1;
+pub const UID_OPT_EXCLUDE_MAX: u32 = 2;
+pub const UID_OPT_INCLUDE_ENABLED: u32 = 3;
+
 // structs used for consuming or presenting the desired data
 // this readline struct is used by the zlentry and readline methods
 #[repr(C)]
@@ -56,10 +65,6 @@ pub struct NetStats {
     pub packets_sent: u64, // total packets sent through this socket
     pub packets_recv: u64, // total packets received through this socket
 }
-// SAFETY: NetStats contains only primitive types (u32, u64) with no padding issues
-// and has #[repr(C)] layout, making it safe to treat as Plain Old Data
-#[cfg(feature = "user")]
-unsafe impl aya::Pod for NetStats {}
 
 impl NetStats {
     // Create a new NetStats instance with all fields initialized to zero
@@ -98,6 +103,48 @@ impl NetStats {
 impl Default for NetStats {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A single delta reported by one of the socket kprobes/tracepoints for one PID.
+/// Sent over a ring buffer rather than accumulated in a kernel-side map: each probe
+/// invocation is stateless (no read-modify-write of shared map state, so no cross-CPU
+/// race), and userspace folds these deltas into its own per-PID `NetStats` accumulator.
+/// Most fields are zero on any given event; only the field(s) relevant to whichever
+/// probe fired are set.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SocketStatsEvent {
+    pub pid: u32,
+    pub tcp_established_delta: i32,
+    pub tcp_syn_recv_delta: i32,
+    pub tcp_close_wait_delta: i32,
+    pub tcp_time_wait_delta: i32,
+    pub tcp_fin_wait_delta: i32,
+    // Not a delta: UDP is connectionless, so this is a one-way "seen a UDP socket for
+    // this pid" flag (1) applied via max(), mirroring NetStats::udp_sockets.
+    pub udp_sockets_set: u8,
+    pub bytes_sent_delta: u64,
+    pub bytes_recv_delta: u64,
+    pub packets_sent_delta: u64,
+    pub packets_recv_delta: u64,
+}
+
+impl SocketStatsEvent {
+    pub const fn new(pid: u32) -> Self {
+        Self {
+            pid,
+            tcp_established_delta: 0,
+            tcp_syn_recv_delta: 0,
+            tcp_close_wait_delta: 0,
+            tcp_time_wait_delta: 0,
+            tcp_fin_wait_delta: 0,
+            udp_sockets_set: 0,
+            bytes_sent_delta: 0,
+            bytes_recv_delta: 0,
+            packets_sent_delta: 0,
+            packets_recv_delta: 0,
+        }
     }
 }
 
@@ -163,9 +210,11 @@ impl core::fmt::Debug for ExecveEvent {
             "{{\"filename\": \"{}\", \"command\": \"{}\", \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", ",
             core::str::from_utf8(&self.filename)
                 .unwrap_or_default()
+                .trim_end_matches('\0')
                 .trim(),
             core::str::from_utf8(&self.command)
                 .unwrap_or_default()
+                .trim_end_matches('\0')
                 .trim(),
             self.uid,
             self.pid,
@@ -176,7 +225,10 @@ impl core::fmt::Debug for ExecveEvent {
         write!(f, "\"args\": [")?;
         let mut first = true;
         for arg in &self.argv {
-            let arg = core::str::from_utf8(arg).unwrap_or_default().trim();
+            let arg = core::str::from_utf8(arg)
+                .unwrap_or_default()
+                .trim_end_matches('\0')
+                .trim();
             if arg.is_empty() || arg.starts_with('\0') {
                 break;
             }
@@ -189,7 +241,10 @@ impl core::fmt::Debug for ExecveEvent {
         write!(f, "], \"envs\": [")?;
         let mut first = true;
         for env in &self.envp {
-            let env = core::str::from_utf8(env).unwrap_or_default().trim();
+            let env = core::str::from_utf8(env)
+                .unwrap_or_default()
+                .trim_end_matches('\0')
+                .trim();
             if env.is_empty() || env.starts_with('\0') {
                 break;
             }
@@ -212,9 +267,11 @@ impl core::fmt::Display for ExecveEvent {
             "filename: {}, command: {}, uid: {}, pid: {}, gid: {}, tgid: {}, ",
             core::str::from_utf8(&self.filename)
                 .unwrap_or_default()
+                .trim_end_matches('\0')
                 .trim(),
             core::str::from_utf8(&self.command)
                 .unwrap_or_default()
+                .trim_end_matches('\0')
                 .trim(),
             self.uid,
             self.pid,
@@ -223,14 +280,20 @@ impl core::fmt::Display for ExecveEvent {
         )?;
         write!(f, "args: [")?;
         for arg in &self.argv {
-            let arg = core::str::from_utf8(arg).unwrap_or_default().trim();
+            let arg = core::str::from_utf8(arg)
+                .unwrap_or_default()
+                .trim_end_matches('\0')
+                .trim();
             if !arg.is_empty() && !arg.starts_with('\0') {
                 write!(f, "{arg},")?;
             }
         }
         write!(f, "], envs: [")?;
         for env in &self.envp {
-            let env = core::str::from_utf8(env).unwrap_or_default().trim();
+            let env = core::str::from_utf8(env)
+                .unwrap_or_default()
+                .trim_end_matches('\0')
+                .trim();
             if !env.is_empty() && !env.starts_with('\0') {
                 write!(f, "{env},")?;
             }

@@ -88,7 +88,7 @@ Receive a report of per-PID I/O usage over time, such as disk reads/writes and i
 \fB-v, --verbose\fP
 Verbose output.
 .TP
-\fB-V, --Version\fP
+\fB-V, --version\fP
 Print version
 .TP
 \fB-z, --zsh\fP

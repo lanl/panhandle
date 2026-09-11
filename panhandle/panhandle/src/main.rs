@@ -1013,6 +1013,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.cpu,
         args.gpu,
         args.io,
+        args.bound,
         args.syscalls.is_some(),
     ) {
         // this is the main program functionality

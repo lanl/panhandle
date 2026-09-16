@@ -35,12 +35,14 @@ mod monitor_io_usage;
 mod monitor_network_usage;
 mod procfs_helpers;
 mod unit_tests;
+mod monitor_process_bounds;
 use helpers::*;
 use input_configs::*;
 use monitor_cpu_usage::*;
 use monitor_gpu_usage::*;
 use monitor_io_usage::*;
 use monitor_network_usage::*;
+use monitor_process_bounds::*;
 use panhandle_common::*;
 
 /// Validate every user-controlled numeric/list argument up front, before the
@@ -628,6 +630,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
         }));
+    }
+
+    // set up process bound monitoring
+    let mut bound_handle:  Option<JoinHandle<()>> = None;
+    if args.bound {
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+        let verbose_mode = args.verbose;
+        let client = Client::new();
+
+        bound_handle = Some(tokio::task::spawn(async move {
+            loop {
+                monitor_process_bounds(
+                    &args.json,
+                    &http_bool,
+                    &syslog_bool,
+                    &verbose_mode,
+                    &host,
+                    &url,
+                    &syslog,
+                    &client,
+                    &args.debug,
+                )
+                .await;
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
+            }
+        }))
     }
 
     // process syscall blocking

@@ -28,10 +28,10 @@ pub fn format_bound_prose(
         let parent_comm_val = parent_comm.unwrap_or("unknown");
         format!(
             "Type: bound, PID: {}, Comm: {}, Parent PID: {}, Parent Comm: {}, \
-            CPU Wait Count: {}, CPU Wait Time: {}ms, Voluntary Switches: {}, Nonvoluntary Switches: {}, \
-            BlkIO Wait Count: {}, BlkIO Wait Time: {}ms, \
-            Swapin Wait Count: {}, Swapin Wait Time: {}ms, \
-            Page Wait Count: {}, Page Wait Time: {}ms",
+            CPU Wait Count: {}, CPU Wait Time MS: {}, Voluntary Ctx Switches: {}, Nonvoluntary Ctx Switches: {}, \
+            BlkIO Wait Count: {}, BlkIO Wait Time MS: {}, \
+            Swapin Wait Count: {}, Swapin Wait Time MS: {}, \
+            Page Wait Count: {}, Page Wait Time MS: {}",
             pid, comm, ppid_val, parent_comm_val,
             cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
             blkio_wait_count, blkio_wait_time_ms,
@@ -41,7 +41,7 @@ pub fn format_bound_prose(
     } else {
         format!(
             "Type: bound, PID: {}, Comm: {}, \
-            CPU Wait Count: {}, CPU Wait Time MS: {}, Voluntary Switches: {}, Nonvoluntary Switches: {}, \
+            CPU Wait Count: {}, CPU Wait Time MS: {}, Voluntary Ctx Switches: {}, Nonvoluntary Ctx Switches: {}, \
             BlkIO Wait Count: {}, BlkIO Wait Time MS: {}, \
             Swapin Wait Count: {}, Swapin Wait Time MS: {}, \
             Page Wait Count: {}, Page Wait Time MS: {}",
@@ -77,7 +77,7 @@ pub fn format_bound_json(
         let parent_comm_val = parent_comm.unwrap_or("unknown");
         format!(
             "{{\"Type\": \"bound\", \"PID\": {}, \"Comm\": {}, \"PPID\": {}, \"Parent_Comm\": {}, \
-            \"CPU_Wait_Count\": {}, \"CPU_Wait_Time_MS\": {}, \"Voluntary_Switches\": {}, \"Nonvoluntary_Switches\": {}, \
+            \"CPU_Wait_Count\": {}, \"CPU_Wait_Time_MS\": {}, \"Voluntary_Ctx_Switches\": {}, \"Nonvoluntary_Ctx_Switches\": {}, \
             \"BlkIO_Wait_Count\": {}, \"BlkIO_Wait_Time_MS\": {}, \
             \"Swapin_Wait_Count\": {}, \"Swapin_Wait_Time_MS\": {}, \
             \"Page_Wait_Count\": {}, \"Page_Wait_Time_MS\": {}}}",
@@ -93,7 +93,7 @@ pub fn format_bound_json(
     } else {
         format!(
             "{{\"Type\": \"bound\", \"PID\": {}, \"Comm\": {}, \
-            \"CPU_Wait_Count\": {}, \"CPU_Wait_Time_MS\": {}, \"Voluntary_Switches\": {}, \"Nonvoluntary_Switches\": {}, \
+            \"CPU_Wait_Count\": {}, \"CPU_Wait_Time_MS\": {}, \"Voluntary_Ctx_Switches\": {}, \"Nonvoluntary_Ctx_Switches\": {}, \
             \"BlkIO_Wait_Count\": {}, \"BlkIO_Wait_Time_MS\": {}, \
             \"Swapin_Wait_Count\": {}, \"Swapin_Wait_Time_MS\": {}, \
             \"Page_Wait_Count\": {}, \"Page_Wait_Time_MS\": {}}}",

@@ -1,4 +1,4 @@
-use linux_taskstats::{self, Client};
+use linux_taskstats::self;
 use procfs::process::all_processes;
 use reqwest::Client as reqwest_Client;
 use std::sync::Arc;
@@ -41,10 +41,10 @@ pub fn format_bound_prose(
     } else {
         format!(
             "Type: bound, PID: {}, Comm: {}, \
-            CPU Wait Count: {}, CPU Wait Time: {}ms, Voluntary Switches: {}, Nonvoluntary Switches: {}, \
-            BlkIO Wait Count: {}, BlkIO Wait Time: {}ms, \
-            Swapin Wait Count: {}, Swapin Wait Time: {}ms, \
-            Page Wait Count: {}, Page Wait Time: {}ms",
+            CPU Wait Count: {}, CPU Wait Time MS: {}, Voluntary Switches: {}, Nonvoluntary Switches: {}, \
+            BlkIO Wait Count: {}, BlkIO Wait Time MS: {}, \
+            Swapin Wait Count: {}, Swapin Wait Time MS: {}, \
+            Page Wait Count: {}, Page Wait Time MS: {}",
             pid, comm,
             cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
             blkio_wait_count, blkio_wait_time_ms,

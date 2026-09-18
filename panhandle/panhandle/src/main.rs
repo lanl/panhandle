@@ -1169,5 +1169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(handle_ref) = gpu_handle {
         handle_ref.abort();
     }
+    if let Some(handle_ref) = bound_handle {
+        handle_ref.abort();
+    }
     Ok(())
 }

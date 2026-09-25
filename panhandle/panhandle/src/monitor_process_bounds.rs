@@ -1,9 +1,23 @@
-use linux_taskstats::self;
+use aya::maps::{HashMap as AyaHashMap, MapData};
+use linux_taskstats::{self};
 use procfs::process::all_processes;
 use reqwest::Client as reqwest_Client;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::helpers::*;
+
+// matches the ebpf side struct for monitoring if processes are network bound
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct NetWaitStat {
+    pub count: u64,
+    pub total_ns: u64,
+}
+
+// plain old data requirement to access the keys of the hashmap
+unsafe impl aya::Pod for NetWaitStat {}
+
+pub type SharedNetWaitMap = Arc<Mutex<AyaHashMap<MapData, u32, NetWaitStat>>>;
 
 /// Plain-text rendering of a per-process delay/taskstats entry.
 pub fn format_bound_prose(
@@ -22,6 +36,8 @@ pub fn format_bound_prose(
     swapin_wait_time_ms: u64,
     page_wait_count: u64,
     page_wait_time_ms: u64,
+    network_wait_count: u64,
+    network_wait_time_ms: u64,
 ) -> String {
     if verbose {
         let ppid_val = ppid.unwrap_or(0);
@@ -31,12 +47,14 @@ pub fn format_bound_prose(
             CPU Wait Count: {}, CPU Wait Time MS: {}, Voluntary Ctx Switches: {}, Nonvoluntary Ctx Switches: {}, \
             BlkIO Wait Count: {}, BlkIO Wait Time MS: {}, \
             Swapin Wait Count: {}, Swapin Wait Time MS: {}, \
-            Page Wait Count: {}, Page Wait Time MS: {}",
+            Page Wait Count: {}, Page Wait Time MS: {}, \
+            Network Wait Count: {}, Network Wait Time MS: {}",
             pid, comm, ppid_val, parent_comm_val,
             cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
             blkio_wait_count, blkio_wait_time_ms,
             swapin_wait_count, swapin_wait_time_ms,
-            page_wait_count, page_wait_time_ms
+            page_wait_count, page_wait_time_ms,
+            network_wait_count, network_wait_time_ms
         )
     } else {
         format!(
@@ -44,12 +62,14 @@ pub fn format_bound_prose(
             CPU Wait Count: {}, CPU Wait Time MS: {}, Voluntary Ctx Switches: {}, Nonvoluntary Ctx Switches: {}, \
             BlkIO Wait Count: {}, BlkIO Wait Time MS: {}, \
             Swapin Wait Count: {}, Swapin Wait Time MS: {}, \
-            Page Wait Count: {}, Page Wait Time MS: {}",
+            Page Wait Count: {}, Page Wait Time MS: {}, \
+            Network Wait Count: {}, Network Wait Time MS: {}",
             pid, comm,
             cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
             blkio_wait_count, blkio_wait_time_ms,
             swapin_wait_count, swapin_wait_time_ms,
-            page_wait_count, page_wait_time_ms
+            page_wait_count, page_wait_time_ms,
+            network_wait_count, network_wait_time_ms
         )
     }
 }
@@ -71,6 +91,8 @@ pub fn format_bound_json(
     swapin_wait_time_ms: u64,
     page_wait_count: u64,
     page_wait_time_ms: u64,
+    network_wait_count: u64,
+    network_wait_time_ms: u64,
 ) -> String {
     if verbose {
         let ppid_val = ppid.unwrap_or(0);
@@ -80,7 +102,8 @@ pub fn format_bound_json(
             \"CPU_Wait_Count\": {}, \"CPU_Wait_Time_MS\": {}, \"Voluntary_Ctx_Switches\": {}, \"Nonvoluntary_Ctx_Switches\": {}, \
             \"BlkIO_Wait_Count\": {}, \"BlkIO_Wait_Time_MS\": {}, \
             \"Swapin_Wait_Count\": {}, \"Swapin_Wait_Time_MS\": {}, \
-            \"Page_Wait_Count\": {}, \"Page_Wait_Time_MS\": {}}}",
+            \"Page_Wait_Count\": {}, \"Page_Wait_Time_MS\": {}, \
+            \"Network_Wait_Count\": {}, \"Network_Wait_Time_MS\": {}}}",
             pid,
             json_quoted(comm),
             ppid_val,
@@ -88,7 +111,8 @@ pub fn format_bound_json(
             cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
             blkio_wait_count, blkio_wait_time_ms,
             swapin_wait_count, swapin_wait_time_ms,
-            page_wait_count, page_wait_time_ms
+            page_wait_count, page_wait_time_ms,
+            network_wait_count, network_wait_time_ms
         )
     } else {
         format!(
@@ -96,13 +120,15 @@ pub fn format_bound_json(
             \"CPU_Wait_Count\": {}, \"CPU_Wait_Time_MS\": {}, \"Voluntary_Ctx_Switches\": {}, \"Nonvoluntary_Ctx_Switches\": {}, \
             \"BlkIO_Wait_Count\": {}, \"BlkIO_Wait_Time_MS\": {}, \
             \"Swapin_Wait_Count\": {}, \"Swapin_Wait_Time_MS\": {}, \
-            \"Page_Wait_Count\": {}, \"Page_Wait_Time_MS\": {}}}",
+            \"Page_Wait_Count\": {}, \"Page_Wait_Time_MS\": {}, \
+            \"Network_Wait_Count\": {}, \"Network_Wait_Time_MS\": {}}}",
             pid,
             json_quoted(comm),
             cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
             blkio_wait_count, blkio_wait_time_ms,
             swapin_wait_count, swapin_wait_time_ms,
-            page_wait_count, page_wait_time_ms
+            page_wait_count, page_wait_time_ms,
+            network_wait_count, network_wait_time_ms
         )
     }
 }
@@ -117,8 +143,14 @@ pub async fn monitor_process_bounds(
     syslog_address: &Arc<String>,
     client: &reqwest_Client,
     debug: &bool,
+    net_wait: &SharedNetWaitMap,
 ) {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *use_json, *debug);
+
+    // Track which pids we actually see this cycle so we can prune NET_WAIT of
+    // entries for pids that have exited - otherwise the map grows unboundedly,
+    // just like the SharedNetStats accumulator in network.rs.
+    let mut live_pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
     if let Ok(procs) = all_processes() {
         for proc_res in procs.flatten() {
@@ -127,6 +159,7 @@ pub async fn monitor_process_bounds(
                     if let Ok(bound_stats) = bound_client.pid_stats(stat.pid as u32) {
                         let pid = stat.pid as u32;
                         let comm = stat.comm.clone();
+                        live_pids.insert(pid);
 
                         // Retrieve parent process info only if verbose flag is set
                         let (ppid, parent_comm) = if *verbose {
@@ -139,26 +172,38 @@ pub async fn monitor_process_bounds(
                         };
 
                         // get required structs from taskstats
-                        let delays = bound_stats.delays; // primary source to see bound stats; information relating to blocking/waiting
-                        let ctx_switches = bound_stats.ctx_switches; // good for seeing cpu hangups involving context switches
+                        let delays = bound_stats.delays;
+                        let ctx_switches = bound_stats.ctx_switches;
 
                         // CPU bound indicators
-                        let cpu_wait_count = delays.cpu.count; // number of delay values recorded
-                        let cpu_wait_time_ms = delays.cpu.delay_total.as_millis() as u64; // cumulative total delay
-                        let voluntary_switches = ctx_switches.voluntary; // total amount of voluntary ctx switches
-                        let nonvoluntary_switches = ctx_switches.non_voluntary; // total amount of nonvoluntary ctx switches
+                        let cpu_wait_count = delays.cpu.count;
+                        let cpu_wait_time_ms = delays.cpu.delay_total.as_millis() as u64;
+                        let voluntary_switches = ctx_switches.voluntary;
+                        let nonvoluntary_switches = ctx_switches.non_voluntary;
 
                         // synchronous block I/O bound indicators
                         let blkio_wait_count = delays.blkio.count;
                         let blkio_wait_time_ms = delays.blkio.delay_total.as_millis() as u64;
 
-                        // page fault delays, also I/O bound indicators (swap in only)
+                        // swap-in delays
                         let swapin_wait_count = delays.swapin.count;
                         let swapin_wait_time_ms = delays.swapin.delay_total.as_millis() as u64;
 
-                        // memory bound indicators: delay waiting for memory reclaim
+                        // memory bound indicators
                         let page_wait_count = delays.freepages.count;
                         let page_wait_time_ms = delays.freepages.delay_total.as_millis() as u64;
+
+                        // network bound indicators, pulled from the NET_WAIT eBPF map
+                        // populated by the tcp_recvmsg kprobe/kretprobe pair. Cumulative
+                        // since the probes were attached, same as the taskstats counters
+                        // above - no reset needed on our end.
+                        let (network_wait_count, network_wait_time_ms) = {
+                            let map = net_wait.lock().unwrap();
+                            match map.get(&pid, 0) {
+                                Ok(stat) => (stat.count, stat.total_ns / 1_000_000),
+                                Err(_) => (0, 0),
+                            }
+                        };
 
                         let plain_string = if needs_plain {
                             format_bound_prose(
@@ -177,6 +222,8 @@ pub async fn monitor_process_bounds(
                                 swapin_wait_time_ms,
                                 page_wait_count,
                                 page_wait_time_ms,
+                                network_wait_count,
+                                network_wait_time_ms,
                             )
                         } else {
                             String::new()
@@ -199,6 +246,8 @@ pub async fn monitor_process_bounds(
                                 swapin_wait_time_ms,
                                 page_wait_count,
                                 page_wait_time_ms,
+                                network_wait_count,
+                                network_wait_time_ms,
                             )
                         } else {
                             String::new()
@@ -220,6 +269,19 @@ pub async fn monitor_process_bounds(
                     }
                 }
             }
+        }
+    }
+
+    // Prune NET_WAIT of pids we didn't see this cycle (i.e. they've exited).
+    {
+        let mut map = net_wait.lock().unwrap();
+        let stale: Vec<u32> = map
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|pid| !live_pids.contains(pid))
+            .collect();
+        for pid in stale {
+            let _ = map.remove(&pid);
         }
     }
 }

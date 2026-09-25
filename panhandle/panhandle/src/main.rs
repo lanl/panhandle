@@ -5,12 +5,13 @@ use std::{
     path::PathBuf,
     process,
     sync::Arc,
+    sync::Mutex
 };
 
 use aya::{
     Btf,
     maps::{HashMap, RingBuf},
-    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
+    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope, KProbe},
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
@@ -18,10 +19,7 @@ use machine_info::Machine;
 use reqwest::Client;
 use simplelog::*;
 use tokio::{
-    io::{Interest, unix::AsyncFd},
-    signal,
-    task::JoinHandle,
-    time::{Duration, sleep},
+    io::{Interest, unix::AsyncFd}, signal, task::JoinHandle, time::{Duration, sleep},
 };
 use uzers::get_current_uid;
 
@@ -635,11 +633,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // set up process bound monitoring
     let mut bound_handle:  Option<JoinHandle<()>> = None;
     if args.bound {
+        let program: &mut KProbe = ebpf
+            .program_mut("tcp_recvmsg_entry")
+            .ok_or("eBPF program 'tcp_recvmsg_entry' not found - binary/eBPF build mismatch?")?
+            .try_into()?;
+        program.load()?;
+        program.attach("tcp_recvmsg", 0).inspect_err(|e| {
+            error!("failed to attach kprobe 'tcp_recvmsg_entry' to tcp_recvmsg: {}", e);
+        })?;
+        debug!("attached eBPF kprobe 'tcp_recvmsg_entry' -> tcp_recvmsg");
+    
+
+        // Attach kretprobe on return from tcp_recvmsg to compute elapsed wait time and
+        // fold it into NET_WAIT.
+        let program: &mut KProbe = ebpf
+            .program_mut("tcp_recvmsg_exit")
+            .ok_or("eBPF program 'tcp_recvmsg_exit' not found - binary/eBPF build mismatch?")?
+            .try_into()?;
+        program.load()?;
+        program.attach("tcp_recvmsg", 0).inspect_err(|e| {
+            error!("failed to attach kretprobe 'tcp_recvmsg_exit' to tcp_recvmsg: {}", e);
+        })?;
+        debug!("attached eBPF kretprobe 'tcp_recvmsg_exit' -> tcp_recvmsg");
+    
+
+        // Pull the NET_WAIT map out and wrap it so it can be shared with the polling
+        // task below. Wrapped in Arc<Mutex<_>> purely for Send/Sync convenience across
+        // the tokio task boundary - the map itself is only ever touched from that one task.
+        let net_wait_map = ebpf.take_map("NET_WAIT").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "NET_WAIT"
+            )
+        })?;
+        let net_wait: aya::maps::HashMap<_, u32, NetWaitStat> =
+            aya::maps::HashMap::try_from(net_wait_map)?;
+        let net_wait = Arc::new(Mutex::new(net_wait));
+
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
         let verbose_mode = args.verbose;
         let client = Client::new();
+        let net_wait_for_task = net_wait.clone();
 
         bound_handle = Some(tokio::task::spawn(async move {
             loop {
@@ -653,6 +689,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &syslog,
                     &client,
                     &args.debug,
+                    &net_wait_for_task,
                 )
                 .await;
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;

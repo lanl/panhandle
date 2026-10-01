@@ -4,14 +4,13 @@ use std::{
     panic,
     path::PathBuf,
     process,
-    sync::Arc,
-    sync::Mutex
+    sync::{Arc, Mutex},
 };
 
 use aya::{
     Btf,
     maps::{HashMap, RingBuf},
-    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope, KProbe},
+    programs::{BtfTracePoint, KProbe, TracePoint, UProbe, uprobe::UProbeScope},
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
@@ -19,7 +18,10 @@ use machine_info::Machine;
 use reqwest::Client;
 use simplelog::*;
 use tokio::{
-    io::{Interest, unix::AsyncFd}, signal, task::JoinHandle, time::{Duration, sleep},
+    io::{Interest, unix::AsyncFd},
+    signal,
+    task::JoinHandle,
+    time::{Duration, sleep},
 };
 use uzers::get_current_uid;
 
@@ -31,9 +33,9 @@ mod monitor_cpu_usage;
 mod monitor_gpu_usage;
 mod monitor_io_usage;
 mod monitor_network_usage;
+mod monitor_process_bounds;
 mod procfs_helpers;
 mod unit_tests;
-mod monitor_process_bounds;
 use helpers::*;
 use input_configs::*;
 use monitor_cpu_usage::*;
@@ -631,7 +633,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // set up process bound monitoring
-    let mut bound_handle:  Option<JoinHandle<()>> = None;
+    let mut bound_handle: Option<JoinHandle<()>> = None;
     if args.bound {
         let program: &mut KProbe = ebpf
             .program_mut("tcp_recvmsg_entry")
@@ -639,10 +641,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .try_into()?;
         program.load()?;
         program.attach("tcp_recvmsg", 0).inspect_err(|e| {
-            error!("failed to attach kprobe 'tcp_recvmsg_entry' to tcp_recvmsg: {}", e);
+            error!(
+                "failed to attach kprobe 'tcp_recvmsg_entry' to tcp_recvmsg: {}",
+                e
+            );
         })?;
         debug!("attached eBPF kprobe 'tcp_recvmsg_entry' -> tcp_recvmsg");
-    
 
         // Attach kretprobe on return from tcp_recvmsg to compute elapsed wait time and
         // fold it into NET_WAIT.
@@ -652,10 +656,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .try_into()?;
         program.load()?;
         program.attach("tcp_recvmsg", 0).inspect_err(|e| {
-            error!("failed to attach kretprobe 'tcp_recvmsg_exit' to tcp_recvmsg: {}", e);
+            error!(
+                "failed to attach kretprobe 'tcp_recvmsg_exit' to tcp_recvmsg: {}",
+                e
+            );
         })?;
         debug!("attached eBPF kretprobe 'tcp_recvmsg_exit' -> tcp_recvmsg");
-    
 
         // Pull the NET_WAIT map out and wrap it so it can be shared with the polling
         // task below. Wrapped in Arc<Mutex<_>> purely for Send/Sync convenience across

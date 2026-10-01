@@ -119,7 +119,7 @@ pub struct RawArgs {
     #[serde(default)]
     pub io: bool,
 
-    /// Receive a report of what each process is bound by, network, memory, io, and cpu.
+    /// Receive a report of what processes are bound by through per process delay counts and delay times. Includes memory, cpu, io, and network.
     #[arg(long, global = true)]
     #[serde(default)]
     pub bound: bool,

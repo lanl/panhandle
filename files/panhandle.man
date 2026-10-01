@@ -86,7 +86,7 @@ Receive a report of per-PID memory usage over time, such as RSS and stack usage.
 Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
 .TP
 \fB--bound\fP
-Receive a report of what processes are bound by. Memory, cpu, io, network.
+Receive a report of what processes are bound by through per process delay counts and delay times. Includes memory, cpu, io, and network.
 .TP
 \fB-v, --verbose\fP
 Verbose output.

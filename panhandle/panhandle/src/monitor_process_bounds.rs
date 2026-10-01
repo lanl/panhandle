@@ -1,8 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use aya::maps::{HashMap as AyaHashMap, MapData};
 use linux_taskstats::{self};
 use procfs::process::all_processes;
 use reqwest::Client as reqwest_Client;
-use std::sync::{Arc, Mutex};
 
 use crate::helpers::*;
 
@@ -49,12 +50,22 @@ pub fn format_bound_prose(
             Swapin Wait Count: {}, Swapin Wait Time MS: {}, \
             Page Wait Count: {}, Page Wait Time MS: {}, \
             Network Wait Count: {}, Network Wait Time MS: {}",
-            pid, comm, ppid_val, parent_comm_val,
-            cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
-            blkio_wait_count, blkio_wait_time_ms,
-            swapin_wait_count, swapin_wait_time_ms,
-            page_wait_count, page_wait_time_ms,
-            network_wait_count, network_wait_time_ms
+            pid,
+            comm,
+            ppid_val,
+            parent_comm_val,
+            cpu_wait_count,
+            cpu_wait_time_ms,
+            voluntary_switches,
+            nonvoluntary_switches,
+            blkio_wait_count,
+            blkio_wait_time_ms,
+            swapin_wait_count,
+            swapin_wait_time_ms,
+            page_wait_count,
+            page_wait_time_ms,
+            network_wait_count,
+            network_wait_time_ms
         )
     } else {
         format!(
@@ -64,12 +75,20 @@ pub fn format_bound_prose(
             Swapin Wait Count: {}, Swapin Wait Time MS: {}, \
             Page Wait Count: {}, Page Wait Time MS: {}, \
             Network Wait Count: {}, Network Wait Time MS: {}",
-            pid, comm,
-            cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
-            blkio_wait_count, blkio_wait_time_ms,
-            swapin_wait_count, swapin_wait_time_ms,
-            page_wait_count, page_wait_time_ms,
-            network_wait_count, network_wait_time_ms
+            pid,
+            comm,
+            cpu_wait_count,
+            cpu_wait_time_ms,
+            voluntary_switches,
+            nonvoluntary_switches,
+            blkio_wait_count,
+            blkio_wait_time_ms,
+            swapin_wait_count,
+            swapin_wait_time_ms,
+            page_wait_count,
+            page_wait_time_ms,
+            network_wait_count,
+            network_wait_time_ms
         )
     }
 }
@@ -108,11 +127,18 @@ pub fn format_bound_json(
             json_quoted(comm),
             ppid_val,
             json_quoted(parent_comm_val),
-            cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
-            blkio_wait_count, blkio_wait_time_ms,
-            swapin_wait_count, swapin_wait_time_ms,
-            page_wait_count, page_wait_time_ms,
-            network_wait_count, network_wait_time_ms
+            cpu_wait_count,
+            cpu_wait_time_ms,
+            voluntary_switches,
+            nonvoluntary_switches,
+            blkio_wait_count,
+            blkio_wait_time_ms,
+            swapin_wait_count,
+            swapin_wait_time_ms,
+            page_wait_count,
+            page_wait_time_ms,
+            network_wait_count,
+            network_wait_time_ms
         )
     } else {
         format!(
@@ -124,11 +150,18 @@ pub fn format_bound_json(
             \"Network_Wait_Count\": {}, \"Network_Wait_Time_MS\": {}}}",
             pid,
             json_quoted(comm),
-            cpu_wait_count, cpu_wait_time_ms, voluntary_switches, nonvoluntary_switches,
-            blkio_wait_count, blkio_wait_time_ms,
-            swapin_wait_count, swapin_wait_time_ms,
-            page_wait_count, page_wait_time_ms,
-            network_wait_count, network_wait_time_ms
+            cpu_wait_count,
+            cpu_wait_time_ms,
+            voluntary_switches,
+            nonvoluntary_switches,
+            blkio_wait_count,
+            blkio_wait_time_ms,
+            swapin_wait_count,
+            swapin_wait_time_ms,
+            page_wait_count,
+            page_wait_time_ms,
+            network_wait_count,
+            network_wait_time_ms
         )
     }
 }
@@ -154,120 +187,119 @@ pub async fn monitor_process_bounds(
 
     if let Ok(procs) = all_processes() {
         for proc_res in procs.flatten() {
-            if let Ok(stat) = proc_res.stat() {
-                if let Ok(bound_client) = linux_taskstats::Client::open() {
-                    if let Ok(bound_stats) = bound_client.pid_stats(stat.pid as u32) {
-                        let pid = stat.pid as u32;
-                        let comm = stat.comm.clone();
-                        live_pids.insert(pid);
+            if let Ok(stat) = proc_res.stat()
+                && let Ok(bound_client) = linux_taskstats::Client::open()
+                && let Ok(bound_stats) = bound_client.pid_stats(stat.pid as u32)
+            {
+                let pid = stat.pid as u32;
+                let comm = stat.comm.clone();
+                live_pids.insert(pid);
 
-                        // Retrieve parent process info only if verbose flag is set
-                        let (ppid, parent_comm) = if *verbose {
-                            let parent_pid = stat.ppid as u32;
-                            let parent_name = get_process_name(parent_pid)
-                                .unwrap_or_else(|| "unknown".to_string());
-                            (Some(parent_pid), Some(parent_name))
-                        } else {
-                            (None, None)
-                        };
+                // Retrieve parent process info only if verbose flag is set
+                let (ppid, parent_comm) = if *verbose {
+                    let parent_pid = stat.ppid as u32;
+                    let parent_name =
+                        get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
+                    (Some(parent_pid), Some(parent_name))
+                } else {
+                    (None, None)
+                };
 
-                        // get required structs from taskstats
-                        let delays = bound_stats.delays;
-                        let ctx_switches = bound_stats.ctx_switches;
+                // get required structs from taskstats
+                let delays = bound_stats.delays;
+                let ctx_switches = bound_stats.ctx_switches;
 
-                        // CPU bound indicators
-                        let cpu_wait_count = delays.cpu.count;
-                        let cpu_wait_time_ms = delays.cpu.delay_total.as_millis() as u64;
-                        let voluntary_switches = ctx_switches.voluntary;
-                        let nonvoluntary_switches = ctx_switches.non_voluntary;
+                // CPU bound indicators
+                let cpu_wait_count = delays.cpu.count;
+                let cpu_wait_time_ms = delays.cpu.delay_total.as_millis() as u64;
+                let voluntary_switches = ctx_switches.voluntary;
+                let nonvoluntary_switches = ctx_switches.non_voluntary;
 
-                        // synchronous block I/O bound indicators
-                        let blkio_wait_count = delays.blkio.count;
-                        let blkio_wait_time_ms = delays.blkio.delay_total.as_millis() as u64;
+                // synchronous block I/O bound indicators
+                let blkio_wait_count = delays.blkio.count;
+                let blkio_wait_time_ms = delays.blkio.delay_total.as_millis() as u64;
 
-                        // swap-in delays
-                        let swapin_wait_count = delays.swapin.count;
-                        let swapin_wait_time_ms = delays.swapin.delay_total.as_millis() as u64;
+                // swap-in delays
+                let swapin_wait_count = delays.swapin.count;
+                let swapin_wait_time_ms = delays.swapin.delay_total.as_millis() as u64;
 
-                        // memory bound indicators
-                        let page_wait_count = delays.freepages.count;
-                        let page_wait_time_ms = delays.freepages.delay_total.as_millis() as u64;
+                // memory bound indicators
+                let page_wait_count = delays.freepages.count;
+                let page_wait_time_ms = delays.freepages.delay_total.as_millis() as u64;
 
-                        // network bound indicators, pulled from the NET_WAIT eBPF map
-                        // populated by the tcp_recvmsg kprobe/kretprobe pair. Cumulative
-                        // since the probes were attached, same as the taskstats counters
-                        // above - no reset needed on our end.
-                        let (network_wait_count, network_wait_time_ms) = {
-                            let map = net_wait.lock().unwrap();
-                            match map.get(&pid, 0) {
-                                Ok(stat) => (stat.count, stat.total_ns / 1_000_000),
-                                Err(_) => (0, 0),
-                            }
-                        };
-
-                        let plain_string = if needs_plain {
-                            format_bound_prose(
-                                *verbose,
-                                pid,
-                                &comm,
-                                ppid,
-                                parent_comm.as_deref(),
-                                cpu_wait_count,
-                                cpu_wait_time_ms,
-                                voluntary_switches,
-                                nonvoluntary_switches,
-                                blkio_wait_count,
-                                blkio_wait_time_ms,
-                                swapin_wait_count,
-                                swapin_wait_time_ms,
-                                page_wait_count,
-                                page_wait_time_ms,
-                                network_wait_count,
-                                network_wait_time_ms,
-                            )
-                        } else {
-                            String::new()
-                        };
-
-                        let json_string = if needs_json {
-                            format_bound_json(
-                                *verbose,
-                                pid,
-                                &comm,
-                                ppid,
-                                parent_comm.as_deref(),
-                                cpu_wait_count,
-                                cpu_wait_time_ms,
-                                voluntary_switches,
-                                nonvoluntary_switches,
-                                blkio_wait_count,
-                                blkio_wait_time_ms,
-                                swapin_wait_count,
-                                swapin_wait_time_ms,
-                                page_wait_count,
-                                page_wait_time_ms,
-                                network_wait_count,
-                                network_wait_time_ms,
-                            )
-                        } else {
-                            String::new()
-                        };
-
-                        output_message(
-                            http,
-                            syslog,
-                            hostname,
-                            syslog_address,
-                            global_url,
-                            use_json,
-                            &plain_string,
-                            &json_string,
-                            client,
-                            debug,
-                        )
-                        .await;
+                // network bound indicators, pulled from the NET_WAIT eBPF map
+                // populated by the tcp_recvmsg kprobe/kretprobe pair. Cumulative
+                // since the probes were attached, same as the taskstats counters
+                // above - no reset needed on our end.
+                let (network_wait_count, network_wait_time_ms) = {
+                    let map = net_wait.lock().unwrap();
+                    match map.get(&pid, 0) {
+                        Ok(stat) => (stat.count, stat.total_ns / 1_000_000),
+                        Err(_) => (0, 0),
                     }
-                }
+                };
+
+                let plain_string = if needs_plain {
+                    format_bound_prose(
+                        *verbose,
+                        pid,
+                        &comm,
+                        ppid,
+                        parent_comm.as_deref(),
+                        cpu_wait_count,
+                        cpu_wait_time_ms,
+                        voluntary_switches,
+                        nonvoluntary_switches,
+                        blkio_wait_count,
+                        blkio_wait_time_ms,
+                        swapin_wait_count,
+                        swapin_wait_time_ms,
+                        page_wait_count,
+                        page_wait_time_ms,
+                        network_wait_count,
+                        network_wait_time_ms,
+                    )
+                } else {
+                    String::new()
+                };
+
+                let json_string = if needs_json {
+                    format_bound_json(
+                        *verbose,
+                        pid,
+                        &comm,
+                        ppid,
+                        parent_comm.as_deref(),
+                        cpu_wait_count,
+                        cpu_wait_time_ms,
+                        voluntary_switches,
+                        nonvoluntary_switches,
+                        blkio_wait_count,
+                        blkio_wait_time_ms,
+                        swapin_wait_count,
+                        swapin_wait_time_ms,
+                        page_wait_count,
+                        page_wait_time_ms,
+                        network_wait_count,
+                        network_wait_time_ms,
+                    )
+                } else {
+                    String::new()
+                };
+
+                output_message(
+                    http,
+                    syslog,
+                    hostname,
+                    syslog_address,
+                    global_url,
+                    use_json,
+                    &plain_string,
+                    &json_string,
+                    client,
+                    debug,
+                )
+                .await;
             }
         }
     }

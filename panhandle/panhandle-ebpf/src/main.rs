@@ -16,10 +16,10 @@ use aya_ebpf::{
 use aya_log_ebpf::{debug, warn};
 use panhandle_common::*;
 mod blocker;
+mod network_bound;
 mod shell_entry;
 mod socket;
 mod vmlinux;
-mod network_bound;
 
 // 1 MiB: ExecveEvent is ~11KB, so this comfortably buffers bursts of execve activity
 #[map(name = "panhandle_execve_events")]

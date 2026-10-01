@@ -16,6 +16,7 @@ use aya_ebpf::{
 use aya_log_ebpf::{debug, warn};
 use panhandle_common::*;
 mod blocker;
+mod network_bound;
 mod shell_entry;
 mod socket;
 mod vmlinux;

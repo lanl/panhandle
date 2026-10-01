@@ -7,8 +7,10 @@
 //!   (validate_args_or_exit in main.rs runs all of these before the root
 //!   check specifically so they're reachable here)
 
-use std::fs;
-use std::process::{Command, Stdio};
+use std::{
+    fs,
+    process::{Command, Stdio},
+};
 
 fn panhandle_bin() -> Command {
     let bin_path = env!("CARGO_BIN_EXE_panhandle");

@@ -57,7 +57,7 @@ jobs:
         package: ["panhandle"]
 
     container:
-      image:${{ matrix.config.os_image }}
+      image: ${{ matrix.config.os_image }}
 
     steps:
       - name: Install Base Tools (Container Environment)
@@ -89,8 +89,6 @@ jobs:
       - name: Install x86_64 packages (Container Environment)
         if: matrix.config.architecture == 'x86_64'
         run: |
-          # clang-devel provides libclang, needed by bindgen (via
-          # linux-taskstats) at build time.
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
               dnf install -y gcc binutils libgcc cross-gcc-common clang-devel
@@ -116,7 +114,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
-          rustup target add${{ matrix.config.architecture }}-unknown-linux-gnu
+          rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
           success=0
@@ -125,7 +123,7 @@ jobs:
               success=1
               break
             fi
-            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            echo "bpf-linker binstall attempt$i failed, retrying in 5s..."
             sleep 5
           done
           if [ "$success" -ne 1 ]; then
@@ -137,22 +135,22 @@ jobs:
         shell: sh
         run: |
           . "$HOME/.cargo/env"
-          cd${{ matrix.package }}
+          cd ${{ matrix.package }}
           export CARGO_TARGET_DIR="./target/${{ matrix.config.architecture }}-unknown-linux-gnu"
-          cargo build --target${{ matrix.config.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
-          echo$CARGO_TARGET_DIR
-          ls -al $CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
-          strip -s $CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
-          cargo generate-rpm --package ${{ matrix.package }} --target${{ matrix.config.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
+          cargo build --target ${{ matrix.config.architecture }}-unknown-linux-gnu --bin${{ matrix.package }} --release --all-features
+          echo $CARGO_TARGET_DIR
+          ls -al$CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
+          strip -s$CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
+          cargo generate-rpm --package${{ matrix.package }} --target ${{ matrix.config.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name:${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.config.shortname }}.${{ matrix.config.architecture }}.rpm
+          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.config.shortname }}.${{ matrix.config.architecture }}.rpm
           path: rpmbuild/${{ matrix.config.shortname }}
 
   deb-build:
-    runs-on:${{ matrix.config.runs_on }}
+    runs-on: ${{ matrix.config.runs_on }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -176,8 +174,6 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          # libclang-dev provides libclang, needed by bindgen (via
-          # linux-taskstats) at build time.
           sudo apt-get install -y pkg-config libssl-dev libclang-dev clang
 
       - uses: actions/checkout@v7
@@ -186,7 +182,7 @@ jobs:
         id: get_version
         run: |
           VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
-          echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "PACKAGE_VERSION=$VERSION" >>$GITHUB_ENV
           echo "$PACKAGE_VERSION"
 
       - name: Install Rust
@@ -202,7 +198,7 @@ jobs:
               success=1
               break
             fi
-            echo "bpf-linker binstall attempt$i failed, retrying in 5s..."
+            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
             sleep 5
           done
           if [ "$success" -ne 1 ]; then
@@ -213,8 +209,8 @@ jobs:
       - name: Build .deb
         run: |
           . "$HOME/.cargo/env"
-          cd ${{ matrix.package }}
-          cargo deb --package${{ matrix.package }} --all-features
+          cd${{ matrix.package }}
+          cargo deb --package ${{ matrix.package }} --all-features
           mkdir -p ../debbuild/${{ matrix.config.shortname }}
           cp target/debian/*.deb ../debbuild/${{ matrix.config.shortname }}/
 

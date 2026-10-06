@@ -66,24 +66,25 @@ jobs:
               dnf install -y openssl-devel pkgconf-pkg-config bash openssl
           fi
           if command -v zypper &> /dev/null; then
+              SUSEConnect -p sle-module-development-tools/15.5/x86_64 || true
+              SUSEConnect -p sle-module-desktop-applications/15.5/x86_64 || true
+              zypper --non-interactive refresh
               zypper install -y libopenssl-3-devel openssl pkg-config bash
           fi
 
       - name: Install aarch64 packages (Container Environment)
         if: matrix.config.architecture == 'aarch64'
         run: |
-          # Runs on a native arm64 hosted runner, so this needs a native
-          # toolchain (not an aarch64 cross-compiler). llvm-devel/llvm-toolset
-          # are still required because bpf-linker has no prebuilt
-          # aarch64-unknown-linux-gnu binary and must be compiled from source.
-          # clang-devel provides libclang, needed by bindgen (via
-          # linux-taskstats) at build time.
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset clang-devel
+              dnf install -y gcc binutils libgcc glibc-devel clang clang-devel llvm llvm-devel llvm-libs
+              echo "LIBCLANG_PATH=$(llvm-config --libdir)" >>$GITHUB_ENV
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7 clang-devel
+              SUSEConnect -p PackageHub/15.5/aarch64 || true
+              zypper --non-interactive refresh
+              zypper install -y gcc gcc7 clang clang-devel llvm llvm-devel
+              echo "LIBCLANG_PATH=/usr/lib64" >> $GITHUB_ENV
           fi
 
       - name: Install x86_64 packages (Container Environment)
@@ -94,7 +95,7 @@ jobs:
               dnf install -y gcc binutils libgcc cross-gcc-common clang-devel
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7 clang-devel
+              zypper install -y gcc gcc7 clang-devel llvm-devel
           fi
 
       - uses: actions/checkout@v7
@@ -137,11 +138,11 @@ jobs:
           . "$HOME/.cargo/env"
           cd ${{ matrix.package }}
           export CARGO_TARGET_DIR="./target/${{ matrix.config.architecture }}-unknown-linux-gnu"
-          cargo build --target ${{ matrix.config.architecture }}-unknown-linux-gnu --bin${{ matrix.package }} --release --all-features
+          cargo build --target ${{ matrix.config.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
           echo $CARGO_TARGET_DIR
-          ls -al$CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
-          strip -s$CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
-          cargo generate-rpm --package${{ matrix.package }} --target ${{ matrix.config.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
+          ls -al "$CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle"
+          strip -s "$CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle"
+          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.config.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v7
@@ -209,7 +210,7 @@ jobs:
       - name: Build .deb
         run: |
           . "$HOME/.cargo/env"
-          cd${{ matrix.package }}
+          cd ${{ matrix.package }}
           cargo deb --package ${{ matrix.package }} --all-features
           mkdir -p ../debbuild/${{ matrix.config.shortname }}
           cp target/debian/*.deb ../debbuild/${{ matrix.config.shortname }}/

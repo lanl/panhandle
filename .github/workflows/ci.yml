@@ -1,5 +1,3 @@
-name: packaging
-
 on:
   pull_request:
     branches: [main]
@@ -18,11 +16,6 @@ jobs:
   cross-build:
     runs-on: ${{ matrix.config.runs_on }}
     timeout-minutes: 30
-    # GITHUB_PATH additions don't reliably merge with the container's base
-    # PATH for later docker execs in container jobs (a known GitHub Actions
-    # limitation - it can end up as *only* the appended entries, losing
-    # /usr/bin et al). Set PATH explicitly instead so every step's exec
-    # sees both the cargo bin dirs and a full standard PATH.
     env:
       PATH: /root/.cargo/bin:/github/home/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     strategy:
@@ -64,7 +57,7 @@ jobs:
         package: ["panhandle"]
 
     container:
-      image: ${{ matrix.config.os_image }}
+      image:${{ matrix.config.os_image }}
 
     steps:
       - name: Install Base Tools (Container Environment)
@@ -83,23 +76,27 @@ jobs:
           # toolchain (not an aarch64 cross-compiler). llvm-devel/llvm-toolset
           # are still required because bpf-linker has no prebuilt
           # aarch64-unknown-linux-gnu binary and must be compiled from source.
+          # clang-devel provides libclang, needed by bindgen (via
+          # linux-taskstats) at build time.
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset
+              dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset clang-devel
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7
+              zypper install -y gcc gcc7 clang-devel
           fi
 
       - name: Install x86_64 packages (Container Environment)
         if: matrix.config.architecture == 'x86_64'
         run: |
+          # clang-devel provides libclang, needed by bindgen (via
+          # linux-taskstats) at build time.
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc binutils libgcc cross-gcc-common
+              dnf install -y gcc binutils libgcc cross-gcc-common clang-devel
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7
+              zypper install -y gcc gcc7 clang-devel
           fi
 
       - uses: actions/checkout@v7
@@ -110,8 +107,8 @@ jobs:
         run: |
           VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
           RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/release = //; s/"//g')
-          echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "PACKAGE_RELEASE=$RELEASE" >> $GITHUB_ENV
+          echo "PACKAGE_VERSION=$VERSION" >>$GITHUB_ENV
+          echo "PACKAGE_RELEASE=$RELEASE" >>$GITHUB_ENV
           echo "$PACKAGE_VERSION-$PACKAGE_RELEASE"
 
       - name: Install Rust
@@ -119,7 +116,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source "$HOME/.cargo/env"
           rustup toolchain install nightly --component rust-src
-          rustup target add ${{ matrix.config.architecture }}-unknown-linux-gnu
+          rustup target add${{ matrix.config.architecture }}-unknown-linux-gnu
           cargo install cargo-generate-rpm
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
           success=0
@@ -140,36 +137,33 @@ jobs:
         shell: sh
         run: |
           . "$HOME/.cargo/env"
-          cd ${{ matrix.package }}
+          cd${{ matrix.package }}
           export CARGO_TARGET_DIR="./target/${{ matrix.config.architecture }}-unknown-linux-gnu"
-          cargo build --target ${{ matrix.config.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
-          echo $CARGO_TARGET_DIR
+          cargo build --target${{ matrix.config.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
+          echo$CARGO_TARGET_DIR
           ls -al $CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
           strip -s $CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
-          cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.config.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
+          cargo generate-rpm --package ${{ matrix.package }} --target${{ matrix.config.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.config.shortname }}.${{ matrix.config.architecture }}.rpm
+          name:${{ matrix.package }}-${{ env.PACKAGE_VERSION }}-${{ env.PACKAGE_RELEASE }}.${{ matrix.config.shortname }}.${{ matrix.config.architecture }}.rpm
           path: rpmbuild/${{ matrix.config.shortname }}
 
   deb-build:
-    runs-on: ${{ matrix.config.runs_on }}
+    runs-on:${{ matrix.config.runs_on }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         config:
-          # Ubuntu runs natively on these hosted runners (no container, no
-          # cross-compilation needed for either arch), unlike the RPM matrix above.
           - shortname: 'ubuntu24.04'
             runs_on: 'ubuntu-24.04'
             architecture: 'x86_64'
           - shortname: 'ubuntu24.04'
             runs_on: 'ubuntu-24.04-arm'
             architecture: 'aarch64'
-          # Public preview as of GA'd June 2026 - may see occasional instability.
           - shortname: 'ubuntu26.04'
             runs_on: 'ubuntu-26.04'
             architecture: 'x86_64'
@@ -182,7 +176,9 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
+          # libclang-dev provides libclang, needed by bindgen (via
+          # linux-taskstats) at build time.
+          sudo apt-get install -y pkg-config libssl-dev libclang-dev clang
 
       - uses: actions/checkout@v7
 
@@ -206,7 +202,7 @@ jobs:
               success=1
               break
             fi
-            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            echo "bpf-linker binstall attempt$i failed, retrying in 5s..."
             sleep 5
           done
           if [ "$success" -ne 1 ]; then
@@ -218,7 +214,7 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           cd ${{ matrix.package }}
-          cargo deb --package ${{ matrix.package }} --all-features
+          cargo deb --package${{ matrix.package }} --all-features
           mkdir -p ../debbuild/${{ matrix.config.shortname }}
           cp target/debian/*.deb ../debbuild/${{ matrix.config.shortname }}/
 

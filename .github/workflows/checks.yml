@@ -11,7 +11,7 @@ env:
   CARGO_TERM_COLOR: always
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group:${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,6 +22,10 @@ jobs:
       image: docker.io/rust
     steps:
       - uses: actions/checkout@v7
+      - name: Install libclang
+        run: |
+          apt-get update
+          apt-get install -y libclang-dev clang
       - name: Install toolchain
         run: |
           cd panhandle
@@ -36,7 +40,7 @@ jobs:
               success=1
               break
             fi
-            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            echo "bpf-linker binstall attempt$i failed, retrying in 5s..."
             sleep 5
           done
           if [ "$success" -ne 1 ]; then
@@ -62,6 +66,10 @@ jobs:
       image: docker.io/rust
     steps:
       - uses: actions/checkout@v7
+      - name: Install libclang
+        run: |
+          apt-get update
+          apt-get install -y libclang-dev clang
       - name: Install toolchain
         run: |
           cd panhandle
@@ -76,7 +84,7 @@ jobs:
               success=1
               break
             fi
-            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            echo "bpf-linker binstall attempt$i failed, retrying in 5s..."
             sleep 5
           done
           if [ "$success" -ne 1 ]; then
@@ -96,6 +104,10 @@ jobs:
       image: docker.io/rust
     steps:
       - uses: actions/checkout@v7
+      - name: Install libclang
+        run: |
+          apt-get update
+          apt-get install -y libclang-dev clang
       - name: Install toolchain & build
         run: |
           cd panhandle
@@ -110,7 +122,7 @@ jobs:
               success=1
               break
             fi
-            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            echo "bpf-linker binstall attempt$i failed, retrying in 5s..."
             sleep 5
           done
           if [ "$success" -ne 1 ]; then
@@ -147,6 +159,10 @@ jobs:
       image: docker.io/rust
     steps:
       - uses: actions/checkout@v7
+      - name: Install libclang
+        run: |
+          apt-get update
+          apt-get install -y libclang-dev clang
       - name: Install toolchain & build
         run: |
           cd panhandle
@@ -160,7 +176,7 @@ jobs:
               success=1
               break
             fi
-            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            echo "bpf-linker binstall attempt$i failed, retrying in 5s..."
             sleep 5
           done
           if [ "$success" -ne 1 ]; then

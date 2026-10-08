@@ -1,15 +1,14 @@
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::{path::PathBuf, sync::Arc};
 
     use clap::Parser;
+    use panhandle_common::*;
 
     use crate::{
         helpers::*, input_configs::*, monitor_cpu_usage::*, monitor_gpu_usage::*,
         monitor_io_usage::*, monitor_network_usage::*, procfs_helpers::*,
     };
-    use panhandle_common::*;
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
     #[tokio::test]
@@ -29,6 +28,7 @@ mod tests {
             cpu: true,
             gpu: true,
             memory: true,
+            bound: true,
             ..Default::default()
         };
 
@@ -621,6 +621,7 @@ mod tests {
                 args.cpu,
                 args.gpu,
                 args.io,
+                args.bound,
                 args.syscalls.is_some(),
             )
         }
@@ -1379,8 +1380,10 @@ mod tests {
     // overwrite, and different pids get independent entries
     #[test]
     fn test_apply_socket_stats_event_accumulates() {
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex};
+        use std::{
+            collections::HashMap,
+            sync::{Arc, Mutex},
+        };
 
         let net_stats: SharedNetStats = Arc::new(Mutex::new(HashMap::new()));
 
@@ -1450,8 +1453,10 @@ mod tests {
     // unboundedly on a long-running host
     #[test]
     fn test_prune_dead_pids() {
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex};
+        use std::{
+            collections::HashMap,
+            sync::{Arc, Mutex},
+        };
 
         let net_stats: SharedNetStats = Arc::new(Mutex::new(HashMap::from([
             (1, NetStats::new()),

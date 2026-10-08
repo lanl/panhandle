@@ -1,5 +1,3 @@
-name: packaging
-
 on:
   pull_request:
     branches: [main]
@@ -18,11 +16,6 @@ jobs:
   cross-build:
     runs-on: ${{ matrix.config.runs_on }}
     timeout-minutes: 30
-    # GITHUB_PATH additions don't reliably merge with the container's base
-    # PATH for later docker execs in container jobs (a known GitHub Actions
-    # limitation - it can end up as *only* the appended entries, losing
-    # /usr/bin et al). Set PATH explicitly instead so every step's exec
-    # sees both the cargo bin dirs and a full standard PATH.
     env:
       PATH: /root/.cargo/bin:/github/home/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     strategy:
@@ -73,22 +66,25 @@ jobs:
               dnf install -y openssl-devel pkgconf-pkg-config bash openssl
           fi
           if command -v zypper &> /dev/null; then
+              SUSEConnect -p sle-module-development-tools/15.5/x86_64 || true
+              SUSEConnect -p sle-module-desktop-applications/15.5/x86_64 || true
+              zypper --non-interactive refresh
               zypper install -y libopenssl-3-devel openssl pkg-config bash
           fi
 
       - name: Install aarch64 packages (Container Environment)
         if: matrix.config.architecture == 'aarch64'
         run: |
-          # Runs on a native arm64 hosted runner, so this needs a native
-          # toolchain (not an aarch64 cross-compiler). llvm-devel/llvm-toolset
-          # are still required because bpf-linker has no prebuilt
-          # aarch64-unknown-linux-gnu binary and must be compiled from source.
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset
+              dnf install -y gcc binutils libgcc glibc-devel clang clang-devel llvm llvm-devel llvm-libs
+              echo "LIBCLANG_PATH=$(llvm-config --libdir)" >>$GITHUB_ENV
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7
+              SUSEConnect -p PackageHub/15.5/aarch64 || true
+              zypper --non-interactive refresh
+              zypper install -y gcc gcc7 clang clang-devel llvm llvm-devel
+              echo "LIBCLANG_PATH=/usr/lib64" >> $GITHUB_ENV
           fi
 
       - name: Install x86_64 packages (Container Environment)
@@ -96,10 +92,10 @@ jobs:
         run: |
           if command -v dnf &> /dev/null; then
               dnf install -y epel-release
-              dnf install -y gcc binutils libgcc cross-gcc-common
+              dnf install -y gcc binutils libgcc cross-gcc-common clang-devel
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y gcc gcc7
+              zypper install -y gcc gcc7 clang-devel llvm-devel
           fi
 
       - uses: actions/checkout@v7
@@ -110,8 +106,8 @@ jobs:
         run: |
           VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
           RELEASE=$(grep '^release' panhandle/panhandle/Cargo.toml | sed 's/release = //; s/"//g')
-          echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "PACKAGE_RELEASE=$RELEASE" >> $GITHUB_ENV
+          echo "PACKAGE_VERSION=$VERSION" >>$GITHUB_ENV
+          echo "PACKAGE_RELEASE=$RELEASE" >>$GITHUB_ENV
           echo "$PACKAGE_VERSION-$PACKAGE_RELEASE"
 
       - name: Install Rust
@@ -128,7 +124,7 @@ jobs:
               success=1
               break
             fi
-            echo "bpf-linker binstall attempt $i failed, retrying in 5s..."
+            echo "bpf-linker binstall attempt$i failed, retrying in 5s..."
             sleep 5
           done
           if [ "$success" -ne 1 ]; then
@@ -144,8 +140,8 @@ jobs:
           export CARGO_TARGET_DIR="./target/${{ matrix.config.architecture }}-unknown-linux-gnu"
           cargo build --target ${{ matrix.config.architecture }}-unknown-linux-gnu --bin ${{ matrix.package }} --release --all-features
           echo $CARGO_TARGET_DIR
-          ls -al $CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
-          strip -s $CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle
+          ls -al "$CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle"
+          strip -s "$CARGO_TARGET_DIR/${{ matrix.config.architecture }}-unknown-linux-gnu/release/panhandle"
           cargo generate-rpm --package ${{ matrix.package }} --target ${{ matrix.config.architecture }}-unknown-linux-gnu --output ../rpmbuild/${{ matrix.config.shortname }}/
 
       - name: Upload Build Artifacts
@@ -161,15 +157,12 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          # Ubuntu runs natively on these hosted runners (no container, no
-          # cross-compilation needed for either arch), unlike the RPM matrix above.
           - shortname: 'ubuntu24.04'
             runs_on: 'ubuntu-24.04'
             architecture: 'x86_64'
           - shortname: 'ubuntu24.04'
             runs_on: 'ubuntu-24.04-arm'
             architecture: 'aarch64'
-          # Public preview as of GA'd June 2026 - may see occasional instability.
           - shortname: 'ubuntu26.04'
             runs_on: 'ubuntu-26.04'
             architecture: 'x86_64'
@@ -182,7 +175,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
+          sudo apt-get install -y pkg-config libssl-dev libclang-dev clang
 
       - uses: actions/checkout@v7
 
@@ -190,7 +183,7 @@ jobs:
         id: get_version
         run: |
           VERSION=$(grep '^version' panhandle/panhandle/Cargo.toml | sed 's/version = //; s/"//g')
-          echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "PACKAGE_VERSION=$VERSION" >>$GITHUB_ENV
           echo "$PACKAGE_VERSION"
 
       - name: Install Rust

@@ -6,7 +6,6 @@ use aya_ebpf::{
     maps::{HashMap, PerCpuArray},
     programs::LsmContext,
 };
-
 use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
 
 use crate::vmlinux::file;

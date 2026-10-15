@@ -294,7 +294,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.debug {
         match EbpfLogger::init(&mut ebpf) {
-            Ok(logger) => match AsyncFd::with_interest(logger, Interest::READABLE) {
+            Ok(logger) => match unsafe {
+                AsyncFd::register_with_interest(logger, Interest::READABLE)
+            } {
                 Ok(mut async_logger) => {
                     tokio::spawn(async move {
                         loop {
@@ -493,7 +495,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "socket_events"
                 )
             })?)?;
-        let socket_async_fd = AsyncFd::with_interest(socket_ring_buf, Interest::READABLE)?;
+        let socket_async_fd = unsafe { AsyncFd::register_with_interest(socket_ring_buf, Interest::READABLE)? };
         let net_stats_consumer = net_stats.clone();
         tokio::task::spawn(consume_socket_stats_ebpf_map(
             socket_async_fd,
@@ -931,7 +933,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "readline_events"
             )
         })?)?;
-        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
+        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();
@@ -1051,7 +1053,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "zlentry_events"
             )
         })?)?;
-        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
+        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();
@@ -1165,7 +1167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "panhandle_execve_events"
                 )
             })?)?;
-        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
+        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();

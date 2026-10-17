@@ -1,5 +1,8 @@
 # CHANGELOG
 
+### v1.0.24
+Added process bound reporting. Receive a report of what processes are bound by through per process delay counts and delay times. Includes memory, cpu, io, and network.
+
 ### v1.0.23
 
 - fixed a startup crash when a `block_paths` or `include_uid` entry supplied via the config file (rather than the CLI) exceeded the length/format limits that were previously only enforced for CLI-sourced values

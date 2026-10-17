@@ -4,13 +4,13 @@ use std::{
     panic,
     path::PathBuf,
     process,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use aya::{
     Btf,
     maps::{HashMap, RingBuf},
-    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
+    programs::{BtfTracePoint, KProbe, TracePoint, UProbe, uprobe::UProbeScope},
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
@@ -33,6 +33,7 @@ mod monitor_cpu_usage;
 mod monitor_gpu_usage;
 mod monitor_io_usage;
 mod monitor_network_usage;
+mod monitor_process_bounds;
 mod procfs_helpers;
 mod unit_tests;
 use helpers::*;
@@ -41,6 +42,7 @@ use monitor_cpu_usage::*;
 use monitor_gpu_usage::*;
 use monitor_io_usage::*;
 use monitor_network_usage::*;
+use monitor_process_bounds::*;
 use panhandle_common::*;
 
 /// Validate every user-controlled numeric/list argument up front, before the
@@ -292,7 +294,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.debug {
         match EbpfLogger::init(&mut ebpf) {
-            Ok(logger) => match AsyncFd::with_interest(logger, Interest::READABLE) {
+            Ok(logger) => match unsafe {
+                AsyncFd::register_with_interest(logger, Interest::READABLE)
+            } {
                 Ok(mut async_logger) => {
                     tokio::spawn(async move {
                         loop {
@@ -491,7 +495,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "socket_events"
                 )
             })?)?;
-        let socket_async_fd = AsyncFd::with_interest(socket_ring_buf, Interest::READABLE)?;
+        let socket_async_fd = unsafe { AsyncFd::register_with_interest(socket_ring_buf, Interest::READABLE)? };
         let net_stats_consumer = net_stats.clone();
         tokio::task::spawn(consume_socket_stats_ebpf_map(
             socket_async_fd,
@@ -628,6 +632,77 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
             }
         }));
+    }
+
+    // set up process bound monitoring
+    let mut bound_handle: Option<JoinHandle<()>> = None;
+    if args.bound {
+        let program: &mut KProbe = ebpf
+            .program_mut("tcp_recvmsg_entry")
+            .ok_or("eBPF program 'tcp_recvmsg_entry' not found - binary/eBPF build mismatch?")?
+            .try_into()?;
+        program.load()?;
+        program.attach("tcp_recvmsg", 0).inspect_err(|e| {
+            error!(
+                "failed to attach kprobe 'tcp_recvmsg_entry' to tcp_recvmsg: {}",
+                e
+            );
+        })?;
+        debug!("attached eBPF kprobe 'tcp_recvmsg_entry' -> tcp_recvmsg");
+
+        // Attach kretprobe on return from tcp_recvmsg to compute elapsed wait time and
+        // fold it into NET_WAIT.
+        let program: &mut KProbe = ebpf
+            .program_mut("tcp_recvmsg_exit")
+            .ok_or("eBPF program 'tcp_recvmsg_exit' not found - binary/eBPF build mismatch?")?
+            .try_into()?;
+        program.load()?;
+        program.attach("tcp_recvmsg", 0).inspect_err(|e| {
+            error!(
+                "failed to attach kretprobe 'tcp_recvmsg_exit' to tcp_recvmsg: {}",
+                e
+            );
+        })?;
+        debug!("attached eBPF kretprobe 'tcp_recvmsg_exit' -> tcp_recvmsg");
+
+        // Pull the NET_WAIT map out and wrap it so it can be shared with the polling
+        // task below. Wrapped in Arc<Mutex<_>> purely for Send/Sync convenience across
+        // the tokio task boundary - the map itself is only ever touched from that one task.
+        let net_wait_map = ebpf.take_map("NET_WAIT").ok_or_else(|| {
+            format!(
+                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
+                "NET_WAIT"
+            )
+        })?;
+        let net_wait: aya::maps::HashMap<_, u32, NetWaitStat> =
+            aya::maps::HashMap::try_from(net_wait_map)?;
+        let net_wait = Arc::new(Mutex::new(net_wait));
+
+        let url = global_url.clone();
+        let host = hostname.clone();
+        let syslog = syslog_address.clone();
+        let verbose_mode = args.verbose;
+        let client = Client::new();
+        let net_wait_for_task = net_wait.clone();
+
+        bound_handle = Some(tokio::task::spawn(async move {
+            loop {
+                monitor_process_bounds(
+                    &args.json,
+                    &http_bool,
+                    &syslog_bool,
+                    &verbose_mode,
+                    &host,
+                    &url,
+                    &syslog,
+                    &client,
+                    &args.debug,
+                    &net_wait_for_task,
+                )
+                .await;
+                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
+            }
+        }))
     }
 
     // process syscall blocking
@@ -858,7 +933,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "readline_events"
             )
         })?)?;
-        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
+        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();
@@ -978,7 +1053,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "zlentry_events"
             )
         })?)?;
-        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
+        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();
@@ -1013,6 +1088,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.cpu,
         args.gpu,
         args.io,
+        args.bound,
         args.syscalls.is_some(),
     ) {
         // this is the main program functionality
@@ -1091,7 +1167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "panhandle_execve_events"
                 )
             })?)?;
-        let async_fd = AsyncFd::with_interest(ring_buf, Interest::READABLE)?;
+        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();
@@ -1136,6 +1212,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle_ref.abort();
     }
     if let Some(handle_ref) = gpu_handle {
+        handle_ref.abort();
+    }
+    if let Some(handle_ref) = bound_handle {
         handle_ref.abort();
     }
     Ok(())

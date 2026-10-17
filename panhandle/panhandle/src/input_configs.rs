@@ -119,6 +119,11 @@ pub struct RawArgs {
     #[serde(default)]
     pub io: bool,
 
+    /// Receive a report of what processes are bound by through per process delay counts and delay times. Includes memory, cpu, io, and network.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub bound: bool,
+
     /// Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
@@ -226,6 +231,9 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub io: bool,
 
+    #[serde(default)]
+    pub bound: bool,
+
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
@@ -292,6 +300,7 @@ impl From<ConfigArgs> for RawArgs {
             gpu: cfg.gpu,
             memory: cfg.memory,
             io: cfg.io,
+            bound: cfg.bound,
             pid_list: cfg.pid_list,
             poll: cfg.poll,
             syscalls: cfg.syscalls,
@@ -320,6 +329,7 @@ pub fn should_run_default_execve_monitor(
     cpu: bool,
     gpu: bool,
     io: bool,
+    bound: bool,
     syscalls_set: bool,
 ) -> bool {
     syscall_execve
@@ -331,6 +341,7 @@ pub fn should_run_default_execve_monitor(
             && !cpu
             && !gpu
             && !io
+            && !bound
             && !syscalls_set)
 }
 
@@ -352,6 +363,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.gpu = cli_args.gpu || config_args.gpu;
     final_args.memory = cli_args.memory || config_args.memory;
     final_args.io = cli_args.io || config_args.io;
+    final_args.bound = cli_args.bound || config_args.bound;
 
     // Override non-bools with CLI args if present
     if cli_args.exclude_min_uid.is_some() {

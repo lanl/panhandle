@@ -1,6 +1,6 @@
 [package]
 name = "panhandle"
-version = "1.0.23"
+version = "1.0.24"
 edition = "2024"
 homepage = "https://github.com/lanl/panhandle"
 license = "MIT"
@@ -21,7 +21,6 @@ serde_json = "1.0.150"
 syslog = "7.0.0"
 url = "2.5.7"
 port_check = "0.3.0"
-config = "0.15.23"
 serde = "1.0.228"
 uzers = "0.12.2"
 serde_yaml = "0.9.34"
@@ -29,6 +28,7 @@ procfs = "0.18.0"
 anyhow = "1.0.102"
 network-interface = "2.0.5"
 machine-info = "1.0.9"
+linux-taskstats = "0.7.0"
 
 [build-dependencies]
 aya-build = { workspace = true }

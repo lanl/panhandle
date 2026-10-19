@@ -474,7 +474,7 @@ pub async fn load_config_args(config_path: String) -> Result<ConfigArgs, String>
     match path_ref.extension().and_then(|e| e.to_str()) {
         Some("json") => serde_json::from_str(&contents)
             .map_err(|e| format!("Invalid JSON config {}: {}", path, e)),
-        Some("yaml") | Some("yml") => serde_yaml::from_str(&contents)
+        Some("yaml") | Some("yml") => yaml_serde::from_str(&contents)
             .map_err(|e| format!("Invalid YAML config {}: {}", path, e)),
         other => Err(format!("Unsupported config type {:?}", other)),
     }

@@ -70,11 +70,26 @@ jobs:
       - name: Install Base Tools (Container Environment)
         run: |
           if command -v dnf &> /dev/null; then
-              dnf install -y openssl-devel pkgconf-pkg-config bash openssl
+              dnf install -y openssl-devel pkgconf-pkg-config bash openssl \
+                  clang clang-devel kernel-headers
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y libopenssl-3-devel openssl pkg-config bash
+              zypper install -y libopenssl-3-devel openssl pkg-config bash \
+                  clang clang-devel linux-glibc-devel
           fi
+
+      - name: Locate libclang (for bindgen)
+        shell: bash
+        run: |
+          LIBCLANG=$(find /usr/lib64 /usr/lib -type f \
+              \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) \
+              ! -name 'libclang-cpp*' 2>/dev/null | head -n1)
+          if [ -z "$LIBCLANG" ]; then
+              echo "libclang not found after installing clang" >&2
+              exit 1
+          fi
+          echo "Found libclang: $LIBCLANG"
+          echo "LIBCLANG_PATH=$(dirname "$LIBCLANG")" >> "$GITHUB_ENV"
 
       - name: Install aarch64 packages (Container Environment)
         if: matrix.config.architecture == 'aarch64'
@@ -181,8 +196,8 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
+          udo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev clang libclang-dev linux-libc-dev
 
       - uses: actions/checkout@v7
 

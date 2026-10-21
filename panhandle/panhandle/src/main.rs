@@ -294,22 +294,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.debug {
         match EbpfLogger::init(&mut ebpf) {
-            Ok(logger) => match unsafe {
-                AsyncFd::register_with_interest(logger, Interest::READABLE)
-            } {
-                Ok(mut async_logger) => {
-                    tokio::spawn(async move {
-                        loop {
-                            let Ok(mut guard) = async_logger.readable_mut().await else {
-                                continue;
-                            };
-                            guard.get_inner_mut().flush();
-                            guard.clear_ready();
-                        }
-                    });
+            Ok(logger) => {
+                match unsafe { AsyncFd::register_with_interest(logger, Interest::READABLE) } {
+                    Ok(mut async_logger) => {
+                        tokio::spawn(async move {
+                            loop {
+                                let Ok(mut guard) = async_logger.readable_mut().await else {
+                                    continue;
+                                };
+                                guard.get_inner_mut().flush();
+                                guard.clear_ready();
+                            }
+                        });
+                    }
+                    Err(e) => eprintln!("failed to poll eBPF logger: {e}"),
                 }
-                Err(e) => eprintln!("failed to poll eBPF logger: {e}"),
-            },
+            }
             // not fatal — just means you won't see ebpf-side logs
             Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
         }
@@ -495,7 +495,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "socket_events"
                 )
             })?)?;
-        let socket_async_fd = unsafe { AsyncFd::register_with_interest(socket_ring_buf, Interest::READABLE)? };
+        let socket_async_fd =
+            unsafe { AsyncFd::register_with_interest(socket_ring_buf, Interest::READABLE)? };
         let net_stats_consumer = net_stats.clone();
         tokio::task::spawn(consume_socket_stats_ebpf_map(
             socket_async_fd,

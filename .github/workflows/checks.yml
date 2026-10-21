@@ -22,6 +22,10 @@ jobs:
       image: docker.io/rust
     steps:
       - uses: actions/checkout@v7
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
       - name: Install toolchain
         run: |
           cd panhandle
@@ -62,6 +66,10 @@ jobs:
       image: docker.io/rust
     steps:
       - uses: actions/checkout@v7
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
       - name: Install toolchain
         run: |
           cd panhandle
@@ -96,6 +104,10 @@ jobs:
       image: docker.io/rust
     steps:
       - uses: actions/checkout@v7
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
       - name: Install toolchain & build
         run: |
           cd panhandle
@@ -147,6 +159,10 @@ jobs:
       image: docker.io/rust
     steps:
       - uses: actions/checkout@v7
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
       - name: Install toolchain & build
         run: |
           cd panhandle

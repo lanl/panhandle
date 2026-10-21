@@ -75,10 +75,27 @@ jobs:
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y libopenssl-3-devel openssl pkg-config bash \
-                  clang clang-devel linux-glibc-devel
+                  tar xz gzip curl linux-glibc-devel
           fi
 
-      - name: Locate libclang (for bindgen)
+      - name: Install libclang (SLES, prebuilt LLVM)
+        if: matrix.config.shortname == 'sles'
+        run: |
+          LLVM_VER=18.1.8
+          if [ "${{ matrix.config.architecture }}" = "x86_64" ]; then
+              LLVM_TARBALL="clang+llvm-${LLVM_VER}-x86_64-linux-gnu-ubuntu-18.04.tar.xz"
+          else
+              LLVM_TARBALL="clang+llvm-${LLVM_VER}-aarch64-linux-gnu.tar.xz"
+          fi
+          mkdir -p /opt/llvm
+          curl -fL --retry 3 --proto '=https' --tlsv1.2 \
+              "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VER}/${LLVM_TARBALL}" \
+              | tar -xJ -C /opt/llvm --strip-components=1
+          ls /opt/llvm/lib/libclang.so*
+          echo "LIBCLANG_PATH=/opt/llvm/lib" >> "$GITHUB_ENV"
+
+      - name: Locate libclang (EL, for bindgen)
+        if: matrix.config.shortname != 'sles'
         shell: bash
         run: |
           LIBCLANG=$(find /usr/lib64 /usr/lib -type f \
@@ -94,12 +111,9 @@ jobs:
       - name: Install aarch64 packages (Container Environment)
         if: matrix.config.architecture == 'aarch64'
         run: |
-          # Runs on a native arm64 hosted runner, so this needs a native
-          # toolchain (not an aarch64 cross-compiler). llvm-devel/llvm-toolset
-          # are still required because bpf-linker has no prebuilt
-          # aarch64-unknown-linux-gnu binary and must be compiled from source.
+          # Native arm64 runner: native toolchain, no cross-compiler.
+          # llvm-devel/llvm-toolset are needed to compile bpf-linker from source.
           if command -v dnf &> /dev/null; then
-              dnf install -y epel-release
               dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset
           fi
           if command -v zypper &> /dev/null; then
@@ -110,8 +124,7 @@ jobs:
         if: matrix.config.architecture == 'x86_64'
         run: |
           if command -v dnf &> /dev/null; then
-              dnf install -y epel-release
-              dnf install -y gcc binutils libgcc cross-gcc-common
+              dnf install -y gcc binutils libgcc glibc-devel
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7

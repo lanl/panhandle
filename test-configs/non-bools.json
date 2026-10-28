@@ -10,8 +10,5 @@
     "syscalls": ["open", "openat"],
     "block_paths": ["/usr/bin/su"],
     "comm_allow": ["bash", "zsh"],
-    "output": [
-        { "syslog": "hpcsyslog.lanl.gov:514/tcp" }
-    ]
-
+    "syslog": "hpcsyslog.lanl.gov:514/tcp"
 }

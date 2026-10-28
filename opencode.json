@@ -41,17 +41,27 @@
     },
     {
       "action": "shell",
-      "resource": "cargo *",
+      "resource": "cargo test",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "cargo build",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "cargo run",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "cargo check",
       "effect": "allow"
     },
     {
       "action": "shell",
       "resource": "rustc *",
-      "effect": "allow"
-    },
-    {
-      "action": "shell",
-      "resource": "make *",
       "effect": "allow"
     },
     {

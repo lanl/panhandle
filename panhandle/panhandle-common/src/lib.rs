@@ -22,6 +22,12 @@ pub const DENY_LIST: u8 = 1;
 pub const ALLOW_LIST: u8 = 2;
 pub const LIST_MODE: u8 = 255;
 
+// Process blocking limits
+pub const MAX_PATH_LENGTH: usize = 255;
+pub const MAX_COMM_LENGTH: usize = 15;
+pub const MAX_BLOCKED_PATHS: usize = 64;
+pub const MAX_BLOCKED_COMMS: usize = 64;
+
 // Keys into the uid_options / readline_uid_options / zlentry_uid_options maps, shared
 // between userspace (which populates them, main.rs) and eBPF (which reads them via
 // get_bool/get_uid, main.rs and shell_entry.rs). UID_OPT_SHELLS only means anything to

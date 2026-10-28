@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## v1.0.25
+
+- Implemented Aya 0.16 improvements:
+  - **TestRun for eBPF unit tests**: Added test module in `panhandle-ebpf/src/main.rs`
+    with `#[test]` functions for eBPF program logic.
+  - **GlobalData for config**: Replaced 6 runtime maps with 2 `GlobalData` structs
+    (`PANHANDLE_CONFIG` and `SHELL_CONFIG`) for type-safe, zero-copy config access
+    from eBPF programs.
+  - **RawTracepoint for execve**: Changed `#[tracepoint]` to `#[raw_tracepoint]`
+    with `ctx.arg()` for direct argument access, eliminating BTF dependency.
+  - **VerifierLogLevel**: Added `VERIFIER_LOG_LEVEL = DEBUG` in debug mode for
+    easier eBPF verifier debugging.
+- **Modular architecture**: Split monolithic `main.rs` into focused modules:
+  `config.rs`, `ebpf_loader.rs`, `output.rs`, `monitors.rs`, `shell.rs`,
+  `blocking.rs`, `error.rs`, `helpers.rs`, `input_configs.rs`.
+- **Proper error types**: Added `thiserror` dependency, created `PanhandleError`
+  enum with manual `PartialEq` impl for variants wrapping non-`PartialEq` types.
+- **Removed unused dependencies**: Removed `bytes`, `config`, `bytemuck` crates.
+- **Feature flags**: Added optional feature flags for components
+  (`network`, `gpu`, `blocking`, `shell`, `http`, `syslog`, `file`, `default`).
+- **Updated test configs**: All test config files updated to new API format
+  (direct `http`, `syslog`, `file` fields instead of `output` array).
+- **Config validation before root check**: Config file loading and validation
+  now happens before root privilege check, enabling integration tests to run
+  without root.
+- **Comprehensive integration test fixes**: All 21 config_integration tests pass,
+  including validation for unknown fields, non-numeric UIDs, comm list conflicts,
+  length/count limits, and unsupported file extensions.
+- **Linting improvements**: Updated `./scripts/lint` to exclude generated docs
+  and handle optional `cargo-outdated`.
+
 ## v1.0.24
 
 - Updated to Aya 0.16 from git (tag aya-v0.16.0) to resolve version conflicts

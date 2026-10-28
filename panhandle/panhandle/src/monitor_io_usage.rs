@@ -39,6 +39,7 @@ struct IoEntry {
 
 /// Plain-text rendering of an IO stats entry. `verbose` includes parent/owner/state
 /// fields; the compact form keeps just PID/comm plus the IO counters.
+#[allow(dead_code)]
 pub fn format_io_prose(
     verbose: bool,
     pid: u32,
@@ -88,6 +89,7 @@ pub fn format_io_prose(
 /// parent/owner/state fields; the compact form keeps just PID/comm plus the IO counters.
 /// Built via the `json!` macro, so every string field is escaped by serde_json and the
 /// document is always valid JSON.
+#[allow(dead_code)]
 pub fn format_io_json(
     verbose: bool,
     pid: u32,
@@ -142,6 +144,7 @@ pub fn format_io_json(
     }
 }
 
+#[allow(dead_code)]
 pub async fn monitor_io_usage(
     json_output: &bool,
     http: &bool,
@@ -306,6 +309,7 @@ pub async fn monitor_io_usage(
 }
 
 /// Format and output IO stats for a single process
+#[allow(dead_code)]
 async fn report_io_and_inode_stats(
     pid: u32,
     comm: &str,

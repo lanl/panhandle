@@ -4,23 +4,28 @@ This file defines the AI agent configurations for the Panhandle project.
 
 ## Project Overview
 
-Panhandle is an eBPF-based user activity monitoring tool for HPC environments. It monitors execve syscalls and shell activity (bash/zsh) using the Aya Rust library for eBPF.
+Panhandle is an eBPF-based user activity monitoring tool for HPC
+environments. It monitors execve syscalls and shell activity (bash/zsh)
+using the Aya Rust library for eBPF.
 
 ## Agent Roles
 
 ### Primary Agent (Development)
+
 - **Model**: NVIDIA Nemotron 3 Ultra (darwin.NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4)
 - **Provider**: circe-keys
 - **Role**: Main development agent for Rust/ebpf development
 - **Skills**: rust, cargo, ebpf, aya
 
 ### Documentation Agent
+
 - **Model**: NVIDIA Nemotron 3 Ultra (darwin.NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4)
 - **Provider**: circe-keys
 - **Role**: Documentation and markdown maintenance
 - **Skills**: markdown, yaml, json
 
 ### Security Agent
+
 - **Model**: NVIDIA Nemotron 3 Ultra (darwin.NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4)
 - **Provider**: circe-keys
 - **Role**: Security auditing, dependency scanning
@@ -29,10 +34,12 @@ Panhandle is an eBPF-based user activity monitoring tool for HPC environments. I
 ## Available Skills
 
 ### Core Skills (Always Available)
+
 - `opencode` - OpenCode framework assistance
 - `report` - Issue/bug reporting
 
 ### Project-Specific Skills (Configured in opencode.json)
+
 - `rust` - Rust development best practices
 - `cargo` - Cargo workspace management
 - `ebpf` - eBPF development with Rust
@@ -41,6 +48,7 @@ Panhandle is an eBPF-based user activity monitoring tool for HPC environments. I
 ## Workflow Commands
 
 ### Development
+
 ```bash
 # Run linting
 ./scripts/lint
@@ -59,12 +67,14 @@ cd panhandle && cargo deny check
 ```
 
 ### Code Quality
+
 - All Rust code must pass `cargo clippy -- -D warnings`
 - Code must be formatted with `cargo fmt`
 - No `unsafe` code without explicit justification
 - All dependencies must pass `cargo deny check`
 
 ### Git Practices
+
 - Commit messages follow conventional commits
 - All changes must pass CI checks
 - No Cargo.lock in gitignore for binaries (already handled)

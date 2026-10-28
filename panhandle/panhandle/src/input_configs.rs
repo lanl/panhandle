@@ -1,8 +1,7 @@
 use std::{fs, path::Path};
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
-use serde_saphyr as serde_yaml;
 
 // process blocking
 pub(crate) const MAX_PATH_LENGTH: usize = 255;
@@ -16,7 +15,7 @@ pub(crate) const MAX_BLOCKED_COMMS: usize = 64;
 /// desired user behavior. These include UID filtering as well as filtering for the use of specific executables.
 /// Specified events are logged for further reporting and/or analysis. Logging options include file, http, syslog,
 /// or terminal output for selected events.
-#[derive(Parser, Debug, Clone, Deserialize, PartialEq, Default)]
+#[derive(Parser, Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
 #[command(
     version,
     about,
@@ -26,6 +25,35 @@ pub(crate) const MAX_BLOCKED_COMMS: usize = 64;
     subcommand_negates_reqs = false
 )]
 pub struct RawArgs {
+    /// Output events to the specified HTTP endpoint.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub http: Option<String>,
+
+    /// Output events to syslog. Can be done locally or remotely.
+    #[arg(long, global = true, num_args(0..=1),
+    long_help = r"Output events to syslog. Local or remote options are supported.
+    Local example: --syslog /dev/log or --syslog unix or --syslog
+    Remote TCP example: --syslog hpcsyslog.lanl.gov:514/tcp
+    Remote UDP example: --syslog hpcsyslog.lanl.gov:514/udp")]
+    #[serde(default)]
+    pub syslog: Option<Option<String>>,
+
+    /// Specify the absolute path to the desired log file.
+    #[arg(long, global = true, value_name = "FILE")]
+    #[serde(default)]
+    pub file: Option<std::path::PathBuf>,
+
+    /// Write the effective configuration (CLI + config file) to a file and exit.
+    #[arg(long, global = true, value_name = "FILE")]
+    #[serde(skip)]
+    pub output_config: Option<std::path::PathBuf>,
+
+    /// Monitor events from the execve syscall. This is the program default if no other arguments are selected.
+    #[arg(short = 'e', long, global = true)]
+    #[serde(default)]
+    pub execve: bool,
+
     /// Monitor events from the bash shell using the readline function.
     #[arg(short, long, global = true)]
     #[serde(default)]
@@ -49,7 +77,7 @@ pub struct RawArgs {
     pub exclude_max_uid: Option<u32>,
 
     /// Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 20.
-    #[arg(short, long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     pub executables: Option<Vec<String>>,
 
     /// Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll.
@@ -60,10 +88,6 @@ pub struct RawArgs {
     /// Report the processes with memory faults greater than the specified threshold value. Specify information polling interval with --poll.
     #[arg(short, long, value_parser(clap::value_parser!(u64)), global = true)]
     pub memory_faults: Option<u64>,
-
-    /// Subcommand to specify the type of output desired, see the --syslog, --http, or --file options.
-    #[command(subcommand)]
-    pub output: Option<OutputCommand>,
 
     /// Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
@@ -78,11 +102,6 @@ pub struct RawArgs {
     #[arg(short, long, global = true)]
     #[serde(default)]
     pub quiet: bool,
-
-    /// Monitor events from the execve syscall. This is the program default if no other arguments are selected.
-    #[arg(short, long, global = true)]
-    #[serde(default)]
-    pub syscall_execve: bool,
 
     /// Output execve syscall events only from the shells: bash, tcsh, & zsh. This does not effect the output of the bash or zsh options.
     #[arg(long, global = true)]
@@ -153,32 +172,6 @@ pub struct RawArgs {
     pub comm_deny: Option<Vec<String>>,
 }
 
-// output parent command with syslog, http, and file subcommands
-// example usage: output --syslog --file test.log -h myserver
-#[derive(Debug, Subcommand, Clone, Deserialize, Serialize, PartialEq)]
-pub enum OutputCommand {
-    /// Output options: --file, --http, --syslog.
-    #[command(name = "output")]
-    Output {
-        /// Specify the absolute path to the desired log file.
-        #[arg(long, value_name = "FILE")]
-        file: Option<std::path::PathBuf>,
-
-        /// Output events to the specified HTTP endpoint.
-        #[arg(long)]
-        http: Option<String>,
-
-        /// Output events to syslog. Can be done locally or remotely.
-        #[arg(long, num_args(0..=1),
-        long_help = r"Output events to syslog. Local or remote options are supported.
-        Local example: --syslog /dev/log or --syslog unix or --syslog
-        Remote TCP example: --syslog hpcsyslog.lanl.gov:514/tcp
-        Remote UDP example: --syslog hpcsyslog.lanl.gov:514/udp",
-        )]
-        syslog: Option<Option<String>>,
-    },
-}
-
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigArgs {
@@ -207,7 +200,7 @@ pub struct ConfigArgs {
     pub quiet: bool,
 
     #[serde(default)]
-    pub syscall_execve: bool,
+    pub execve: bool,
 
     #[serde(default)]
     pub shells: bool,
@@ -227,15 +220,21 @@ pub struct ConfigArgs {
     #[serde(default)]
     pub io: bool,
 
-    // list-based output format to promote hyphen key:value pair syntax in config files
-    pub output: Option<Vec<OutputConfig>>,
+    #[serde(default)]
+    pub http: Option<String>,
 
-    pub include_uid: Option<Vec<String>>,
+    #[serde(default)]
+    pub syslog: Option<Option<String>>,
 
+    #[serde(default)]
+    pub file: Option<std::path::PathBuf>,
+
+    #[serde(default)]
     pub pid_list: Option<Vec<u32>>,
 
     pub poll: Option<u32>,
 
+    #[serde(default)]
     pub syscalls: Option<Vec<String>>,
 
     pub block_paths: Option<Vec<String>>,
@@ -243,36 +242,13 @@ pub struct ConfigArgs {
     pub comm_allow: Option<Vec<String>>,
 
     pub comm_deny: Option<Vec<String>>,
-}
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-#[serde(untagged, deny_unknown_fields)]
-pub enum OutputConfig {
-    File { file: std::path::PathBuf },
-    Http { http: String },
-    Syslog { syslog: Option<Option<String>> },
+    pub include_uid: Option<Vec<String>>,
 }
 
 // into function to convert structure of config args to structure of cli args, as main is expecting
 impl From<ConfigArgs> for RawArgs {
     fn from(cfg: ConfigArgs) -> Self {
-        // Convert output vector into CLI OutputCommand
-        let output = cfg.output.map(|vec| {
-            let mut file: Option<std::path::PathBuf> = None;
-            let mut http: Option<String> = None;
-            let mut syslog: Option<Option<String>> = None;
-
-            for o in vec {
-                match o {
-                    OutputConfig::File { file: f } => file = Some(f),
-                    OutputConfig::Http { http: h } => http = Some(h),
-                    OutputConfig::Syslog { syslog: s } => syslog = s,
-                }
-            }
-
-            OutputCommand::Output { file, http, syslog }
-        });
-
         RawArgs {
             // Copy all simple fields
             verbose: cfg.verbose,
@@ -280,7 +256,7 @@ impl From<ConfigArgs> for RawArgs {
             json: cfg.json,
             shells: cfg.shells,
             socket: cfg.socket,
-            syscall_execve: cfg.syscall_execve,
+            execve: cfg.execve,
             bash: cfg.bash,
             memory_faults: cfg.memory_faults,
             zsh: cfg.zsh,
@@ -299,20 +275,22 @@ impl From<ConfigArgs> for RawArgs {
             block_paths: cfg.block_paths,
             comm_allow: cfg.comm_allow,
             comm_deny: cfg.comm_deny,
-            // output subcommand
-            output,
+            // Direct output flags
+            http: cfg.http,
+            syslog: cfg.syslog,
+            file: cfg.file,
+            output_config: None,
             config: None,
         }
     }
 }
 
 /// Whether the default execve-syscall monitor should run: either explicitly requested via
-/// --syscall-execve, or implicitly as the fallback when no other monitoring flag was given
-/// at all. Takes individual fields rather than `&RawArgs` so the check can be evaluated at
-/// its natural call site, after other code in `main()` has partially moved fields out of
-/// `args` (e.g. `args.output`, `args.executables`), without forcing an early hoist.
+/// --execve, or implicitly as the fallback when no other monitoring flag was given
+/// at all.
+#[allow(dead_code)]
 pub fn should_run_default_execve_monitor(
-    syscall_execve: bool,
+    execve: bool,
     bash: bool,
     zsh: bool,
     memory_faults_set: bool,
@@ -323,7 +301,7 @@ pub fn should_run_default_execve_monitor(
     io: bool,
     syscalls_set: bool,
 ) -> bool {
-    syscall_execve
+    execve
         || (!bash
             && !zsh
             && !memory_faults_set
@@ -336,6 +314,7 @@ pub fn should_run_default_execve_monitor(
 }
 
 // function to load all args given. Merges config and cli args with cli args overwriting those given in the config file.
+#[allow(dead_code)]
 pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     let mut final_args = config_args.clone();
 
@@ -348,7 +327,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     final_args.quiet = cli_args.quiet || config_args.quiet;
     final_args.shells = cli_args.shells || config_args.shells;
     final_args.socket = cli_args.socket || config_args.socket;
-    final_args.syscall_execve = cli_args.syscall_execve || config_args.syscall_execve;
+    final_args.execve = cli_args.execve || config_args.execve;
     final_args.cpu = cli_args.cpu || config_args.cpu;
     final_args.gpu = cli_args.gpu || config_args.gpu;
     final_args.memory = cli_args.memory || config_args.memory;
@@ -389,58 +368,15 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
         final_args.comm_deny = cli_args.comm_deny.clone();
     }
 
-    // Merge CLI output into config output, or create it if missing.
-    //
-    // Both sides are collapsed into a single file/http/syslog triple first, then any CLI
-    // value that was actually provided overrides the config's. Doing it this way means a
-    // CLI output type the config file never declared still takes effect: the previous
-    // implementation only rewrote entries that already existed in the config's list, so
-    // e.g. `--config <cfg> output --http <url>` against a config declaring only `file`
-    // silently discarded the `--http` endpoint.
-    if let Some(OutputCommand::Output {
-        file: cli_file,
-        http: cli_http,
-        syslog: cli_syslog,
-    }) = &cli_args.output
-    {
-        let mut file: Option<std::path::PathBuf> = None;
-        let mut http: Option<String> = None;
-        let mut syslog: Option<Option<String>> = None;
-
-        // start from whatever the config file declared
-        for output in final_args.output.take().unwrap_or_default() {
-            match output {
-                OutputConfig::File { file: f } => file = Some(f),
-                OutputConfig::Http { http: h } => http = Some(h),
-                OutputConfig::Syslog { syslog: s } => syslog = s,
-            }
-        }
-
-        // then let the CLI override it, per the documented precedence
-        if cli_file.is_some() {
-            file = cli_file.clone();
-        }
-        if cli_http.is_some() {
-            http = cli_http.clone();
-        }
-        if cli_syslog.is_some() {
-            syslog = cli_syslog.clone();
-        }
-
-        let mut outputs = Vec::new();
-        if let Some(f) = file {
-            outputs.push(OutputConfig::File { file: f });
-        }
-        if let Some(h) = http {
-            outputs.push(OutputConfig::Http { http: h });
-        }
-        if syslog.is_some() {
-            outputs.push(OutputConfig::Syslog { syslog });
-        }
-
-        if !outputs.is_empty() {
-            final_args.output = Some(outputs);
-        }
+    // Override direct output flags
+    if cli_args.http.is_some() {
+        final_args.http = cli_args.http;
+    }
+    if cli_args.syslog.is_some() {
+        final_args.syslog = cli_args.syslog;
+    }
+    if cli_args.file.is_some() {
+        final_args.file = cli_args.file;
     }
 
     // .into() is implemented so that type RawArgs is returned
@@ -448,6 +384,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
 }
 
 // load any arguments given in config file into ConfigArgs struct
+#[allow(dead_code)]
 pub async fn load_config_args(config_path: String) -> Result<ConfigArgs, String> {
     // Load config file if provided
     let path = config_path;
@@ -457,13 +394,13 @@ pub async fn load_config_args(config_path: String) -> Result<ConfigArgs, String>
     }
 
     let contents = fs::read_to_string(path_ref)
-        .unwrap_or_else(|e| format!("Failed to read config file {}: {}", path, e));
+        .map_err(|e| format!("Failed to read config file {}: {}", path, e))?;
 
     // store deserialized config args
     match path_ref.extension().and_then(|e| e.to_str()) {
         Some("json") => serde_json::from_str(&contents)
             .map_err(|e| format!("Invalid JSON config {}: {}", path, e)),
-        Some("yaml") | Some("yml") => serde_yaml::from_str(&contents)
+        Some("yaml") | Some("yml") => serde_saphyr::from_str(&contents)
             .map_err(|e| format!("Invalid YAML config {}: {}", path, e)),
         other => Err(format!("Unsupported config type {:?}", other)),
     }
@@ -505,21 +442,27 @@ mod tests {
     fn test_yaml_config_parsing() {
         let yaml_content = r#"
 shells: true
-syscall_execve: true
+execve: true
 exclude_min_uid: 0
 json: true
-output:
-  - file: /var/log/panhandle/panhandle.log
-  - syslog: hpcsyslog.lanl.gov:514/tcp
+http: "http://localhost:8080/events"
+syslog: "udp://127.0.0.1:514"
+file: "/var/log/panhandle/panhandle.log"
 "#;
-        let config: ConfigArgs = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigArgs = serde_saphyr::from_str(yaml_content).unwrap();
         assert!(config.shells);
-        assert!(config.syscall_execve);
+        assert!(config.execve);
         assert_eq!(config.exclude_min_uid, Some(0));
         assert!(config.json);
-        assert!(config.output.is_some());
-        let outputs = config.output.unwrap();
-        assert_eq!(outputs.len(), 2);
+        assert_eq!(
+            config.http,
+            Some("http://localhost:8080/events".to_string())
+        );
+        assert_eq!(config.syslog, Some(Some("udp://127.0.0.1:514".to_string())));
+        assert_eq!(
+            config.file,
+            Some(std::path::PathBuf::from("/var/log/panhandle/panhandle.log"))
+        );
     }
 
     #[test]
@@ -529,7 +472,7 @@ bash: true
 zsh: false
 verbose: true
 "#;
-        let config: ConfigArgs = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigArgs = serde_saphyr::from_str(yaml_content).unwrap();
         assert!(config.bash);
         assert!(!config.zsh);
         assert!(config.verbose);

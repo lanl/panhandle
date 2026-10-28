@@ -19,6 +19,7 @@ use crate::helpers::*;
 pub type SharedNetStats = Arc<Mutex<HashMap<u32, NetStats>>>;
 
 /// Fold one delta event into the accumulated stats for its pid.
+#[allow(dead_code)]
 pub fn apply_socket_stats_event(net_stats: &SharedNetStats, event: &SocketStatsEvent) {
     let mut map = net_stats.lock().unwrap();
     let entry = map.entry(event.pid).or_default();
@@ -64,6 +65,7 @@ struct NetworkEntry {
 
 /// Plain-text rendering of a socket stats entry. `verbose` includes parent/owner/state
 /// fields; the compact form keeps just PID/comm plus the socket counters.
+#[allow(dead_code)]
 pub fn format_socket_prose(
     verbose: bool,
     pid: u32,
@@ -134,6 +136,7 @@ pub fn format_socket_prose(
 /// includes parent/owner/state fields; the compact form keeps just PID/comm plus the
 /// socket counters. Built via the `json!` macro, so every string field is escaped by
 /// serde_json and the document is always valid JSON.
+#[allow(dead_code)]
 pub fn format_socket_json(
     verbose: bool,
     pid: u32,
@@ -207,6 +210,7 @@ pub fn format_socket_json(
 /// growing it unboundedly on a long-running host - extracted so this eviction step is
 /// independently testable without needing real procfs state to decide which pids are
 /// "dead" (that determination is the caller's job; this just does the removal).
+#[allow(dead_code)]
 pub(crate) fn prune_dead_pids(net_stats: &SharedNetStats, dead_pids: Vec<u32>) {
     if dead_pids.is_empty() {
         return;
@@ -218,6 +222,7 @@ pub(crate) fn prune_dead_pids(net_stats: &SharedNetStats, dead_pids: Vec<u32>) {
 }
 
 /// Network monitoring main function
+#[allow(dead_code)]
 pub async fn monitor_network_usage(
     net_stats: &SharedNetStats,
     json_output: &bool,
@@ -364,6 +369,7 @@ pub async fn monitor_network_usage(
 }
 
 // Format and output network statistics for a single process
+#[allow(dead_code)]
 async fn report_network_stats(
     pid: u32,
     comm: &str,
@@ -501,6 +507,7 @@ async fn report_network_stats(
 }
 
 // Get network info for a PID (interface, ip, mac)
+#[allow(dead_code)]
 pub(crate) fn get_network_info(
     pid: u32,
     interfaces: &[NetworkInterface],
@@ -542,6 +549,7 @@ pub(crate) fn get_network_info(
 // default netns, every pid would see the exact same table. Cross-reference against
 // this pid's own open file descriptors (/proc/<pid>/fd) to find which socket inodes
 // actually belong to it, then only match those against the (shared) net tables.
+#[allow(dead_code)]
 pub(crate) fn get_active_connection_info(
     pid: u32,
     interfaces: &[NetworkInterface],
@@ -584,6 +592,7 @@ pub(crate) fn get_active_connection_info(
 }
 
 // Match an IP address (from either address family) to the interface that owns it.
+#[allow(dead_code)]
 pub(crate) fn ip_to_interface(
     ip: IpAddr,
     interfaces: &[NetworkInterface],

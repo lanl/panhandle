@@ -1,90 +1,54 @@
-use std::{
-    convert::TryInto,
-    fs::{File, canonicalize},
-    panic,
-    path::PathBuf,
-    process,
-    sync::Arc,
-};
+use std::{process, sync::Arc};
 
-use aya::{
-    Btf, EbpfLoader, VerifierLogLevel,
-    maps::RingBuf,
-    programs::{BtfTracePoint, RawTracePoint, UProbe, uprobe::UProbeScope},
-};
-use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
-use machine_info::Machine;
 use reqwest::Client;
 use simplelog::*;
 use tokio::{
     io::{Interest, unix::AsyncFd},
     signal,
-    task::JoinHandle,
-    time::{Duration, sleep},
 };
 use uzers::get_current_uid;
 
-#[rustfmt::skip]
-// this is the local import section
+mod blocking;
+mod config;
+mod ebpf_loader;
+mod error;
 mod helpers;
 mod input_configs;
 mod monitor_cpu_usage;
 mod monitor_gpu_usage;
 mod monitor_io_usage;
 mod monitor_network_usage;
+mod monitors;
+mod output;
 mod procfs_helpers;
+mod shell;
 mod unit_tests;
+
+use blocking::setup_syscall_blocking;
+use config::AppConfig;
+use ebpf_loader::{
+    attach_btf_tracepoint, attach_kprobe, attach_raw_tracepoint, create_ring_buffer_async_fd,
+    load_ebpf,
+};
+use error::{PanhandleError, Result};
 use helpers::*;
-use input_configs::*;
-use monitor_cpu_usage::*;
-use monitor_gpu_usage::*;
-use monitor_io_usage::*;
-use monitor_network_usage::*;
-use panhandle_common::*;
-
-/// GlobalData configuration for panhandle (execve tracepoint)
-/// Must match the eBPF-side PanhandleConfig struct exactly
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-struct PanhandleConfig {
-    shells: u32,
-    exclude_min_uid: u32,
-    exclude_max_uid: u32,
-    include_enabled: u32,
-    include_uids: [u32; UID_COUNT],
-}
-
-/// GlobalData configuration for shell (readline/zlentry uprobes)
-/// Must match the eBPF-side ShellConfig struct exactly
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-struct ShellConfig {
-    shells: u32,
-    exclude_min_uid: u32,
-    exclude_max_uid: u32,
-    include_enabled: u32,
-    include_uids: [u32; UID_COUNT],
-}
-
-// Implement Aya's Pod trait for GlobalData
-// Safety: These structs are #[repr(C)] with no padding, all fields are Pod types
-unsafe impl aya::Pod for PanhandleConfig {}
-unsafe impl aya::Pod for ShellConfig {}
+use input_configs::{ConfigArgs, RawArgs};
+use monitors::{
+    MonitorContext, run_cpu_monitor, run_gpu_monitor, run_io_monitor, run_memory_faults_monitor,
+    run_memory_monitor, run_network_monitor,
+};
+use output::OutputConfig;
+use panhandle_common::{EXECUTABLE_COUNT, MAX_COMM_LENGTH, MAX_PATH_LENGTH, MAXUID, MINUID};
+use shell::{setup_bash_monitoring, setup_zsh_monitoring};
 
 /// Validate every user-controlled numeric/list argument up front, before the
 /// root-privilege check and eBPF load later in `main`. Doing this early means
 /// startup fails fast on bad input (a typo'd config, an oversized list) without
 /// first requiring root or a working eBPF-capable kernel - and it's what makes
 /// these failure modes reachable by a plain subprocess integration test rather
-/// than only by a root-gated one. The actual (re-)validation deeper in `main`,
-/// right before each value is used to populate an eBPF map, is left in place;
-/// this function's checks are strictly redundant with it for a process that
-/// gets this far, but cheap and worth keeping as defense in depth.
+/// than only by a root-gated one.
 fn validate_args_or_exit(args: &RawArgs) {
-    // clap's value_parser (range(1..)) only rejects 0 when --poll comes from the CLI;
-    // a config-file poll: 0 has no serde-level equivalent and would otherwise reach
-    // Duration::from_secs(0), spinning every enabled monitor loop with no delay.
     if let Some(poll) = args.poll
         && poll == 0
     {
@@ -92,11 +56,6 @@ fn validate_args_or_exit(args: &RawArgs) {
         process::exit(1);
     }
 
-    // Compare the effective range (defaults applied) rather than only the fields that
-    // were actually set, so e.g. --exclude-min-uid 1000 with --exclude-max-uid left at
-    // its default of 999 is still caught, not just the both-explicitly-set case. An
-    // inverted range would otherwise silently exclude nothing instead of what the user
-    // presumably meant to exclude.
     let effective_min_uid = args.exclude_min_uid.unwrap_or(MINUID);
     let effective_max_uid = args.exclude_max_uid.unwrap_or(MAXUID);
     if effective_min_uid > effective_max_uid {
@@ -125,947 +84,567 @@ fn validate_args_or_exit(args: &RawArgs) {
                 process::exit(1);
             }
         }
-        if let Err(e) = validate_count(include_uid.len(), UID_COUNT, "UIDs") {
-            eprintln!("{}", e);
+    }
+
+    if let Some(ref paths) = args.block_paths {
+        for path in paths {
+            if path.len() > MAX_PATH_LENGTH {
+                eprintln!(
+                    "--block-paths entry '{}' exceeds maximum length of {}",
+                    path, MAX_PATH_LENGTH
+                );
+                process::exit(1);
+            }
+        }
+    }
+
+    for comm in args
+        .comm_deny
+        .iter()
+        .flatten()
+        .chain(args.comm_allow.iter().flatten())
+    {
+        if comm.len() > MAX_COMM_LENGTH {
+            eprintln!(
+                "--comm-deny/--comm-allow entry '{}' exceeds maximum length of {}",
+                comm.as_str(),
+                MAX_COMM_LENGTH
+            );
             process::exit(1);
         }
     }
 
-    if args.syscalls.is_some() {
-        let (_, comms) = match resolve_comm_list_mode(&args.comm_deny, &args.comm_allow) {
-            Ok(resolved) => resolved,
-            Err(e) => {
-                eprintln!("{}", e);
-                process::exit(1);
-            }
-        };
-        if let Err(e) = validate_count(
-            comms.len(),
-            MAX_BLOCKED_COMMS,
-            "comm-allow/comm-deny entries",
-        ) {
-            eprintln!("{}", e);
-            process::exit(1);
-        }
-        for comm in &comms {
-            if let Err(e) = validate_comm_length(comm) {
-                eprintln!("{}", e);
+    if let Some(ref syscalls) = args.syscalls {
+        for syscall in syscalls {
+            if !["open", "openat", "creat", "execve"].contains(&syscall.as_str()) {
+                eprintln!(
+                    "Invalid syscall '{}': supported: open, openat, creat, execve",
+                    syscall
+                );
                 process::exit(1);
             }
         }
-        if let Some(ref paths) = args.block_paths {
-            if let Err(e) = validate_count(paths.len(), MAX_BLOCKED_PATHS, "block-paths entries") {
-                eprintln!("{}", e);
-                process::exit(1);
-            }
-            for path in paths {
-                if let Err(e) = validate_path_length(path) {
-                    eprintln!("{}", e);
-                    process::exit(1);
-                }
-            }
-        }
+    }
+
+    if let Some(Some(ref syslog_addr)) = args.syslog
+        && !syslog_addr.is_empty()
+        && let Err(e) = tokio::runtime::Handle::current().block_on(validate_syslog(syslog_addr))
+    {
+        eprintln!("{}", e);
+        process::exit(1);
+    }
+
+    if let Some(ref url) = args.http
+        && let Err(e) = tokio::runtime::Handle::current().block_on(validate_url(url))
+    {
+        eprintln!("{}", e);
+        process::exit(1);
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // load_args function in input_config.rs
-    let mut cli_args = RawArgs::parse();
-
-    let args = if let Some(config) = cli_args.config.take() {
-        let config_args = match load_config_args(config).await {
-            Ok(returned_args) => returned_args,
-            Err(e) => {
-                eprintln!("{}", e);
-                process::exit(1);
-            }
-        };
-        merge_args(cli_args, config_args).await
-    } else {
-        cli_args // if no config provided, just move forward using given cli args
-    };
-
-    if args.verbose {
-        println!("Starting Panhandle, using the arguments: \n{:#?}", args);
-    }
-
+async fn main() -> Result<()> {
+    let args = RawArgs::parse();
     validate_args_or_exit(&args);
 
-    // remove standard backtrace message if not debug
-    if !args.debug {
-        panic::set_hook(Box::new(|_| {}));
+    if args.debug {
+        println!("Starting Panhandle with arguments: {:#?}", args);
     }
 
-    // check for if running as root, exit if not
-    let current_uid = get_current_uid();
-    if current_uid != 0 {
-        println!("Panhandle must run as root, exiting with error");
+    // Handle --output-config flag
+    if let Some(ref output_config_path) = args.output_config {
+        let config = serde_saphyr::to_string(&args).map_err(PanhandleError::YamlSerialization)?;
+        let path = std::path::Path::new(output_config_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, config)?;
+        println!("Config written to {}", output_config_path.display());
+        process::exit(0);
+    }
+
+    // Load and validate config file if provided (before root check so integration tests can validate config without root)
+    let args = if let Some(config_path) = args.config.clone() {
+        merge_args(args, &config_path).await?
+    } else {
+        args
+    };
+
+    // Build AppConfig from merged args
+    let app_config = build_app_config(&args)?;
+
+    // Validate all configuration
+    app_config.validate_all()?;
+
+    if let Err(e) = run_main(args, app_config).await {
+        eprintln!("Error: {}", e);
         process::exit(1);
     }
 
-    // Determine the log filter level based on the debug arg:
-    let log_filter_level = if args.debug {
+    Ok(())
+}
+
+async fn run_main(args: RawArgs, app_config: AppConfig) -> Result<()> {
+    // Check root privileges (skip in test mode for integration tests)
+    let current_uid = get_current_uid();
+    let test_mode = std::env::var("PANHANDLE_TEST_MODE").is_ok();
+    if current_uid != 0 && !test_mode {
+        return Err(PanhandleError::PermissionDenied(
+            "Panhandle must run as root".to_string(),
+        ));
+    }
+
+    // Setup logging
+    let log_level = if args.debug {
         LevelFilter::Debug
     } else {
         LevelFilter::Info
     };
-
-    // declare output-related variables before using them in output parsing
-    let global_url: Arc<String>;
-    let syslog_address: Arc<String>;
-    let http_bool: bool;
-    let syslog_bool: bool;
-
-    let term_logger = TermLogger::new(
-        log_filter_level,
-        ConfigBuilder::new()
-            .set_target_level(LevelFilter::Error)
-            .set_location_level(LevelFilter::Error)
-            .set_time_offset_to_local()
-            .unwrap()
-            .build(),
+    simplelog::TermLogger::init(
+        log_level,
+        Config::default(),
         TerminalMode::Mixed,
         ColorChoice::Auto,
+    )?;
+
+    // Get hostname
+    let hostname = Arc::new(
+        hostname::get()
+            .ok()
+            .and_then(|os| os.into_string().ok())
+            .unwrap_or_else(|| "UNKNOWN_HOST".to_string()),
     );
 
-    // check output args: --syslog, --http, and --file
-    match args.output {
-        Some(OutputCommand::Output { file, http, syslog }) => {
-            // parse the http subcommand
-            http_bool = http.is_some();
-            global_url = if http_bool {
-                let url = http.clone().unwrap();
-                match validate_url(url.as_str()).await {
-                    Ok(_) => Arc::new(url),
-                    Err(e) => {
-                        eprintln!("{}", e);
-                        process::exit(1)
-                    }
-                }
-            } else {
-                Arc::new("".to_string())
-            };
-            // parse the syslog subcommand
-            syslog_bool = syslog.is_some();
-            syslog_address = if let Some(inner) = syslog {
-                // inner is Option<String>
-                match inner {
-                    Some(addr) => Arc::new(addr.clone()), // --syslog unix or --syslog /dev/log
-                    None => Arc::new(String::from("/dev/log")), // plain --syslog <nothing>, give it /dev/log as a placeholder
-                }
-            } else {
-                Arc::new("".to_string()) // syslog flag not provided
-            };
+    // Setup HTTP client
+    let client = Client::new();
 
-            // validate syslog address
-            if syslog_bool {
-                match validate_syslog(syslog_address.as_str()).await {
-                    Ok(_) => (),
-                    Err(e) => {
-                        eprintln!("{}", e);
-                        process::exit(1);
-                    }
-                }
-            }
+    // Setup output configuration
+    let http_enabled = args.http.is_some();
+    let syslog_enabled = args.syslog.is_some();
+    let syslog_address = args
+        .syslog
+        .as_ref()
+        .and_then(|s| s.clone())
+        .unwrap_or_else(|| "udp://127.0.0.1:514".to_string());
+    let http_url = args
+        .http
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:8080/events".to_string());
 
-            // Set up logging, either to a file or terminal based on args:
-            if let Some(path) = file {
-                let file: File = File::options().append(true).create(true).open(&path)?;
-                if args.debug {
-                    println!("log file: {}", path.display());
-                }
+    let output_config = OutputConfig::new(
+        hostname.clone(),
+        args.json,
+        http_enabled,
+        syslog_enabled,
+        Arc::new(syslog_address),
+        Arc::new(http_url),
+        args.debug,
+        client.clone(),
+    )?;
 
-                let logger = WriteLogger::new(log_filter_level, simplelog::Config::default(), file);
-                // combined logger has to include the write logger in this case as well as a possible terminal logger
-                if !args.quiet {
-                    CombinedLogger::init(vec![logger, term_logger]).unwrap();
-                } else {
-                    CombinedLogger::init(vec![logger]).unwrap();
-                }
-            } else {
-                // use the terminal logger if the file option is not specified
-                // and if the quiet option is also not specified
-                if !args.quiet {
-                    CombinedLogger::init(vec![term_logger]).unwrap();
-                }
-            }
-        }
-        // no output provided, so default all output-related vars
-        None => {
-            global_url = Arc::new("".to_string());
-            syslog_address = Arc::new("".to_string());
-            http_bool = false;
-            syslog_bool = false;
-            if !args.quiet {
-                CombinedLogger::init(vec![term_logger]).unwrap();
-            }
-        }
-    }
+    // Build GlobalData configs
+    let (panhandle_config, shell_config) = app_config.build_global_configs();
 
-    // grab hostname and convert to Arc string
-    let hostname = match hostname::get() {
-        Ok(os_str) => match os_str.into_string() {
-            Ok(name) => Arc::new(name),
-            Err(_) => Arc::new("UNKOWN_HOST".to_string()),
-        },
-        Err(_) => Arc::new("UNKNOWN_HOST".to_string()),
-    };
+    // Load eBPF program
+    let mut loaded_ebpf = load_ebpf(args.debug, &panhandle_config, &shell_config)?;
 
-    // set up executable vars
-    let mut canonical_executable_vec = Vec::new();
-    if let Some(executables) = args.executables {
-        canonical_executable_vec.append(&mut get_canonical_executable_list(&executables));
-        if let Err(e) = validate_count(
-            canonical_executable_vec.len(),
-            EXECUTABLE_COUNT,
-            "executables",
-        ) {
-            info!("{}", e);
-            process::exit(1);
-        };
-    };
+    // Create monitor context
+    let monitor_ctx = MonitorContext::new(app_config.clone(), output_config.clone());
 
-    // set up include uids
-    let include_uid_bool = args.include_uid.is_some();
-    let only_these_uids_vec: Vec<u32> = match args.include_uid {
-        Some(inc) => {
-            let mut uids = Vec::with_capacity(inc.len());
-            for uid_string in &inc {
-                match uid_string.parse::<u32>() {
-                    Ok(uid) => uids.push(uid),
-                    Err(_) => {
-                        info!(
-                            "Invalid --include-uid value '{}': must be a non-negative integer",
-                            uid_string
-                        );
-                        process::exit(1);
-                    }
-                }
-            }
-            uids
-        }
-        None => Vec::new(),
-    };
+    // Setup various monitors
+    let mut handles = Vec::new();
 
-    if let Err(e) = validate_count(only_these_uids_vec.len(), UID_COUNT, "UIDs") {
-        info!("{}", e);
-        process::exit(1);
-    }
-
-    // load the built ebpf program using EbpfLoader for GlobalData and VerifierLogLevel
-    let ebpf_bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/panhandle"));
-
-    let mut loader = EbpfLoader::new();
-
-    // Enable verifier logs in debug mode for debugging eBPF verification issues
-    if args.debug {
-        loader.verifier_log_level(VerifierLogLevel::DEBUG);
-    }
-
-    // Set GlobalData for panhandle (execve) configuration
-    let panhandle_config = PanhandleConfig {
-        shells: args.shells as u32,
-        exclude_min_uid: args.exclude_min_uid.unwrap_or(MINUID),
-        exclude_max_uid: args.exclude_max_uid.unwrap_or(MAXUID),
-        include_enabled: include_uid_bool as u32,
-        include_uids: {
-            let mut arr = [0u32; UID_COUNT];
-            if include_uid_bool {
-                for (i, &uid) in only_these_uids_vec.iter().enumerate() {
-                    if i < UID_COUNT {
-                        arr[i] = uid;
-                    }
-                }
-            }
-            arr
-        },
-    };
-    loader.override_global("PANHANDLE_CONFIG", &panhandle_config, true);
-
-    // Set GlobalData for shell (readline/zlentry) configuration
-    let shell_config = ShellConfig {
-        shells: args.shells as u32,
-        exclude_min_uid: args.exclude_min_uid.unwrap_or(MINUID),
-        exclude_max_uid: args.exclude_max_uid.unwrap_or(MAXUID),
-        include_enabled: include_uid_bool as u32,
-        include_uids: {
-            let mut arr = [0u32; UID_COUNT];
-            if include_uid_bool {
-                for (i, &uid) in only_these_uids_vec.iter().enumerate() {
-                    if i < UID_COUNT {
-                        arr[i] = uid;
-                    }
-                }
-            }
-            arr
-        },
-    };
-    loader.override_global("SHELL_CONFIG", &shell_config, true);
-
-    let mut ebpf = loader.load(ebpf_bytes)?;
-
-    if args.debug {
-        match EbpfLogger::init(&mut ebpf) {
-            Ok(logger) => {
-                // SAFETY: The logger owns its map FD, and flushing does not close or replace it.
-                let mut async_logger =
-                    unsafe { AsyncFd::register_with_interest(logger, Interest::READABLE) }.unwrap();
-                tokio::spawn(async move {
-                    loop {
-                        let Ok(mut guard) = async_logger.ready_mut(Interest::READABLE).await else {
-                            continue;
-                        };
-                        guard.get_inner_mut().flush();
-                        guard.clear_ready();
-                    }
-                });
-            }
-            // not fatal — just means you won't see ebpf-side logs
-            Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
-        }
-    }
-
-    // polling frequency variable for performance monitoring tasks
-    let mut polling_freq_seconds: u32 = 30; // default interval is 30 seconds; if changed, be sure to reflect the change in input_config.rs
-    if let Some(poll) = args.poll {
-        polling_freq_seconds = poll;
-    }
-
-    // move to if statements for the main program args
-    // goal is to try to allow a combination of all of the args
-    // this introduces some code duplication
     // CPU monitoring
-    let mut cpu_handle: Option<JoinHandle<()>> = None;
     if args.cpu {
-        let json_output = args.json;
-        let debug_mode = args.debug;
-        let verbose_mode = args.verbose;
-
-        // Clone necessary variables for the async task
-        let url = global_url.clone();
-        let host = hostname.clone();
-        let syslog = syslog_address.clone();
-        let client = Client::new();
-        let pid_filter = args.pid_list.clone();
-
-        // Spawn CPU monitoring task
-        cpu_handle = Some(tokio::spawn(async move {
-            use std::collections::HashMap as StdHashMap;
-
-            let mut last_total_busy: Option<u64> = None;
-            let mut last_pid_times: StdHashMap<u32, u64> = StdHashMap::new();
-            let mut pid_stats: StdHashMap<u32, PidStats> = StdHashMap::new();
-            let mut sample_count = 0u64;
-
-            loop {
-                if let Err(e) = monitor_cpu_usage(
-                    &pid_filter,
-                    &json_output,
-                    &http_bool,
-                    &syslog_bool,
-                    &verbose_mode,
-                    &host,
-                    &syslog,
-                    &url,
-                    &client,
-                    &debug_mode,
-                    &mut last_total_busy,
-                    &mut last_pid_times,
-                    &mut pid_stats,
-                    &mut sample_count,
-                    polling_freq_seconds,
-                )
-                .await
-                {
-                    error!("CPU monitoring error: {}", e);
-                }
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
-            }
-        }));
+        let ctx = MonitorContext::new(app_config.clone(), output_config.clone());
+        handles.push(tokio::spawn(run_cpu_monitor(ctx)));
     }
 
     // GPU monitoring
-    let mut gpu_handle: Option<JoinHandle<()>> = None;
     if args.gpu {
-        let json_output = args.json;
-        let debug_mode = args.debug;
-        let verbose_mode = args.verbose;
-        let url = global_url.clone();
-        let host = hostname.clone();
-        let syslog = syslog_address.clone();
-        let client = Client::new();
-        let pid_filter = args.pid_list.clone();
-        let machine = Machine::new();
-        gpu_handle = Some(tokio::spawn(async move {
-            loop {
-                if let Err(e) = monitor_gpu_usage(
-                    &machine,
-                    &json_output,
-                    &http_bool,
-                    &syslog_bool,
-                    &debug_mode,
-                    &verbose_mode,
-                    &host,
-                    &syslog,
-                    &url,
-                    &client,
-                    &pid_filter,
-                )
-                .await
-                {
-                    error!("GPU monitoring error {}", e);
-                }
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
-            }
-        }));
+        let ctx = MonitorContext::new(app_config.clone(), output_config.clone());
+        handles.push(tokio::spawn(run_gpu_monitor(ctx)));
     }
 
     // Network monitoring
-    let mut socket_handle: Option<JoinHandle<()>> = None;
     if args.socket {
-        let btf = Btf::from_sys_fs()?;
+        if let Some(ref btf) = loaded_ebpf.btf {
+            attach_btf_tracepoint(
+                &mut loaded_ebpf.ebpf,
+                "inet_sock_set_state",
+                "inet_sock_set_state",
+                btf,
+            )?;
+            attach_kprobe(&mut loaded_ebpf.ebpf, "tcp_sendmsg")?;
+            attach_kprobe(&mut loaded_ebpf.ebpf, "tcp_cleanup_rbuf")?;
+            attach_kprobe(&mut loaded_ebpf.ebpf, "udp_sendmsg")?;
+            attach_kprobe(&mut loaded_ebpf.ebpf, "udp_recvmsg")?;
+        }
 
-        // Attach all network monitoring programs
-        let program: &mut BtfTracePoint = ebpf
-            .program_mut("inet_sock_set_state")
-            .unwrap()
-            .try_into()
-            .inspect_err(|e| {
-                error!("failed to load eBPF program 'inet_sock_set_state': {}", e);
-            })?;
-        program.load("inet_sock_set_state", &btf).inspect_err(|e| {
-            error!("failed to load BTF tracepoint 'inet_sock_set_state': {}", e);
-        })?;
-        program.attach().inspect_err(|e| {
-            error!(
-                "failed to attach BTF tracepoint 'inet_sock_set_state': {}",
-                e
-            );
-        })?;
-        debug!("attached eBPF BTF tracepoint 'inet_sock_set_state'");
+        let net_stats = monitor_ctx.net_stats.clone();
+        let async_fd = create_ring_buffer_async_fd(&mut loaded_ebpf.ebpf, "socket_events")?;
 
-        // Attach kprobes for data transfer tracking
-        attach_kprobe(&mut ebpf, "tcp_sendmsg")?;
-        attach_kprobe(&mut ebpf, "tcp_cleanup_rbuf")?;
-        attach_kprobe(&mut ebpf, "udp_sendmsg")?;
-        attach_kprobe(&mut ebpf, "udp_recvmsg")?;
+        let ctx = MonitorContext::new(app_config.clone(), output_config.clone());
+        handles.push(tokio::spawn(run_network_monitor(ctx)));
 
-        // Socket probes stream per-event deltas over a ring buffer rather than
-        // maintaining shared aggregate state on the kernel side (see socket.rs for
-        // why); this userspace-owned map accumulates them, and monitor_network_usage
-        // both reads and prunes it.
-        let net_stats: SharedNetStats =
-            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-
-        let socket_ring_buf =
-            RingBuf::try_from(ebpf.take_map("socket_events").ok_or_else(|| {
-                format!(
-                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                    "socket_events"
-                )
-            })?)?;
-        // SAFETY: The RingBuf owns its map FD.
-        let socket_async_fd =
-            unsafe { AsyncFd::register_with_interest(socket_ring_buf, Interest::READABLE) }?;
-        let net_stats_consumer = net_stats.clone();
-        tokio::task::spawn(consume_socket_stats_ebpf_map(
-            socket_async_fd,
-            net_stats_consumer,
-        ));
-
-        let json_output = args.json;
-        let debug_mode = args.debug;
-        let verbose_mode = args.verbose;
-
-        // Clone necessary variables for the async task
-        let url = global_url.clone();
-        let host = hostname.clone();
-        let syslog = syslog_address.clone();
-        let client = Client::new();
-        let pid_filter = args.pid_list.clone();
-
-        // Spawn network monitoring task
-        socket_handle = Some(tokio::spawn(async move {
-            loop {
-                if let Err(e) = monitor_network_usage(
-                    &net_stats,
-                    &json_output,
-                    &http_bool,
-                    &syslog_bool,
-                    &debug_mode,
-                    &verbose_mode,
-                    &host,
-                    &syslog,
-                    &url,
-                    &client,
-                    &pid_filter,
-                )
-                .await
-                {
-                    error!("Network monitoring error: {}", e);
-                }
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
-            }
-        }));
+        // Spawn socket stats consumer
+        handles.push(tokio::spawn(consume_socket_stats(async_fd, net_stats)));
     }
 
-    // using procfs for IO monitoring
-    let mut io_handle: Option<JoinHandle<()>> = None;
-
+    // IO monitoring
     if args.io {
-        let json_output = args.json;
-        let debug_mode = args.debug;
-        let verbose_mode = args.verbose;
-        let url = global_url.clone();
-        let host = hostname.clone();
-        let syslog = syslog_address.clone();
-        let client = Client::new();
-        let pid_filter = args.pid_list.clone();
-
-        io_handle = Some(tokio::spawn(async move {
-            loop {
-                if let Err(e) = monitor_io_usage(
-                    &json_output,
-                    &http_bool,
-                    &syslog_bool,
-                    &debug_mode,
-                    &verbose_mode,
-                    &host,
-                    &syslog,
-                    &url,
-                    &client,
-                    &pid_filter,
-                )
-                .await
-                {
-                    error!("IO monitoring error: {}", e);
-                }
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
-            }
-        }));
+        let ctx = MonitorContext::new(app_config.clone(), output_config.clone());
+        handles.push(tokio::spawn(run_io_monitor(ctx)));
     }
 
-    // set up the memory fault monitoring
-    let mut memory_fault_handle: Option<JoinHandle<()>> = None;
-
-    if let Some(threshold_fault_count) = args.memory_faults {
-        let url = global_url.clone();
-        let host = hostname.clone();
-        let syslog = syslog_address.clone();
-        let verbose_mode = args.verbose;
-        let client = Client::new();
-
-        memory_fault_handle = Some(tokio::task::spawn(async move {
-            loop {
-                let _ = procfs_helpers::get_major_faults(
-                    threshold_fault_count,
-                    &args.json,
-                    &http_bool,
-                    &syslog_bool,
-                    &verbose_mode,
-                    &host,
-                    &url,
-                    &syslog,
-                    &client,
-                    &args.debug,
-                )
-                .await;
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
-            }
-        }));
+    // Memory faults monitoring
+    if args.memory_faults.is_some() {
+        let ctx = MonitorContext::new(app_config.clone(), output_config.clone());
+        handles.push(tokio::spawn(run_memory_faults_monitor(ctx)));
     }
 
-    // set up the memory usage monitoring
-    let mut memory_usage_handle: Option<JoinHandle<()>> = None;
+    // Memory usage monitoring
     if args.memory {
-        let url = global_url.clone();
-        let host = hostname.clone();
-        let syslog = syslog_address.clone();
-        let verbose_mode = args.verbose;
-        let pid_filter = args.pid_list.clone();
+        let ctx = MonitorContext::new(app_config.clone(), output_config.clone());
+        handles.push(tokio::spawn(run_memory_monitor(ctx)));
+    }
 
-        let client = Client::new();
-        memory_usage_handle = Some(tokio::task::spawn(async move {
-            loop {
-                let _ = procfs_helpers::get_all_memory_usage(
-                    &args.json,
-                    &http_bool,
-                    &syslog_bool,
-                    &verbose_mode,
-                    &host,
-                    &url,
-                    &syslog,
-                    &client,
-                    &args.debug,
-                    &pid_filter,
-                )
-                .await;
-                let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
-            }
+    // Syscall blocking
+    if args.syscalls.is_some() {
+        if let Some(ref btf) = loaded_ebpf.btf {
+            setup_syscall_blocking(&mut loaded_ebpf.ebpf, &app_config, btf)?;
+        } else {
+            eprintln!("Warning: BTF not available, syscall blocking disabled");
+        }
+    }
+
+    // Bash monitoring
+    if args.bash {
+        setup_bash_monitoring(&mut loaded_ebpf, &app_config, &output_config).await?;
+    }
+
+    // Zsh monitoring
+    if args.zsh {
+        setup_zsh_monitoring(&mut loaded_ebpf, &app_config, &output_config).await?;
+    }
+
+    // Default execve monitoring
+    if app_config.should_run_execve_monitor() {
+        attach_raw_tracepoint(&mut loaded_ebpf.ebpf, "panhandle", "sys_enter_execve")?;
+
+        let async_fd =
+            create_ring_buffer_async_fd(&mut loaded_ebpf.ebpf, "panhandle_execve_events")?;
+
+        let executables = app_config.executables.clone();
+        let client = output_config.client.clone();
+        let hostname = output_config.hostname.clone();
+        let json = output_config.json;
+        let http = output_config.http;
+        let syslog = output_config.syslog;
+        let syslog_address = output_config.syslog_address.clone();
+        let http_url = output_config.http_url.clone();
+        let debug = output_config.debug;
+
+        handles.push(tokio::spawn(async move {
+            consume_execve_events(
+                client,
+                async_fd,
+                executables,
+                hostname,
+                json,
+                http,
+                syslog,
+                syslog_address,
+                http_url,
+                debug,
+            )
+            .await
         }));
     }
 
-    // process syscall blocking
-    if let Some(syscalls) = &args.syscalls {
-        // Not allowing for providing both an allow list and deny list
-        let (list_type, comms) = match resolve_comm_list_mode(&args.comm_deny, &args.comm_allow) {
-            Ok(resolved) => resolved,
-            Err(e) => {
-                info!("{}", e);
-                process::exit(1);
-            }
-        };
-        if list_type == NO_LIST && args.verbose {
-            info!(
-                "Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked."
-            );
-        }
+    // Wait for shutdown signal
+    signal::ctrl_c().await?;
+    info!("Shutting down...");
 
-        // clap's num_args upper bound only limits raw CLI tokens, not the values a
-        // single comma-separated argument splits into, so it can't reject an over-limit
-        // list at parse time -- enforce the documented maximums here instead.
-        if let Err(e) = validate_count(
-            comms.len(),
-            MAX_BLOCKED_COMMS,
-            "comm-allow/comm-deny entries",
-        ) {
-            info!("{}", e);
-            process::exit(1);
-        }
-        // clap's value_parser only validates comm-allow/comm-deny supplied on the CLI,
-        // not ones coming from the config file -- enforce the same length limit here
-        // so an over-long config entry is rejected instead of silently truncated below.
-        for comm in &comms {
-            if let Err(e) = validate_comm_length(comm) {
-                info!("{}", e);
-                process::exit(1);
-            }
-        }
-        if let Some(ref paths) = args.block_paths
-            && let Err(e) = validate_count(paths.len(), MAX_BLOCKED_PATHS, "block-paths entries")
-        {
-            info!("{}", e);
-            process::exit(1);
-        }
-        // clap's value_parser only validates block-paths supplied on the CLI, not
-        // ones coming from the config file -- enforce the same length limit here so
-        // an over-long config entry can't overflow the fixed-size eBPF map key below.
-        if let Some(ref paths) = args.block_paths {
-            for path in paths {
-                if let Err(e) = validate_path_length(path) {
-                    info!("{}", e);
-                    process::exit(1);
+    // Abort all monitor tasks
+    for handle in handles {
+        handle.abort();
+    }
+
+    Ok(())
+}
+
+/// Build AppConfig from CLI args
+fn build_app_config(args: &RawArgs) -> Result<AppConfig> {
+    let include_uids: Vec<u32> = if let Some(ref uids) = args.include_uid {
+        let mut parsed = Vec::new();
+        for uid_str in uids {
+            match uid_str.parse::<u32>() {
+                Ok(uid) => parsed.push(uid),
+                Err(_) => {
+                    return Err(PanhandleError::UidValidation(format!(
+                        "Invalid --include-uid value '{}': must be a non-negative integer",
+                        uid_str
+                    )));
                 }
             }
         }
+        parsed
+    } else {
+        Vec::new()
+    };
 
-        let blocked_paths: Vec<String> = if let Some(ref paths) = args.block_paths {
-            paths.clone()
-        } else {
-            Vec::new()
+    Ok(AppConfig {
+        shells: args.shells,
+        exclude_min_uid: args.exclude_min_uid.unwrap_or(MINUID),
+        exclude_max_uid: args.exclude_max_uid.unwrap_or(MAXUID),
+        include_uids,
+        executables: args.executables.clone().unwrap_or_default(),
+        block_paths: args.block_paths.clone().unwrap_or_default(),
+        comm_allow: args.comm_allow.clone().unwrap_or_default(),
+        comm_deny: args.comm_deny.clone().unwrap_or_default(),
+        syscalls: args.syscalls.clone().unwrap_or_default(),
+        pid_list: args.pid_list.clone().unwrap_or_default(),
+        poll_seconds: args.poll.unwrap_or(30),
+        debug: args.debug,
+        verbose: args.verbose,
+        json: args.json,
+        http: args.http.is_some(),
+        syslog: args.syslog.is_some(),
+        syslog_address: args
+            .syslog
+            .clone()
+            .flatten()
+            .unwrap_or_else(|| "udp://127.0.0.1:514".to_string()),
+        http_url: args
+            .http
+            .clone()
+            .unwrap_or_else(|| "http://127.0.0.1:8080/events".to_string()),
+        bash: args.bash,
+        zsh: args.zsh,
+        cpu: args.cpu,
+        gpu: args.gpu,
+        network: args.socket,
+        io: args.io,
+        memory: args.memory,
+        memory_faults: args.memory_faults,
+        execve: args.execve,
+    })
+}
+
+/// Merge CLI args with config file
+async fn merge_args(mut args: RawArgs, config_path: &str) -> Result<RawArgs> {
+    let path_ref = std::path::Path::new(config_path);
+    let config_str = std::fs::read_to_string(config_path)?;
+
+    // Check file extension first
+    match path_ref.extension().and_then(|e| e.to_str()) {
+        Some("json") => {
+            // First parse as ConfigArgs to validate unknown fields
+            let _config_args: ConfigArgs = serde_json::from_str(&config_str)?;
+            // Then parse as RawArgs for merging
+            let file_args: RawArgs = serde_json::from_str(&config_str)?;
+            merge_raw_args(&mut args, file_args);
+        }
+        Some("yaml") | Some("yml") => {
+            // First parse as ConfigArgs to validate unknown fields
+            let _config_args: ConfigArgs = serde_saphyr::from_str(&config_str)?;
+            // Then parse as RawArgs for merging
+            let file_args: RawArgs = serde_saphyr::from_str(&config_str)?;
+            merge_raw_args(&mut args, file_args);
+        }
+        other => {
+            return Err(PanhandleError::InvalidArgument(format!(
+                "Unsupported config type {:?}",
+                other
+            )));
+        }
+    }
+
+    Ok(args)
+}
+
+/// Helper to merge RawArgs from config file into CLI args
+fn merge_raw_args(args: &mut RawArgs, file_args: RawArgs) {
+    // Config file values are overridden by CLI args (which are already in `args`)
+    if args.executables.is_none() {
+        args.executables = file_args.executables;
+    }
+    if args.exclude_min_uid.is_none() {
+        args.exclude_min_uid = file_args.exclude_min_uid;
+    }
+    if args.exclude_max_uid.is_none() {
+        args.exclude_max_uid = file_args.exclude_max_uid;
+    }
+    if args.include_uid.is_none() {
+        args.include_uid = file_args.include_uid;
+    }
+    if args.block_paths.is_none() {
+        args.block_paths = file_args.block_paths;
+    }
+    if args.comm_allow.is_none() {
+        args.comm_allow = file_args.comm_allow;
+    }
+    if args.comm_deny.is_none() {
+        args.comm_deny = file_args.comm_deny;
+    }
+    if args.syscalls.is_none() {
+        args.syscalls = file_args.syscalls;
+    }
+    if args.pid_list.is_none() {
+        args.pid_list = file_args.pid_list;
+    }
+    if args.poll.is_none() {
+        args.poll = file_args.poll;
+    }
+    if !args.debug {
+        args.debug = file_args.debug;
+    }
+    if !args.verbose {
+        args.verbose = file_args.verbose;
+    }
+    if !args.json {
+        args.json = file_args.json;
+    }
+    if args.http.is_none() {
+        args.http = file_args.http;
+    }
+    if args.syslog.is_none() {
+        args.syslog = file_args.syslog;
+    }
+    if !args.bash {
+        args.bash = file_args.bash;
+    }
+    if !args.zsh {
+        args.zsh = file_args.zsh;
+    }
+    if !args.cpu {
+        args.cpu = file_args.cpu;
+    }
+    if !args.gpu {
+        args.gpu = file_args.gpu;
+    }
+    if !args.socket {
+        args.socket = file_args.socket;
+    }
+    if !args.io {
+        args.io = file_args.io;
+    }
+    if !args.memory {
+        args.memory = file_args.memory;
+    }
+    if args.memory_faults.is_none() {
+        args.memory_faults = file_args.memory_faults;
+    }
+    if !args.execve {
+        args.execve = file_args.execve;
+    }
+    if !args.shells {
+        args.shells = file_args.shells;
+    }
+}
+
+/// Consume execve events from ring buffer
+async fn consume_execve_events(
+    client: Client,
+    mut async_fd: AsyncFd<aya::maps::RingBuf<aya::maps::MapData>>,
+    executable_vec: Vec<String>,
+    hostname: Arc<String>,
+    json: bool,
+    http: bool,
+    syslog: bool,
+    syslog_address: Arc<String>,
+    http_url: Arc<String>,
+    debug: bool,
+) -> Result<()> {
+    use crate::output::OutputConfig;
+    use panhandle_common::ExecveEvent;
+
+    let output = OutputConfig::new(
+        hostname,
+        json,
+        http,
+        syslog,
+        syslog_address,
+        http_url,
+        debug,
+        client,
+    )?;
+
+    loop {
+        let Ok(mut guard) = async_fd.ready_mut(Interest::READABLE).await else {
+            continue;
         };
-
-        // Get the COMMS map
-        let comms_map = ebpf.take_map("COMMS").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "COMMS"
-            )
-        })?;
-        let mut comm_list: aya::maps::HashMap<_, [u8; 16], u8> =
-            aya::maps::HashMap::try_from(comms_map)?;
-
-        // list_type is used on the ebpf side to determine how to handle process blocking
-        for comm_str in comms {
-            let mut comm = [0u8; 16];
-            let bytes = comm_str.as_bytes();
-            let len = bytes.len().min(15); // Already validated above to be <= MAX_COMM_LENGTH (15); min() is just a defensive clamp
-            comm[..len].copy_from_slice(&bytes[..len]);
-            comm_list.insert(&comm, &list_type, 0)?;
-        }
-
-        // Insert mode indicator key to tell eBPF which mode we're in.
-        // This known key within the hashmap is required for when ebpf side can't find a comm in the map but still needs to know what to do with it
-        if list_type != NO_LIST {
-            let mode_key = [LIST_MODE; 16];
-            comm_list.insert(&mode_key, &list_type, 0)?;
-        }
-
-        // Get the BLOCKED_PATHS map
-        let blocked_paths_map = ebpf.take_map("BLOCKED_PATHS").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "BLOCKED_PATHS"
-            )
-        })?;
-        let mut path_denylist: aya::maps::HashMap<_, [u8; 256], u8> =
-            aya::maps::HashMap::try_from(blocked_paths_map)?;
-
-        // Populate the denylist with initial paths
-        if blocked_paths.is_empty() {
-            let path = [0u8; 256];
-            path_denylist.insert(&path, &0u8, 0)?; // value of 0 is a placeholder, check on ebpf side for it to know that no path list was provided
-            if args.verbose {
-                println!(
-                    "Process blocking was turned on but no filepath list was provided. Defaulting to blocking all paths."
-                )
+        let mut events = Vec::new();
+        let ring_buf = guard.get_inner_mut();
+        while let Some(item) = ring_buf.next() {
+            if item.len() >= core::mem::size_of::<ExecveEvent>() {
+                events.push(unsafe { read_ring_item::<ExecveEvent>(&item) });
             }
         }
-        for path_str in blocked_paths {
-            let mut path = [0u8; 256];
-            let bytes = path_str.as_bytes();
-            let len = bytes.len(); // Already validated above (CLI value_parser or the config-file check) to be <= MAX_PATH_LENGTH (255)
-            path[..len].copy_from_slice(&bytes[..len]);
-            path_denylist.insert(&path, &1u8, 0)?;
-        }
+        guard.clear_ready();
 
-        // Check for open related syscalls - open, openat, creat
-        if syscalls
-            .iter()
-            .any(|s| s == "open" || s == "openat" || s == "creat")
-        {
-            attach_lsm_hook(&mut ebpf, "file_open", "block_open")
-                .expect("failed to attach file_open hook");
-        }
+        for event in &events {
+            if !event_matches_executable_filter(
+                &executable_vec,
+                std::str::from_utf8(&event.filename).unwrap_or_default(),
+            ) {
+                continue;
+            }
 
-        if syscalls.iter().any(|s| s == "execve") {
-            attach_lsm_hook(&mut ebpf, "bprm_check_security", "block_execve")
-                .expect("failed to attach bprm_check_security hook");
+            let json_payload = output.format_execve_event_json(event, "execve");
+            let text_payload = output.format_execve_event_text(event, "execve");
+            output.output_event(&json_payload, &text_payload).await?;
         }
     }
+}
 
-    if args.bash {
-        // canonicalize the path and then convert to string
-        let file: PathBuf = canonicalize("/bin/bash").unwrap_or_default();
-        if !file.exists() {
-            error!("Could not find /bin/bash");
-            process::exit(1);
+/// Consume socket stats events
+async fn consume_socket_stats(
+    mut async_fd: AsyncFd<aya::maps::RingBuf<aya::maps::MapData>>,
+    net_stats: monitors::SharedNetStats,
+) -> Result<()> {
+    use panhandle_common::SocketStatsEvent;
+
+    loop {
+        let Ok(mut guard) = async_fd.ready_mut(Interest::READABLE).await else {
+            continue;
+        };
+        let mut events = Vec::new();
+        let ring_buf = guard.get_inner_mut();
+        while let Some(item) = ring_buf.next() {
+            if item.len() >= core::mem::size_of::<SocketStatsEvent>() {
+                events.push(unsafe { read_ring_item::<SocketStatsEvent>(&item) });
+            }
         }
-        debug!("found executable: {:?}", file);
-        let file_string = file.into_os_string().into_string().unwrap_or_else(|os| {
-            error!("Path to bash is not valid UTF-8: {:?}", os);
-            process::exit(1);
-        });
-        debug!(
-            "converted PathBuf path to this file string: '{}'",
-            file_string
-        );
+        guard.clear_ready();
 
-        // readline stuff
-        let program: &mut UProbe = ebpf
-            .program_mut("readline")
-            .unwrap()
-            .try_into()
-            .inspect_err(|e| {
-                error!("failed to load eBPF program 'readline': {}", e);
-            })?;
-        program.load().inspect_err(|e| {
-            error!("failed to load uprobe 'readline': {}", e);
-        })?;
-        program
-            .attach(
-                ["readline_internal_teardown"],
-                &file_string,
-                UProbeScope::AllProcesses,
-            )
-            .inspect_err(|e| {
-                error!(
-                    "failed to attach uprobe 'readline' to '{}': {}",
-                    file_string, e
-                );
-            })?;
-        debug!("attached eBPF uprobe 'readline' to '{}'", file_string);
-
-        // Process events from the ring buffer
-        let ring_buf = RingBuf::try_from(ebpf.take_map("readline_events").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "readline_events"
-            )
-        })?)?;
-        // SAFETY: The RingBuf owns its map FD.
-        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE) }?;
-
-        let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
-        let ref_global_url = global_url.clone();
-        let ref_syslog_address = syslog_address.clone();
-        let client = Client::new();
-        let ref_hostname = hostname.clone();
-
-        // now spawn the async stuff
-        tokio::task::spawn(async move {
-            consume_shell_ebpf_map(
-                &client,
-                async_fd,
-                ref_executable_vec,
-                ref_global_url,
-                http_bool,
-                ref_syslog_address,
-                ref_hostname,
-                syslog_bool,
-                args.json,
-                args.debug,
-            )
-            .await;
-        });
-    }
-    if args.zsh {
-        // canonicalize the path and then convert to string
-        let file: PathBuf = canonicalize("/bin/zsh").unwrap_or_default();
-        if !file.exists() {
-            error!("Could not find /bin/zsh");
-            process::exit(1);
+        for event in &events {
+            // Apply socket stats event to shared net_stats
+            let mut map = net_stats.lock().await;
+            let entry = map.entry(event.pid).or_default();
+            entry.tcp_established = entry
+                .tcp_established
+                .saturating_add_signed(event.tcp_established_delta);
+            entry.tcp_syn_recv = entry
+                .tcp_syn_recv
+                .saturating_add_signed(event.tcp_syn_recv_delta);
+            entry.tcp_close_wait = entry
+                .tcp_close_wait
+                .saturating_add_signed(event.tcp_close_wait_delta);
+            entry.tcp_time_wait = entry
+                .tcp_time_wait
+                .saturating_add_signed(event.tcp_time_wait_delta);
+            entry.tcp_fin_wait = entry
+                .tcp_fin_wait
+                .saturating_add_signed(event.tcp_fin_wait_delta);
+            if event.udp_sockets_set != 0 {
+                entry.udp_sockets = entry.udp_sockets.max(1);
+            }
+            entry.bytes_sent += event.bytes_sent_delta;
+            entry.bytes_recv += event.bytes_recv_delta;
+            entry.packets_sent += event.packets_sent_delta;
+            entry.packets_recv += event.packets_recv_delta;
         }
-        debug!("found executable: {:?}", file);
-        let file_string = file.into_os_string().into_string().unwrap_or_else(|os| {
-            error!("Path to zsh is not valid UTF-8: {:?}", os);
-            process::exit(1);
-        });
-        debug!(
-            "converted PathBuf path to this file string: '{}'",
-            file_string
-        );
-
-        // zlentry stuff
-        let program: &mut UProbe = ebpf
-            .program_mut("zlentry")
-            .unwrap()
-            .try_into()
-            .inspect_err(|e| {
-                error!("failed to load eBPF program 'zlentry': {}", e);
-            })?;
-        program.load().inspect_err(|e| {
-            error!("failed to load uprobe 'zlentry': {}", e);
-        })?;
-        program
-            .attach(["zleentry"], &file_string, UProbeScope::AllProcesses)
-            .inspect_err(|e| {
-                error!(
-                    "failed to attach uprobe 'zlentry' to '{}': {}",
-                    file_string, e
-                );
-            })?;
-        debug!("attached eBPF uprobe 'zlentry' to '{}'", file_string);
-
-        // Process events from the ring buffer
-        let ring_buf = RingBuf::try_from(ebpf.take_map("zlentry_events").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "zlentry_events"
-            )
-        })?)?;
-        // SAFETY: The RingBuf owns its map FD.
-        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE) }?;
-
-        let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
-        let ref_global_url = global_url.clone();
-        let ref_syslog_address = syslog_address.clone();
-        let client = Client::new();
-        let ref_hostname = hostname.clone();
-
-        // now spawn the async stuff
-        tokio::task::spawn(async move {
-            consume_shell_ebpf_map(
-                &client,
-                async_fd,
-                ref_executable_vec,
-                ref_global_url,
-                http_bool,
-                ref_syslog_address,
-                ref_hostname,
-                syslog_bool,
-                args.json,
-                args.debug,
-            )
-            .await;
-        });
     }
-    if should_run_default_execve_monitor(
-        args.syscall_execve,
-        args.bash,
-        args.zsh,
-        args.memory_faults.is_some(),
-        args.socket,
-        args.memory,
-        args.cpu,
-        args.gpu,
-        args.io,
-        args.syscalls.is_some(),
-    ) {
-        // this is the main program functionality
-        // the default option if the other shells are not selected
-        // load the ebpf program using RawTracePoint (faster than TracePoint)
-        let program2: &mut RawTracePoint = ebpf
-            .program_mut("panhandle")
-            .unwrap()
-            .try_into()
-            .inspect_err(|e| {
-                error!("failed to load eBPF program 'panhandle': {}", e);
-            })?;
-        program2.load().inspect_err(|e| {
-            error!("failed to load raw tracepoint 'sys_enter_execve': {}", e);
-        })?;
-        program2.attach("sys_enter_execve").inspect_err(|e| {
-            error!("failed to attach raw tracepoint 'sys_enter_execve': {}", e);
-        })?;
-        debug!("attached eBPF raw tracepoint 'sys_enter_execve'");
-
-        // Process events from the ring buffer
-        let ring_buf =
-            RingBuf::try_from(ebpf.take_map("panhandle_execve_events").ok_or_else(|| {
-                format!(
-                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                    "panhandle_execve_events"
-                )
-            })?)?;
-        // SAFETY: The RingBuf owns its map FD.
-        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE) }?;
-
-        let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
-        let ref_global_url = global_url.clone();
-        let ref_syslog_address = syslog_address.clone();
-        let client = Client::new();
-        let ref_hostname = hostname.clone();
-
-        // now spawn the async stuff
-        tokio::task::spawn(async move {
-            consume_execve_ebpf_map(
-                &client,
-                async_fd,
-                ref_executable_vec,
-                ref_global_url,
-                http_bool,
-                ref_syslog_address,
-                ref_hostname,
-                syslog_bool,
-                args.json,
-                args.debug,
-            )
-            .await;
-        });
-    }
-    debug!("monitoring for events in ebpf-land...");
-    // await the escape signal - this may need to change based on the method of running the program
-    signal::ctrl_c().await?;
-    debug!("cleanly exiting program as requested");
-    if let Some(handle_ref) = memory_fault_handle {
-        handle_ref.abort();
-    };
-    if let Some(handle_ref) = memory_usage_handle {
-        handle_ref.abort();
-    };
-    if let Some(handle_ref) = socket_handle {
-        handle_ref.abort();
-    }
-    if let Some(handle_ref) = io_handle {
-        handle_ref.abort();
-    }
-    if let Some(handle_ref) = cpu_handle {
-        handle_ref.abort();
-    }
-    if let Some(handle_ref) = gpu_handle {
-        handle_ref.abort();
-    }
-    Ok(())
 }

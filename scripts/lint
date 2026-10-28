@@ -17,14 +17,19 @@ echo "=== Security audit ==="
 cargo audit --format terminal || true
 
 echo "=== Outdated dependencies ==="
-cargo outdated --root-deps-only --exit-code 1 || true
+# cargo-outdated is optional; skip if not installed
+if command -v cargo-outdated >/dev/null 2>&1; then
+    cargo outdated --root-deps-only --exit-code 1 || true
+else
+    echo "cargo-outdated not installed, skipping..."
+fi
 
 echo "=== Markdown linting ==="
 cd "$PROJECT_ROOT"
-npx markdownlint '**/*.md' --fix --ignore node_modules --ignore archive
+npx markdownlint '**/*.md' --fix --ignore node_modules --ignore archive --ignore 'panhandle/target/**'
 
 echo "=== YAML linting ==="
-yamllint -c .yamllint.yaml . -f parsable 2>&1 | grep -v "node_modules" | grep -v "archive" | grep -v "^$" || true
+yamllint -c .yamllint.yaml . -f parsable 2>&1 | grep -v "node_modules" | grep -v "archive" | grep -v "target" | grep -v "^$" || true
 
 echo "=== JSON linting ==="
 npx jsonlint "$PROJECT_ROOT"/package.json "$PROJECT_ROOT"/.opencode/package.json -q

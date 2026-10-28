@@ -12,22 +12,16 @@ using the Aya Rust library for eBPF.
 
 ### Primary Agent (Development)
 
-- **Model**: NVIDIA Nemotron 3 Ultra (darwin.NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4)
-- **Provider**: circe-keys
 - **Role**: Main development agent for Rust/ebpf development
 - **Skills**: rust, cargo, ebpf, aya
 
 ### Documentation Agent
 
-- **Model**: NVIDIA Nemotron 3 Ultra (darwin.NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4)
-- **Provider**: circe-keys
 - **Role**: Documentation and markdown maintenance
 - **Skills**: markdown, yaml, json
 
 ### Security Agent
 
-- **Model**: NVIDIA Nemotron 3 Ultra (darwin.NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4)
-- **Provider**: circe-keys
 - **Role**: Security auditing, dependency scanning
 - **Skills**: cargo-audit, cargo-deny
 

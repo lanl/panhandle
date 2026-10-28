@@ -86,4 +86,4 @@ Linux server or VM and run there.
 ## Limitations
 
 The minimum kernel version supported is 4.3 per the [PerfEventArray /
-AsyncPerfEventArray docs](https://docs.rs/aya/latest/aya/maps/perf/struct.AsyncPerfEventArray.html)
+AsyncPerfEventArray docs](https://docs.rs/aya/0.16.0/aya/maps/perf/struct.AsyncPerfEventArray.html)

@@ -14,8 +14,8 @@ options for http, syslog and file output as well as standard console output.
 All outputs support text and JSON formatting.
 
 This project is written in [Rust](https://www.rust-lang.org/) and uses the
-[Aya](https://aya-rs.dev/) library to reduce dependencies and maximize the
-ability of this program to run on a variety of systems.
+[Aya](https://aya-rs.dev/) library (v0.16) to reduce dependencies and maximize
+the ability of this program to run on a variety of systems.
 
 ## Components
 

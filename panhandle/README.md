@@ -15,6 +15,16 @@
    [`brew install filosottile/musl-cross/musl-cross`](https://github.com/FiloSottile/homebrew-musl-cross) (on macOS)
 7. Sudo for your user is required.
 
+### Development Tools (Optional)
+
+```bash
+# From the panhandle directory
+cargo install cargo-audit cargo-outdated cargo-machete cargo-deny cargo-sbom
+
+# Or run the automated install script from repo root:
+./scripts/rust_install.sh
+```
+
 ### Node.js Tooling (Required for Linting)
 
 ```bash
@@ -37,6 +47,27 @@ cargo run --release'
 
 Cargo build scripts are used to automatically build the eBPF bytecode
 correctly and include it in the program.
+
+## Development Scripts
+
+```bash
+# From the repository root
+
+# Run all linting and tests (recommended before commits)
+./scripts/lint
+
+# Update all dependencies and regenerate SBOM
+./scripts/update
+
+# Check for unused/duplicate dependencies
+./scripts/check-deps
+
+# Install git hooks for automatic pre-commit/pre-push checks
+./scripts/install-hooks
+
+# Create a release (version bump, changelog, tag, build)
+./scripts/release 1.0.25
+```
 
 ## Cross-compiling on macOS
 

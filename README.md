@@ -51,6 +51,9 @@ cargo install bpf-linker
 
 # For cross-compiling (optional)
 rustup target add x86_64-unknown-linux-musl
+
+# Or run the automated install script:
+./scripts/rust_install.sh
 ```
 
 ### Node.js Tooling (Required for Linting)
@@ -74,6 +77,9 @@ npm install
 # Update all dependencies and regenerate SBOM
 ./scripts/update
 
+# Check for unused/duplicate dependencies
+./scripts/check-deps
+
 # Build the project
 cd panhandle && cargo build --release
 
@@ -82,6 +88,12 @@ cd panhandle && cargo test
 
 # Security audit
 cd panhandle && cargo deny check
+
+# Install git hooks for automatic pre-commit/pre-push checks
+./scripts/install-hooks
+
+# Create a release (version bump, changelog, tag, build)
+./scripts/release 1.0.25
 ```
 
 ## Releasability

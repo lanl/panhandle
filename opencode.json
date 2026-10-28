@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": [
+  "plugin": [
     "opencode-worktree@latest",
     "opencode-notify@latest"
   ],

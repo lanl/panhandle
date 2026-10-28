@@ -1,8 +1,33 @@
 #!/bin/bash
+# Update all dependencies and tools
+set -euo pipefail
+
+# Get the directory of this script and navigate to project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo "=== Project root: $PROJECT_ROOT ==="
+
+echo "=== Updating Rust toolchain ==="
 rustup self update
 rustup update
+
+echo "=== Updating Node.js dependencies ==="
+cd "$PROJECT_ROOT"
+npm update
+
+echo "=== Cleaning and updating Cargo dependencies ==="
+cd "$PROJECT_ROOT/panhandle"
 cargo clean
 cargo update --verbose
+
+echo "=== Formatting code ==="
 cargo fmt --all
+
+echo "=== Running security checks ==="
 cargo deny check
+
+echo "=== Generating SBOM ==="
 cargo sbom > ../panhandle-sbom.spdx
+
+echo "=== All updates complete! ==="

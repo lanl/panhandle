@@ -1,0 +1,38 @@
+# yamllint configuration for panhandle project
+extends: default
+
+rules:
+  # Line length - disable for config files which can have long URLs
+  line-length:
+    max: 120
+    level: warning
+
+  # Allow empty lines at end of file
+  empty-lines:
+    max: 2
+    max-start: 0
+    max-end: 1
+
+  # Allow trailing spaces in some cases
+  trailing-spaces:
+    level: warning
+
+  # Indentation
+  indentation:
+    spaces: 2
+    indent-sequences: true
+
+  # Document start - not required for all YAML files
+  document-start:
+    level: warning
+
+  # Key ordering - disable as it can be subjective
+  key-ordering: disable
+
+  # Comments - allow comments without space
+  comments:
+    min-spaces-from-content: 1
+
+  # Allow boolean values like yes/no, on/off
+  truthy:
+    level: warning

@@ -1,4 +1,4 @@
-.TH PANHANDLE 1 "5 May 2025"
+.TH PANHANDLE 1 "28 October 2026"
 .SH NAME
 panhandle - User activity monitoring
 .SH SYNOPSIS

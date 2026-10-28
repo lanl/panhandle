@@ -1,0 +1,69 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "skills": {
+    "rust": {
+      "source": "https://github.com/opencode-ai/skill-rust",
+      "version": "latest"
+    },
+    "cargo": {
+      "source": "https://github.com/opencode-ai/skill-cargo",
+      "version": "latest"
+    },
+    "ebpf": {
+      "source": "https://github.com/opencode-ai/skill-ebpf",
+      "version": "latest"
+    },
+    "aya": {
+      "source": "https://github.com/opencode-ai/skill-aya",
+      "version": "latest"
+    }
+  },
+  "references": {
+    "aya-github": {
+      "repository": "aya-rs/aya",
+      "branch": "main",
+      "description": "Official Aya library GitHub repository - latest eBPF development in Rust"
+    },
+    "panhandle": {
+      "path": ".",
+      "description": "Panhandle project - eBPF user activity monitoring for HPC"
+    }
+  },
+  "permissions": [
+    {
+      "action": "edit",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "cargo *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "rustc *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "make *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git status*",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git diff*",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git log*",
+      "effect": "allow"
+    }
+  ]
+}

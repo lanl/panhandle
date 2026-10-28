@@ -2,7 +2,7 @@ use aya::Btf;
 use aya::programs::{KProbe, Lsm};
 use aya::maps::{MapData, RingBuf};
 use procfs::process::Process;
-use tokio::{io::unix::AsyncFd, net::lookup_host, time::Duration};
+use tokio::{io::{unix::AsyncFd, Interest}, net::lookup_host, time::Duration};
 use port_check::*;
 use std::{fs::canonicalize, sync::Arc};
 use url::Url;
@@ -54,7 +54,7 @@ pub async fn consume_shell_ebpf_map(
 
     // main cpu loop
     loop {
-        let Ok(mut guard) = async_fd.readable_mut().await else {
+        let Ok(mut guard) = async_fd.ready_mut(Interest::READABLE).await else {
             continue;
         };
 
@@ -200,7 +200,7 @@ pub async fn consume_execve_ebpf_map(
 
     // main cpu loop
     loop {
-        let Ok(mut guard) = async_fd.readable_mut().await else {
+        let Ok(mut guard) = async_fd.ready_mut(Interest::READABLE).await else {
             continue;
         };
 
@@ -362,7 +362,7 @@ pub async fn consume_socket_stats_ebpf_map(
     net_stats: SharedNetStats,
 ) {
     loop {
-        let Ok(mut guard) = async_fd.readable_mut().await else {
+        let Ok(mut guard) = async_fd.ready_mut(Interest::READABLE).await else {
             continue;
         };
 

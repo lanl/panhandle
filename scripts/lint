@@ -1,6 +1,33 @@
 #!/bin/bash
 # fix any syntax issues
-cargo clippy --fix --allow-dirty --all-targets --all-features -- -D warnings -A clippy::too_many_arguments #-W clippy::pedantic
+set -euo pipefail
+
+# Get the directory of this script and navigate to project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo "=== Project root: $PROJECT_ROOT ==="
+
+echo "=== Rust linting ==="
+cd "$PROJECT_ROOT/panhandle"
+cargo clippy --fix --allow-dirty --all-targets --all-features -- -D warnings -A clippy::too_many_arguments
 cargo fmt --all
+
+echo "=== Markdown linting ==="
+cd "$PROJECT_ROOT"
+npx markdownlint '**/*.md' --fix --ignore node_modules --ignore archive
+
+echo "=== YAML linting ==="
+yamllint -c .yamllint.yaml . -f parsable 2>&1 | grep -v "node_modules" | grep -v "archive" | grep -v "^$" || true
+
+echo "=== JSON linting ==="
+npx jsonlint "$PROJECT_ROOT"/package.json "$PROJECT_ROOT"/.opencode/package.json -q
+
+echo "=== Cargo deny check ==="
+cd "$PROJECT_ROOT/panhandle"
 cargo deny check
+
+echo "=== Tests ==="
 cargo test
+
+echo "=== All checks passed! ==="

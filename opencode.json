@@ -4,10 +4,6 @@
     "opencode-worktree@latest",
     "opencode-notify@latest"
   ],
-  "plugin": [
-    "opencode-worktree@latest",
-    "opencode-notify@latest"
-  ],
   "skills": {
     "rust": {
       "source": "https://github.com/opencode-ai/skill-rust",

@@ -19,6 +19,7 @@ cargo install cargo-outdated
 cargo install cargo-machete
 cargo install cargo-deny
 cargo install cargo-sbom
+cargo install cargo-docs-rs
 
 echo "=== Installing cross-compilation target (optional) ==="
 rustup target add x86_64-unknown-linux-musl

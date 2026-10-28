@@ -19,7 +19,7 @@
 
 ```bash
 # From the panhandle directory
-cargo install cargo-audit cargo-outdated cargo-machete cargo-deny cargo-sbom
+cargo install cargo-audit cargo-outdated cargo-machete cargo-deny cargo-sbom cargo-docs-rs
 
 # Or run the automated install script from repo root:
 ./scripts/rust_install.sh
@@ -62,6 +62,12 @@ correctly and include it in the program.
 # Check for unused/duplicate dependencies
 ./scripts/check-deps
 
+# Generate and open documentation
+cd panhandle && cargo doc --open
+
+# Or use cargo-docs-rs to view docs.rs style docs locally
+cargo docs-rs
+
 # Install git hooks for automatic pre-commit/pre-push checks
 ./scripts/install-hooks
 
@@ -86,4 +92,4 @@ Linux server or VM and run there.
 ## Limitations
 
 The minimum kernel version supported is 4.3 per the [PerfEventArray /
-AsyncPerfEventArray docs](https://docs.rs/aya/0.16.0/aya/maps/perf/struct.AsyncPerfEventArray.html)
+AsyncPerfEventArray docs](https://docs.rs/aya/latest/aya/maps/perf/struct.AsyncPerfEventArray.html)

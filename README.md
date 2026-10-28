@@ -89,6 +89,12 @@ cd panhandle && cargo test
 # Security audit
 cd panhandle && cargo deny check
 
+# Generate and open documentation
+cd panhandle && cargo doc --open
+
+# Or use cargo-docs-rs to view docs.rs style docs locally
+cargo docs-rs
+
 # Install git hooks for automatic pre-commit/pre-push checks
 ./scripts/install-hooks
 

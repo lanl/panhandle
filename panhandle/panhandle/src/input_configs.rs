@@ -2,6 +2,7 @@ use std::{fs, path::Path};
 
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
+use serde_saphyr as serde_yaml;
 
 // process blocking
 pub(crate) const MAX_PATH_LENGTH: usize = 255;
@@ -493,5 +494,44 @@ pub(crate) fn validate_comm_length(s: &str) -> Result<String, String> {
         ))
     } else {
         Ok(s.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_yaml_config_parsing() {
+        let yaml_content = r#"
+shells: true
+syscall_execve: true
+exclude_min_uid: 0
+json: true
+output:
+  - file: /var/log/panhandle/panhandle.log
+  - syslog: hpcsyslog.lanl.gov:514/tcp
+"#;
+        let config: ConfigArgs = serde_yaml::from_str(yaml_content).unwrap();
+        assert!(config.shells);
+        assert!(config.syscall_execve);
+        assert_eq!(config.exclude_min_uid, Some(0));
+        assert!(config.json);
+        assert!(config.output.is_some());
+        let outputs = config.output.unwrap();
+        assert_eq!(outputs.len(), 2);
+    }
+
+    #[test]
+    fn test_yaml_config_with_yml_extension() {
+        let yaml_content = r#"
+bash: true
+zsh: false
+verbose: true
+"#;
+        let config: ConfigArgs = serde_yaml::from_str(yaml_content).unwrap();
+        assert!(config.bash);
+        assert!(!config.zsh);
+        assert!(config.verbose);
     }
 }

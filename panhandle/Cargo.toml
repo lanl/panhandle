@@ -4,7 +4,7 @@ members = ["panhandle", "panhandle-common", "panhandle-ebpf"]
 default-members = ["panhandle", "panhandle-common"]
 
 [workspace.dependencies]
-aya = { version = "0.14.0", default-features = false }
+aya = { version = "0.16.0", default-features = false }
 aya-build = { version = "0.2.0", default-features = false }
 aya-ebpf = { version = "0.2.1", default-features = true }
 aya-log = { version = "0.3.0", default-features = false }

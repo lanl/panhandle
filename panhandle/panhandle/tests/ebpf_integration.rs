@@ -66,17 +66,12 @@ fn test_ebpf_loads_without_stack_spilling() {
         );
     }
 
-    // Verify all expected maps exist
+    // Verify all expected maps exist (GlobalData replaced uid_options, uid_include_list,
+    // readline_uid_options, readline_uid_include_list, zlentry_uid_options, zlentry_uid_include_list)
     let expected_maps = [
         "panhandle_execve_events",
-        "uid_options",
-        "uid_include_list",
         "readline_events",
-        "readline_uid_options",
-        "readline_uid_include_list",
         "zlentry_events",
-        "zlentry_uid_options",
-        "zlentry_uid_include_list",
         "socket_events",
         "COMMS",
         "BLOCKED_PATHS",

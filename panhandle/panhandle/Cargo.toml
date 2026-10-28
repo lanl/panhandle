@@ -29,12 +29,14 @@ procfs = "0.18.0"
 anyhow = "1.0.102"
 network-interface = "2.0.5"
 machine-info = "1.0.9"
+bytemuck = { version = "1.16", features = ["derive"] }
 
 [build-dependencies]
 aya-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.17"
+aya = { workspace = true }
 
 [[bin]]
 name = "panhandle"

@@ -8,9 +8,9 @@ use std::{
 };
 
 use aya::{
-    Btf,
-    maps::{HashMap, RingBuf},
-    programs::{BtfTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
+    Btf, EbpfLoader, VerifierLogLevel,
+    maps::RingBuf,
+    programs::{BtfTracePoint, RawTracePoint, UProbe, uprobe::UProbeScope},
 };
 use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
@@ -42,6 +42,35 @@ use monitor_gpu_usage::*;
 use monitor_io_usage::*;
 use monitor_network_usage::*;
 use panhandle_common::*;
+
+/// GlobalData configuration for panhandle (execve tracepoint)
+/// Must match the eBPF-side PanhandleConfig struct exactly
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct PanhandleConfig {
+    shells: u32,
+    exclude_min_uid: u32,
+    exclude_max_uid: u32,
+    include_enabled: u32,
+    include_uids: [u32; UID_COUNT],
+}
+
+/// GlobalData configuration for shell (readline/zlentry uprobes)
+/// Must match the eBPF-side ShellConfig struct exactly
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct ShellConfig {
+    shells: u32,
+    exclude_min_uid: u32,
+    exclude_max_uid: u32,
+    include_enabled: u32,
+    include_uids: [u32; UID_COUNT],
+}
+
+// Implement Aya's Pod trait for GlobalData
+// Safety: These structs are #[repr(C)] with no padding, all fields are Pod types
+unsafe impl aya::Pod for PanhandleConfig {}
+unsafe impl aya::Pod for ShellConfig {}
 
 /// Validate every user-controlled numeric/list argument up front, before the
 /// root-privilege check and eBPF load later in `main`. Doing this early means
@@ -283,34 +312,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => Arc::new("UNKNOWN_HOST".to_string()),
     };
 
-    // load the built ebpf program
-    // this looks like a failure until the ebpf build runs
-    let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
-        env!("OUT_DIR"),
-        "/panhandle"
-    )))?;
-
-    if args.debug {
-        match EbpfLogger::init(&mut ebpf) {
-            Ok(logger) => {
-                // SAFETY: The logger owns its map FD, and flushing does not close or replace it.
-                let mut async_logger =
-                    unsafe { AsyncFd::register_with_interest(logger, Interest::READABLE) }.unwrap();
-                tokio::spawn(async move {
-                    loop {
-                        let Ok(mut guard) = async_logger.ready_mut(Interest::READABLE).await else {
-                            continue;
-                        };
-                        guard.get_inner_mut().flush();
-                        guard.clear_ready();
-                    }
-                });
-            }
-            // not fatal — just means you won't see ebpf-side logs
-            Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
-        }
-    }
-
     // set up executable vars
     let mut canonical_executable_vec = Vec::new();
     if let Some(executables) = args.executables {
@@ -350,6 +351,79 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = validate_count(only_these_uids_vec.len(), UID_COUNT, "UIDs") {
         info!("{}", e);
         process::exit(1);
+    }
+
+    // load the built ebpf program using EbpfLoader for GlobalData and VerifierLogLevel
+    let ebpf_bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/panhandle"));
+
+    let mut loader = EbpfLoader::new();
+
+    // Enable verifier logs in debug mode for debugging eBPF verification issues
+    if args.debug {
+        loader.verifier_log_level(VerifierLogLevel::DEBUG);
+    }
+
+    // Set GlobalData for panhandle (execve) configuration
+    let panhandle_config = PanhandleConfig {
+        shells: args.shells as u32,
+        exclude_min_uid: args.exclude_min_uid.unwrap_or(MINUID),
+        exclude_max_uid: args.exclude_max_uid.unwrap_or(MAXUID),
+        include_enabled: include_uid_bool as u32,
+        include_uids: {
+            let mut arr = [0u32; UID_COUNT];
+            if include_uid_bool {
+                for (i, &uid) in only_these_uids_vec.iter().enumerate() {
+                    if i < UID_COUNT {
+                        arr[i] = uid;
+                    }
+                }
+            }
+            arr
+        },
+    };
+    loader.override_global("PANHANDLE_CONFIG", &panhandle_config, true);
+
+    // Set GlobalData for shell (readline/zlentry) configuration
+    let shell_config = ShellConfig {
+        shells: args.shells as u32,
+        exclude_min_uid: args.exclude_min_uid.unwrap_or(MINUID),
+        exclude_max_uid: args.exclude_max_uid.unwrap_or(MAXUID),
+        include_enabled: include_uid_bool as u32,
+        include_uids: {
+            let mut arr = [0u32; UID_COUNT];
+            if include_uid_bool {
+                for (i, &uid) in only_these_uids_vec.iter().enumerate() {
+                    if i < UID_COUNT {
+                        arr[i] = uid;
+                    }
+                }
+            }
+            arr
+        },
+    };
+    loader.override_global("SHELL_CONFIG", &shell_config, true);
+
+    let mut ebpf = loader.load(ebpf_bytes)?;
+
+    if args.debug {
+        match EbpfLogger::init(&mut ebpf) {
+            Ok(logger) => {
+                // SAFETY: The logger owns its map FD, and flushing does not close or replace it.
+                let mut async_logger =
+                    unsafe { AsyncFd::register_with_interest(logger, Interest::READABLE) }.unwrap();
+                tokio::spawn(async move {
+                    loop {
+                        let Ok(mut guard) = async_logger.ready_mut(Interest::READABLE).await else {
+                            continue;
+                        };
+                        guard.get_inner_mut().flush();
+                        guard.clear_ready();
+                    }
+                });
+            }
+            // not fatal — just means you won't see ebpf-side logs
+            Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
+        }
     }
 
     // polling frequency variable for performance monitoring tasks
@@ -803,52 +877,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
         debug!("attached eBPF uprobe 'readline' to '{}'", file_string);
 
-        // get the uid_options map from ebpf land
-        let readline_uid_options_map = ebpf.take_map("readline_uid_options").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "readline_uid_options"
-            )
-        })?;
-        let mut program_options: HashMap<_, u32, u32> =
-            HashMap::try_from(readline_uid_options_map).unwrap();
-        // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
-        // this is the shells identifier
-        let val = args.shells as u32;
-        program_options.insert(&UID_OPT_SHELLS, &val, 0)?;
-        // this is the min uid identifier
-        let val = args.exclude_min_uid.unwrap_or(MINUID);
-        program_options.insert(&UID_OPT_EXCLUDE_MIN, &val, 0)?;
-        // this is the max uid identifier
-        let val = args.exclude_max_uid.unwrap_or(MAXUID);
-        program_options.insert(&UID_OPT_EXCLUDE_MAX, &val, 0)?;
-        // this is the include uid list option identifier
-        let val = include_uid_bool as u32;
-        program_options.insert(&UID_OPT_INCLUDE_ENABLED, &val, 0)?;
-
-        // get the uid_include_list map from ebpf land
-        let readline_uid_include_list_map =
-            ebpf.take_map("readline_uid_include_list").ok_or_else(|| {
-                format!(
-                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                    "readline_uid_include_list"
-                )
-            })?;
-        let mut readline_uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
-            HashMap::try_from(readline_uid_include_list_map).unwrap();
-        // set up defaults of a zero'd array
-        let mut zeroed_array: [u32; UID_COUNT] = [0; UID_COUNT];
-
-        if include_uid_bool {
-            for (uid_list_counter, value) in only_these_uids_vec.iter().enumerate() {
-                zeroed_array[uid_list_counter] = *value;
-            }
-            debug!("array of specific uids to watch: {:?}", zeroed_array);
-        }
-
-        // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        readline_uid_list_map.insert(&0u32, &zeroed_array, 0)?;
-
         // Process events from the ring buffer
         let ring_buf = RingBuf::try_from(ebpf.take_map("readline_events").ok_or_else(|| {
             format!(
@@ -920,52 +948,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
         debug!("attached eBPF uprobe 'zlentry' to '{}'", file_string);
 
-        // get the uid_options map from ebpf land
-        let zlentry_uid_options_map = ebpf.take_map("zlentry_uid_options").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "zlentry_uid_options"
-            )
-        })?;
-        let mut program_options: HashMap<_, u32, u32> =
-            HashMap::try_from(zlentry_uid_options_map).unwrap();
-        // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
-        // this is the shells identifier
-        let val = args.shells as u32;
-        program_options.insert(&UID_OPT_SHELLS, &val, 0)?;
-        // this is the min uid identifier
-        let val = args.exclude_min_uid.unwrap_or(MINUID);
-        program_options.insert(&UID_OPT_EXCLUDE_MIN, &val, 0)?;
-        // this is the max uid identifier
-        let val = args.exclude_max_uid.unwrap_or(MAXUID);
-        program_options.insert(&UID_OPT_EXCLUDE_MAX, &val, 0)?;
-        // this is the include uid list option identifier
-        let val = include_uid_bool as u32;
-        program_options.insert(&UID_OPT_INCLUDE_ENABLED, &val, 0)?;
-
-        // get the uid_include_list map from ebpf land
-        let zlentry_uid_include_list_map =
-            ebpf.take_map("zlentry_uid_include_list").ok_or_else(|| {
-                format!(
-                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                    "zlentry_uid_include_list"
-                )
-            })?;
-        let mut zlentry_uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
-            HashMap::try_from(zlentry_uid_include_list_map).unwrap();
-        // set up defaults of a zero'd array
-        let mut zeroed_array: [u32; UID_COUNT] = [0; UID_COUNT];
-
-        if include_uid_bool {
-            for (uid_list_counter, value) in only_these_uids_vec.iter().enumerate() {
-                zeroed_array[uid_list_counter] = *value;
-            }
-            debug!("array of specific uids to watch: {:?}", zeroed_array);
-        }
-
-        // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        zlentry_uid_list_map.insert(&0u32, &zeroed_array, 0)?;
-
         // Process events from the ring buffer
         let ring_buf = RingBuf::try_from(ebpf.take_map("zlentry_events").ok_or_else(|| {
             format!(
@@ -1013,8 +995,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ) {
         // this is the main program functionality
         // the default option if the other shells are not selected
-        // load the ebpf program
-        let program2: &mut TracePoint = ebpf
+        // load the ebpf program using RawTracePoint (faster than TracePoint)
+        let program2: &mut RawTracePoint = ebpf
             .program_mut("panhandle")
             .unwrap()
             .try_into()
@@ -1022,58 +1004,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 error!("failed to load eBPF program 'panhandle': {}", e);
             })?;
         program2.load().inspect_err(|e| {
-            error!("failed to load tracepoint 'sys_enter_execve': {}", e);
+            error!("failed to load raw tracepoint 'sys_enter_execve': {}", e);
         })?;
-        program2
-            .attach("syscalls", "sys_enter_execve")
-            .inspect_err(|e| {
-                error!("failed to attach tracepoint 'sys_enter_execve': {}", e);
-            })?;
-        debug!("attached eBPF tracepoint 'syscalls:sys_enter_execve'");
-
-        // get the uid_options map from ebpf land
-        let uid_options_map = ebpf.take_map("uid_options").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "uid_options"
-            )
+        program2.attach("sys_enter_execve").inspect_err(|e| {
+            error!("failed to attach raw tracepoint 'sys_enter_execve': {}", e);
         })?;
-        let mut program_options: HashMap<_, u32, u32> = HashMap::try_from(uid_options_map).unwrap();
-        // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
-        // this is the shells identifier
-        let val = args.shells as u32;
-        program_options.insert(&UID_OPT_SHELLS, &val, 0)?;
-        // this is the min uid identifier
-        let val = args.exclude_min_uid.unwrap_or(MINUID);
-        program_options.insert(&UID_OPT_EXCLUDE_MIN, &val, 0)?;
-        // this is the max uid identifier
-        let val = args.exclude_max_uid.unwrap_or(MAXUID);
-        program_options.insert(&UID_OPT_EXCLUDE_MAX, &val, 0)?;
-        // this is the include uid list option identifier
-        let val = include_uid_bool as u32;
-        program_options.insert(&UID_OPT_INCLUDE_ENABLED, &val, 0)?;
-
-        // get the uid_include_list map from ebpf land
-        let uid_include_list_map = ebpf.take_map("uid_include_list").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "uid_include_list"
-            )
-        })?;
-        let mut uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
-            HashMap::try_from(uid_include_list_map).unwrap();
-        // set up defaults of a zero'd array
-        let mut zeroed_array: [u32; UID_COUNT] = [0; UID_COUNT];
-
-        if include_uid_bool {
-            for (uid_list_counter, value) in only_these_uids_vec.iter().enumerate() {
-                zeroed_array[uid_list_counter] = *value;
-            }
-            debug!("array of specific uids to watch: {:?}", zeroed_array);
-        }
-
-        // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        uid_list_map.insert(&0u32, &zeroed_array, 0)?;
+        debug!("attached eBPF raw tracepoint 'sys_enter_execve'");
 
         // Process events from the ring buffer
         let ring_buf =

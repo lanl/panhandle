@@ -36,3 +36,6 @@ rules:
   # Allow boolean values like yes/no, on/off
   truthy:
     level: warning
+
+ignore: |
+  .gitlab-ci.yml

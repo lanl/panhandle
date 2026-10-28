@@ -12,6 +12,9 @@ echo "=== Updating Rust toolchain ==="
 rustup self update
 rustup update
 
+echo "=== Updating bpf-linker ==="
+cargo install bpf-linker --force || true
+
 echo "=== Updating Node.js dependencies ==="
 cd "$PROJECT_ROOT"
 npm update
@@ -26,6 +29,10 @@ cargo fmt --all
 
 echo "=== Running security checks ==="
 cargo deny check
+cargo audit --format terminal || true
+
+echo "=== Checking for outdated dependencies ==="
+cargo outdated --root-deps-only --exit-code 1 || true
 
 echo "=== Generating SBOM ==="
 cargo sbom > ../panhandle-sbom.spdx

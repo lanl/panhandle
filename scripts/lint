@@ -13,6 +13,12 @@ cd "$PROJECT_ROOT/panhandle"
 cargo clippy --fix --allow-dirty --all-targets --all-features -- -D warnings -A clippy::too_many_arguments
 cargo fmt --all
 
+echo "=== Security audit ==="
+cargo audit --format terminal || true
+
+echo "=== Outdated dependencies ==="
+cargo outdated --root-deps-only --exit-code 1 || true
+
 echo "=== Markdown linting ==="
 cd "$PROJECT_ROOT"
 npx markdownlint '**/*.md' --fix --ignore node_modules --ignore archive
@@ -22,6 +28,9 @@ yamllint -c .yamllint.yaml . -f parsable 2>&1 | grep -v "node_modules" | grep -v
 
 echo "=== JSON linting ==="
 npx jsonlint "$PROJECT_ROOT"/package.json "$PROJECT_ROOT"/.opencode/package.json -q
+
+echo "=== Shell script linting ==="
+shellcheck "$PROJECT_ROOT"/scripts/*.sh "$PROJECT_ROOT"/*.sh 2>/dev/null || true
 
 echo "=== Cargo deny check ==="
 cd "$PROJECT_ROOT/panhandle"

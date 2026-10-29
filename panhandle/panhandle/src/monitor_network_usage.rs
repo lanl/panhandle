@@ -211,7 +211,7 @@ pub fn format_socket_json(
 /// independently testable without needing real procfs state to decide which pids are
 /// "dead" (that determination is the caller's job; this just does the removal).
 #[allow(dead_code)]
-pub(crate) fn prune_dead_pids(net_stats: &SharedNetStats, dead_pids: Vec<u32>) {
+pub fn prune_dead_pids(net_stats: &SharedNetStats, dead_pids: Vec<u32>) {
     if dead_pids.is_empty() {
         return;
     }
@@ -508,10 +508,7 @@ async fn report_network_stats(
 
 // Get network info for a PID (interface, ip, mac)
 #[allow(dead_code)]
-pub(crate) fn get_network_info(
-    pid: u32,
-    interfaces: &[NetworkInterface],
-) -> (String, String, String) {
+pub fn get_network_info(pid: u32, interfaces: &[NetworkInterface]) -> (String, String, String) {
     // Try to match process connection to interface
     if let Some((iface_name, ip)) = get_active_connection_info(pid, interfaces)
         && let Some(iface) = interfaces.iter().find(|i| i.name == iface_name)
@@ -593,10 +590,7 @@ pub(crate) fn get_active_connection_info(
 
 // Match an IP address (from either address family) to the interface that owns it.
 #[allow(dead_code)]
-pub(crate) fn ip_to_interface(
-    ip: IpAddr,
-    interfaces: &[NetworkInterface],
-) -> Option<(String, String)> {
+pub fn ip_to_interface(ip: IpAddr, interfaces: &[NetworkInterface]) -> Option<(String, String)> {
     for iface in interfaces {
         for addr in &iface.addr {
             if addr.ip() == ip {

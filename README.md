@@ -46,8 +46,17 @@ The RPMs in the build artifacts provide:
 rustup toolchain install stable
 rustup toolchain install nightly --component rust-src
 
-# Install bpf-linker for eBPF compilation
-cargo install bpf-linker
+# Install bpf-linker for eBPF compilation (using pre-built binary)
+# Option 1: cargo-binstall (recommended)
+cargo install cargo-binstall
+cargo binstall bpf-linker
+
+# Option 2: Manual download from GitHub releases (if cargo-binstall unavailable)
+# curl -sSL https://github.com/aya-rs/bpf-linker/releases/download/v0.12.0/bpf-linker-x86_64-unknown-linux-musl.tar.zst | zstd -d | tar x
+# mv bpf-linker ~/.cargo/bin/
+
+# Install cargo-tarpaulin for code coverage
+cargo install cargo-tarpaulin
 
 # For cross-compiling (optional)
 rustup target add x86_64-unknown-linux-musl
@@ -85,6 +94,9 @@ cd panhandle && cargo build --release
 
 # Run tests
 cd panhandle && cargo test
+
+# Run tests with code coverage
+cd panhandle && cargo tarpaulin --all-features --workspace --out Html --output-dir coverage
 
 # Security audit
 cd panhandle && cargo deny check

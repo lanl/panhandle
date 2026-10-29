@@ -38,6 +38,7 @@ mod tests {
     };
     use panhandle_common::NetStats as MonitorNetStats;
 
+    use crate::config::AppConfig;
     use crate::procfs_helpers::*;
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
@@ -2550,5 +2551,221 @@ mod tests {
             zeroed.to_string(),
             "entry: , command: , uid: 0, pid: 0, gid: 0, tgid: 0"
         );
+    }
+
+    // Test AppConfig::validate_comm_lists covers comm_deny length validation (lines 205-206)
+    #[test]
+    fn test_validate_comm_lists_comm_deny_length() {
+        let config = AppConfig {
+            comm_deny: vec!["a".repeat(MAX_COMM_LENGTH + 1)],
+            ..Default::default()
+        };
+        let err = config.validate_comm_lists().unwrap_err();
+        assert!(matches!(err, PanhandleError::CommValidation(_)));
+        assert!(err.to_string().contains("exceeds max length"));
+    }
+
+    // Test AppConfig::should_run_execve_monitor method (lines 261-271)
+    #[test]
+    fn test_app_config_should_run_execve_monitor() {
+        // Default config (no flags) should run execve monitor
+        let config = AppConfig::default();
+        assert!(config.should_run_execve_monitor());
+
+        // Explicit execve flag
+        let config = AppConfig {
+            execve: true,
+            cpu: true,
+            ..Default::default()
+        };
+        assert!(config.should_run_execve_monitor());
+
+        // Any other monitoring flag disables default execve
+        let config = AppConfig {
+            cpu: true,
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+
+        let config = AppConfig {
+            bash: true,
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+
+        let config = AppConfig {
+            zsh: true,
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+
+        let config = AppConfig {
+            memory_faults: Some(1),
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+
+        let config = AppConfig {
+            network: true,
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+
+        let config = AppConfig {
+            io: true,
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+
+        let config = AppConfig {
+            memory: true,
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+
+        let config = AppConfig {
+            gpu: true,
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+
+        let config = AppConfig {
+            syscalls: vec!["execve".to_string()],
+            ..Default::default()
+        };
+        assert!(!config.should_run_execve_monitor());
+    }
+
+    // Test PanhandleError PartialEq implementations (lines 85-112)
+    #[test]
+    fn test_panhandle_error_partial_eq() {
+        // Test variants with string content
+        assert_eq!(
+            PanhandleError::Config("test".to_string()),
+            PanhandleError::Config("test".to_string())
+        );
+        assert_ne!(
+            PanhandleError::Config("test1".to_string()),
+            PanhandleError::Config("test2".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::InvalidArgument("test".to_string()),
+            PanhandleError::InvalidArgument("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::HttpStatus("test".to_string()),
+            PanhandleError::HttpStatus("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::UidValidation("test".to_string()),
+            PanhandleError::UidValidation("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::PathValidation("test".to_string()),
+            PanhandleError::PathValidation("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::CommValidation("test".to_string()),
+            PanhandleError::CommValidation("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::MissingMap("test".to_string()),
+            PanhandleError::MissingMap("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::MissingProgram("test".to_string()),
+            PanhandleError::MissingProgram("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::PermissionDenied("test".to_string()),
+            PanhandleError::PermissionDenied("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::KernelNotSupported("test".to_string()),
+            PanhandleError::KernelNotSupported("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::BtfUnavailable("test".to_string()),
+            PanhandleError::BtfUnavailable("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::AsyncFd("test".to_string()),
+            PanhandleError::AsyncFd("test".to_string())
+        );
+
+        assert_eq!(
+            PanhandleError::Internal("test".to_string()),
+            PanhandleError::Internal("test".to_string())
+        );
+
+        // Test variants wrapping non-PartialEq types (compare variant only)
+        assert_eq!(
+            PanhandleError::EbpfLoad(aya::EbpfError::NoBTF),
+            PanhandleError::EbpfLoad(aya::EbpfError::NoBTF)
+        );
+        assert_eq!(
+            PanhandleError::EbpfAttach(aya::programs::ProgramError::AlreadyLoaded),
+            PanhandleError::EbpfAttach(aya::programs::ProgramError::AlreadyLoaded)
+        );
+        assert_eq!(
+            PanhandleError::EbpfMap(aya::maps::MapError::InvalidName {
+                name: "test".to_string()
+            }),
+            PanhandleError::EbpfMap(aya::maps::MapError::InvalidName {
+                name: "test".to_string()
+            })
+        );
+
+        // Io errors
+        let io_err1 = std::io::Error::new(std::io::ErrorKind::NotFound, "test");
+        let io_err2 = std::io::Error::new(std::io::ErrorKind::NotFound, "test");
+        assert_eq!(PanhandleError::Io(io_err1), PanhandleError::Io(io_err2));
+
+        // Serialization errors
+        let ser_err1 = serde_json::from_str::<serde_json::Value>("invalid").unwrap_err();
+        let ser_err2 = serde_json::from_str::<serde_json::Value>("invalid").unwrap_err();
+        assert_eq!(
+            PanhandleError::Serialization(ser_err1),
+            PanhandleError::Serialization(ser_err2)
+        );
+
+        // Cross-variant inequality
+        assert_ne!(
+            PanhandleError::Config("test".to_string()),
+            PanhandleError::InvalidArgument("test".to_string())
+        );
+    }
+
+    // Test PanhandleError helper constructors (lines 121-122, 126-127, 131-132)
+    #[test]
+    fn test_panhandle_error_constructors() {
+        let config_err = PanhandleError::config("config error");
+        assert!(matches!(config_err, PanhandleError::Config(_)));
+        assert_eq!(config_err.to_string(), "Configuration error: config error");
+
+        let invalid_arg_err = PanhandleError::invalid_arg("invalid argument");
+        assert!(matches!(
+            invalid_arg_err,
+            PanhandleError::InvalidArgument(_)
+        ));
+        assert_eq!(
+            invalid_arg_err.to_string(),
+            "Invalid argument: invalid argument"
+        );
+
+        let internal_err = PanhandleError::internal("internal error");
+        assert!(matches!(internal_err, PanhandleError::Internal(_)));
+        assert_eq!(internal_err.to_string(), "Internal error: internal error");
     }
 }

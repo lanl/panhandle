@@ -14,9 +14,11 @@ use uzers::get_user_by_uid;
 /// reservations are always contiguous (unlike perf array samples), so no head/tail
 /// reconstruction is needed here.
 ///
-/// SAFETY: `T` must be exactly the plain-old-data struct written by the corresponding
+/// # Safety
+///
+/// `T` must be exactly the plain-old-data struct written by the corresponding
 /// `RingBuf::submit` call on the eBPF side, with `bytes.len() >= size_of::<T>()`.
-pub(crate) unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
+pub unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
     unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const T) }
 }
 

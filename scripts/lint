@@ -41,6 +41,17 @@ echo "=== Cargo deny check ==="
 cd "$PROJECT_ROOT/panhandle"
 cargo deny check
 
+echo "=== Code Coverage ==="
+if command -v cargo-tarpaulin >/dev/null 2>&1; then
+    # Exclude panhandle-ebpf since it requires eBPF bytecode build which doesn't work in tarpaulin
+    # Set CARGO_TARGET_DIR to a writable location for tarpaulin's sandboxed environment
+    export CARGO_TARGET_DIR="${PROJECT_ROOT}/panhandle/target"
+    cargo tarpaulin --all-features --workspace --exclude panhandle-ebpf --timeout 120 --out Html --output-dir coverage 2>&1 | tail -20
+    echo "Coverage report generated in panhandle/coverage/"
+else
+    echo "cargo-tarpaulin not installed, skipping coverage..."
+fi
+
 echo "=== Tests ==="
 cargo test
 

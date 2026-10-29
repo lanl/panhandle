@@ -10,8 +10,9 @@ echo "=== Installing required Rust toolchains ==="
 rustup toolchain install stable
 rustup toolchain install nightly --component rust-src
 
-echo "=== Installing bpf-linker ==="
-cargo install bpf-linker
+echo "=== Installing bpf-linker (using pre-built binary) ==="
+cargo install cargo-binstall
+cargo binstall bpf-linker
 
 echo "=== Installing development tools ==="
 cargo install cargo-audit
@@ -20,6 +21,7 @@ cargo install cargo-machete
 cargo install cargo-deny
 cargo install cargo-sbom
 cargo install cargo-docs-rs
+cargo install cargo-tarpaulin
 
 echo "=== Installing cross-compilation target (optional) ==="
 rustup target add x86_64-unknown-linux-musl

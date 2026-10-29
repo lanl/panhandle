@@ -5,7 +5,9 @@
 ### Rust Toolchain (Required)
 
 1. Stable rust toolchains: `rustup toolchain install stable`
-2. bpf-linker: `cargo install bpf-linker` (`--no-default-features` on macOS)
+2. bpf-linker (using pre-built binary):
+   - Option 1: `cargo install cargo-binstall && cargo binstall bpf-linker` (recommended)
+   - Option 2: Manual download from GitHub releases (if cargo-binstall unavailable)
 3. Nightly rust toolchains:
    `rustup toolchain install nightly --component rust-src`
 4. Optional: (if cross-compiling) rustup target:
@@ -19,7 +21,7 @@
 
 ```bash
 # From the panhandle directory
-cargo install cargo-audit cargo-outdated cargo-machete cargo-deny cargo-sbom cargo-docs-rs
+cargo install cargo-audit cargo-outdated cargo-machete cargo-deny cargo-sbom cargo-docs-rs cargo-tarpaulin
 
 # Or run the automated install script from repo root:
 ./scripts/rust_install.sh
@@ -61,6 +63,9 @@ correctly and include it in the program.
 
 # Check for unused/duplicate dependencies
 ./scripts/check-deps
+
+# Run tests with code coverage
+cd panhandle && cargo tarpaulin --all-features --workspace --out Html --output-dir coverage
 
 # Generate and open documentation
 cd panhandle && cargo doc --open

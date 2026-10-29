@@ -13,11 +13,26 @@ rustup self update
 rustup update
 
 echo "=== Updating bpf-linker ==="
-cargo install bpf-linker --force || true
+# Install bpf-linker using pre-built binary (recommended method)
+# See https://github.com/aya-rs/bpf-linker#installation
+BPF_LINKER_VERSION="0.12.0"
+# Use musl binary for maximum compatibility
+BPF_LINKER_URL="https://github.com/aya-rs/bpf-linker/releases/download/v${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+echo "Downloading bpf-linker v${BPF_LINKER_VERSION}..."
+cd /tmp
+# Install zstd if not available
+command -v zstd >/dev/null 2>&1 || (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y zstd) || (command -v dnf >/dev/null 2>&1 && dnf install -y zstd) || (command -v apk >/dev/null 2>&1 && apk add --no-cache zstd) || true
+curl -sSL "${BPF_LINKER_URL}" | zstd -d | tar x
+mv bpf-linker "${HOME}/.cargo/bin/bpf-linker"
+chmod +x "${HOME}/.cargo/bin/bpf-linker"
+echo "bpf-linker installed to ${HOME}/.cargo/bin/bpf-linker"
+cd "$PROJECT_ROOT"
 
 echo "=== Updating Node.js dependencies ==="
 cd "$PROJECT_ROOT"
 npm update
+# Attempt to fix npm vulnerabilities (non-breaking fixes only)
+npm audit fix || true
 
 echo "=== Cleaning and updating Cargo dependencies ==="
 cd "$PROJECT_ROOT/panhandle"

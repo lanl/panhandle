@@ -14,6 +14,8 @@ build-job:
   stage: build
   image: docker.io/rust
   before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
     - cd panhandle/
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
@@ -35,6 +37,8 @@ lint-test-job:
   stage: test
   image: docker.io/rust
   before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
     - cd panhandle/
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
@@ -50,6 +54,8 @@ test-test-job:
   stage: test
   image: docker.io/rust
   before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
     - cd panhandle/
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
@@ -67,6 +73,8 @@ audit-test-job:
   stage: test
   image: docker.io/rust
   before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
     - cd panhandle/
     - rustup update
     - cargo update 
@@ -78,6 +86,8 @@ deny-test-job:
   stage: test
   image: docker.io/rust
   before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends clang libclang-dev linux-libc-dev pkg-config libssl-dev
     - cd panhandle/
     - rustup toolchain install stable
     - rustup toolchain install nightly --component rust-src
@@ -105,10 +115,11 @@ build-rpm-el8_x86_64:
   stage: build-rpm
   image: docker.io/almalinux:8
   before_script:
-    - dnf install -y gcc openssl-devel openssl pkgconf-pkg-config
+    - dnf install -y gcc binutils libgcc glibc-devel openssl-devel openssl pkgconf-pkg-config clang clang-devel kernel-headers llvm-devel llvm-toolset
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - cd panhandle/
     - source ~/.cargo/env
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib64 /usr/lib -type f \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) ! -name 'libclang-cpp*' 2>/dev/null | head -n1)")
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
@@ -137,10 +148,11 @@ build-rpm-el8_aarch64:
   stage: build-rpm
   image: docker.io/almalinux:8
   before_script:
-    - dnf install -y gcc openssl-devel openssl pkgconf-pkg-config
+    - dnf install -y gcc binutils libgcc glibc-devel openssl-devel openssl pkgconf-pkg-config clang clang-devel kernel-headers llvm-devel llvm-toolset
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - cd panhandle/
     - source ~/.cargo/env
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib64 /usr/lib -type f \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) ! -name 'libclang-cpp*' 2>/dev/null | head -n1)")
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
@@ -173,10 +185,11 @@ build-rpm-el9_x86_64:
   stage: build-rpm
   image: docker.io/almalinux:9
   before_script:
-    - dnf install -y gcc openssl-devel openssl pkgconf-pkg-config
+    - dnf install -y gcc binutils libgcc glibc-devel openssl-devel openssl pkgconf-pkg-config clang clang-devel kernel-headers
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - cd panhandle/
     - source ~/.cargo/env
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib64 /usr/lib -type f \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) ! -name 'libclang-cpp*' 2>/dev/null | head -n1)")
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
@@ -205,10 +218,11 @@ build-rpm-el9_aarch64:
   stage: build-rpm
   image: docker.io/almalinux:9
   before_script:
-    - dnf install -y gcc openssl-devel openssl pkgconf-pkg-config
+    - dnf install -y gcc binutils libgcc glibc-devel openssl-devel openssl pkgconf-pkg-config clang clang-devel kernel-headers llvm-devel llvm-toolset
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - cd panhandle/
     - source ~/.cargo/env
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib64 /usr/lib -type f \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) ! -name 'libclang-cpp*' 2>/dev/null | head -n1)")
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
@@ -241,10 +255,11 @@ build-rpm-el10_x86_64:
   stage: build-rpm
   image: docker.io/almalinux:10
   before_script:
-    - dnf install -y gcc openssl-devel openssl pkgconf-pkg-config
+    - dnf install -y gcc binutils libgcc glibc-devel openssl-devel openssl pkgconf-pkg-config clang clang-devel kernel-headers
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - cd panhandle/
     - source ~/.cargo/env
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib64 /usr/lib -type f \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) ! -name 'libclang-cpp*' 2>/dev/null | head -n1)")
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
@@ -273,10 +288,11 @@ build-rpm-el10_aarch64:
   stage: build-rpm
   image: docker.io/almalinux:10
   before_script:
-    - dnf install -y gcc openssl-devel openssl pkgconf-pkg-config
+    - dnf install -y gcc binutils libgcc glibc-devel openssl-devel openssl pkgconf-pkg-config clang clang-devel kernel-headers llvm-devel llvm-toolset
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - cd panhandle/
     - source ~/.cargo/env
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib64 /usr/lib -type f \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) ! -name 'libclang-cpp*' 2>/dev/null | head -n1)")
     - ~/.cargo/bin/rustup toolchain install stable
     - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
     - ~/.cargo/bin/cargo install cargo-generate-rpm
@@ -309,7 +325,11 @@ build-rpm-suse-15.5_x86_64:
   stage: build-rpm
   image: registry.suse.com/suse/sle15:15.5
   before_script:
-    - zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
+    - zypper install -y libopenssl-3-devel openssl pkg-config bash tar xz gzip curl linux-glibc-devel gcc gcc7 python3 python3-pip
+    - python3 -m pip install --upgrade pip
+    - python3 -m pip install libclang
+    - export LIBCLANG_PATH=$(python3 -c "import clang, os; print(os.path.join(os.path.dirname(clang.__file__), 'native'))")
+    - export BINDGEN_EXTRA_CLANG_ARGS="-I$(gcc -print-file-name=include)"
     - ldd --version
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - source ~/.cargo/env
@@ -342,7 +362,11 @@ build-rpm-suse-15.5_aarch64:
   stage: build-rpm
   image: registry.suse.com/suse/sle15:15.5
   before_script:
-    - zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
+    - zypper install -y libopenssl-3-devel openssl pkg-config bash tar xz gzip curl linux-glibc-devel gcc gcc7 python3 python3-pip
+    - python3 -m pip install --upgrade pip
+    - python3 -m pip install libclang
+    - export LIBCLANG_PATH=$(python3 -c "import clang, os; print(os.path.join(os.path.dirname(clang.__file__), 'native'))")
+    - export BINDGEN_EXTRA_CLANG_ARGS="-I$(gcc -print-file-name=include)"
     - ldd --version
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - source ~/.cargo/env
@@ -379,7 +403,11 @@ build-rpm-suse-15.7_x86_64:
   stage: build-rpm
   image: registry.suse.com/suse/sle15:15.7
   before_script:
-    - zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
+    - zypper install -y libopenssl-3-devel openssl pkg-config bash tar xz gzip curl linux-glibc-devel gcc gcc7 python3 python3-pip
+    - python3 -m pip install --upgrade pip
+    - python3 -m pip install libclang
+    - export LIBCLANG_PATH=$(python3 -c "import clang, os; print(os.path.join(os.path.dirname(clang.__file__), 'native'))")
+    - export BINDGEN_EXTRA_CLANG_ARGS="-I$(gcc -print-file-name=include)"
     - ldd --version
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - source ~/.cargo/env
@@ -412,7 +440,11 @@ build-rpm-suse-15.7_aarch64:
   stage: build-rpm
   image: registry.suse.com/suse/sle15:15.7
   before_script:
-    - zypper install -y gcc gcc7 libopenssl-3-devel pkg-config
+    - zypper install -y libopenssl-3-devel openssl pkg-config bash tar xz gzip curl linux-glibc-devel gcc gcc7 python3 python3-pip
+    - python3 -m pip install --upgrade pip
+    - python3 -m pip install libclang
+    - export LIBCLANG_PATH=$(python3 -c "import clang, os; print(os.path.join(os.path.dirname(clang.__file__), 'native'))")
+    - export BINDGEN_EXTRA_CLANG_ARGS="-I$(gcc -print-file-name=include)"
     - ldd --version
     - curl https://sh.rustup.rs -sSf | sh -s -- -y
     - source ~/.cargo/env

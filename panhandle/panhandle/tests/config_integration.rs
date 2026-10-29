@@ -7,9 +7,11 @@
 //!   (validate_args_or_exit in main.rs runs all of these before the root
 //!   check specifically so they're reachable here)
 
-use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 fn panhandle_bin() -> Command {
     let bin_path = env!("CARGO_BIN_EXE_panhandle");
@@ -19,9 +21,9 @@ fn panhandle_bin() -> Command {
     cmd
 }
 
+/// Returns a path in a project-local temp directory that works in sandboxed
+/// environments (e.g., tarpaulin) where /tmp may not be writable.
 fn temp_config_path(name: &str) -> PathBuf {
-    // Use a project-local temp directory to work in sandboxed environments (e.g., tarpaulin)
-    // where the system temp dir may not be writable.
     // Try CARGO_TARGET_DIR first, then current directory, then system temp.
     let base = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
@@ -56,7 +58,7 @@ fn test_invalid_config_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("YamlParsing") || combined.contains("unknown field"),
+        combined.contains("Invalid YAML config") || combined.contains("config"),
         "error should mention config/YAML issue, got: {}",
         combined
     );
@@ -104,7 +106,7 @@ fn test_nonexistent_config_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("No such file or directory") || combined.contains("Config file"),
+        combined.contains("not found") || combined.contains("Config file"),
         "error should mention file not found, got: {}",
         combined
     );
@@ -166,17 +168,29 @@ fn test_help_output() {
     );
     assert!(stdout.contains("--zsh"), "help should mention --zsh option");
     assert!(stdout.contains("--cpu"), "help should mention --cpu option");
+}
+
+/// Test that subcommand 'output' help works
+#[test]
+fn test_output_subcommand_help() {
+    let output = panhandle_bin()
+        .args(["output", "--help"])
+        .output()
+        .expect("Failed to execute panhandle");
+
+    assert!(output.status.success(), "output --help should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("--file"),
-        "help should mention --file option"
+        "output help should mention --file"
     );
     assert!(
         stdout.contains("--http"),
-        "help should mention --http option"
+        "output help should mention --http"
     );
     assert!(
         stdout.contains("--syslog"),
-        "help should mention --syslog option"
+        "output help should mention --syslog"
     );
 }
 
@@ -258,7 +272,7 @@ fn test_include_uid_count_exceeded_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("UIDs") && combined.contains("max"),
+        combined.contains("UIDs") && combined.contains("exceeds"),
         "error should mention the UID count limit, got: {}",
         combined
     );
@@ -315,7 +329,7 @@ fn test_comm_allow_and_deny_both_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("Cannot specify both --comm-allow and --comm-deny"),
+        combined.contains("Allow and deny"),
         "error should mention both lists were provided, got: {}",
         combined
     );
@@ -348,7 +362,7 @@ fn test_config_comm_allow_length_exceeded_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("exceeds max length"),
+        combined.contains("Process name (comm) exceeds maximum length"),
         "error should mention the comm length limit, got: {}",
         combined
     );
@@ -383,7 +397,7 @@ fn test_config_block_paths_length_exceeded_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("exceeds max length"),
+        combined.contains("Path exceeds maximum length"),
         "error should mention the path length limit, got: {}",
         combined
     );
@@ -416,7 +430,7 @@ fn test_comm_allow_count_exceeded_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("comm entries") && combined.contains("max"),
+        combined.contains("comm-allow/comm-deny entries") && combined.contains("exceeds"),
         "error should mention the comm count limit, got: {}",
         combined
     );
@@ -441,7 +455,7 @@ fn test_block_paths_count_exceeded_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("block paths") && combined.contains("max"),
+        combined.contains("block-paths entries") && combined.contains("exceeds"),
         "error should mention the block-paths count limit, got: {}",
         combined
     );

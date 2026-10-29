@@ -70,22 +70,55 @@ jobs:
       - name: Install Base Tools (Container Environment)
         run: |
           if command -v dnf &> /dev/null; then
-              dnf install -y openssl-devel pkgconf-pkg-config bash openssl
+              dnf install -y --setopt=max_parallel_downloads=10 \
+                  --setopt=retries=10 --setopt=timeout=60 \
+                  openssl-devel pkgconf-pkg-config bash openssl \
+                  clang clang-devel kernel-headers
           fi
           if command -v zypper &> /dev/null; then
-              zypper install -y libopenssl-3-devel openssl pkg-config bash
+              zypper install -y libopenssl-3-devel openssl pkg-config bash \
+                  tar xz gzip curl linux-glibc-devel
           fi
+
+      - name: Install libclang (SLES, from PyPI wheel)
+        if: matrix.config.shortname == 'sles'
+        run: |
+          zypper install -y python3 python3-pip
+          python3 -m pip install --upgrade pip
+          python3 -m pip install libclang
+
+          LIBCLANG=$(python3 -c "import clang, os; print(os.path.join(os.path.dirname(clang.__file__), 'native', 'libclang.so'))")
+          ls -l "$LIBCLANG"
+          ldd "$LIBCLANG" || true
+          if ldd "$LIBCLANG" 2>&1 | grep -q 'not found'; then
+              echo "libclang has unresolved dependencies" >&2
+              exit 1
+          fi
+          echo "LIBCLANG_PATH=$(dirname "$LIBCLANG")" >> "$GITHUB_ENV"
+
+      - name: Locate libclang (EL, for bindgen)
+        if: matrix.config.shortname != 'sles'
+        shell: bash
+        run: |
+          LIBCLANG=$(find /usr/lib64 /usr/lib -type f \
+              \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) \
+              ! -name 'libclang-cpp*' 2>/dev/null | head -n1)
+          if [ -z "$LIBCLANG" ]; then
+              echo "libclang not found after installing clang" >&2
+              exit 1
+          fi
+          echo "Found libclang: $LIBCLANG"
+          echo "LIBCLANG_PATH=$(dirname "$LIBCLANG")" >> "$GITHUB_ENV"
 
       - name: Install aarch64 packages (Container Environment)
         if: matrix.config.architecture == 'aarch64'
         run: |
-          # Runs on a native arm64 hosted runner, so this needs a native
-          # toolchain (not an aarch64 cross-compiler). llvm-devel/llvm-toolset
-          # are still required because bpf-linker has no prebuilt
-          # aarch64-unknown-linux-gnu binary and must be compiled from source.
+          # Native arm64 runner: native toolchain, no cross-compiler.
+          # llvm-devel/llvm-toolset are needed to compile bpf-linker from source.
           if command -v dnf &> /dev/null; then
-              dnf install -y epel-release
-              dnf install -y gcc binutils libgcc glibc-devel llvm-devel llvm-toolset
+              dnf install -y --setopt=max_parallel_downloads=10 \
+                  --setopt=retries=10 --setopt=timeout=60 \
+                  gcc binutils libgcc glibc-devel llvm-devel llvm-toolset
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7
@@ -95,12 +128,18 @@ jobs:
         if: matrix.config.architecture == 'x86_64'
         run: |
           if command -v dnf &> /dev/null; then
-              dnf install -y epel-release
-              dnf install -y gcc binutils libgcc cross-gcc-common
+              dnf install -y gcc binutils libgcc glibc-devel
           fi
           if command -v zypper &> /dev/null; then
               zypper install -y gcc gcc7
           fi
+      
+      - name: Point bindgen at GCC builtin headers (SLES)
+        if: matrix.config.shortname == 'sles'
+        run: |
+          GCC_INC=$(gcc -print-file-name=include)
+          ls "$GCC_INC/stddef.h"
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I$GCC_INC" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v7
 
@@ -182,7 +221,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
+          sudo apt-get install -y pkg-config libssl-dev clang libclang-dev linux-libc-dev
 
       - uses: actions/checkout@v7
 

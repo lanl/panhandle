@@ -1,7 +1,7 @@
 {
   "bash": true,
   "debug": true,
-  "execve": true,
+  "syscall_execve": true,
   "json": true,
   "verbose": true,
   "zsh": true,

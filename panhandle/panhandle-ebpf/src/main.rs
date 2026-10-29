@@ -10,7 +10,7 @@ use aya_ebpf::{
         bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
     macros::{map, raw_tracepoint},
-    maps::{HashMap, RingBuf},
+    maps::RingBuf,
     programs::RawTracePointContext,
 };
 use aya_log_ebpf::{debug, warn};
@@ -41,14 +41,6 @@ static mut PANHANDLE_CONFIG: PanhandleConfig = PanhandleConfig {
     include_enabled: 0,
     include_uids: [0; UID_COUNT],
 };
-
-// HashMap-based UID filtering for shell_entry.rs (and optionally for main program)
-// These maps allow userspace to configure UID filtering at runtime
-#[map(name = "uid_options")]
-static UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
-#[map(name = "uid_include_list")]
-static UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
-    HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
 
 // 1 MiB: ExecveEvent is ~11KB, so this comfortably buffers bursts of execve activity
 #[map(name = "panhandle_execve_events")]
@@ -185,42 +177,42 @@ fn try_panhandle(ctx: RawTracePointContext) -> Result<u32, i64> {
 }
 
 /// Get config from GlobalData
-fn get_config() -> &'static PanhandleConfig {
+pub fn get_config() -> &'static PanhandleConfig {
     unsafe { &PANHANDLE_CONFIG }
 }
 
 /// Get shells config from GlobalData
-fn get_shells() -> bool {
+pub fn get_shells() -> bool {
     let config = get_config();
     config.shells == 1
 }
 
 /// Get exclude_min_uid from GlobalData
-fn get_exclude_min_uid() -> u32 {
+pub fn get_exclude_min_uid() -> u32 {
     let config = get_config();
     config.exclude_min_uid
 }
 
 /// Get exclude_max_uid from GlobalData
-fn get_exclude_max_uid() -> u32 {
+pub fn get_exclude_max_uid() -> u32 {
     let config = get_config();
     config.exclude_max_uid
 }
 
 /// Get include_enabled from GlobalData
-fn get_include_enabled() -> bool {
+pub fn get_include_enabled() -> bool {
     let config = get_config();
     config.include_enabled == 1
 }
 
 /// Get include_uids from GlobalData
-fn get_include_uids() -> [u32; UID_COUNT] {
+pub fn get_include_uids() -> [u32; UID_COUNT] {
     let config = get_config();
     config.include_uids
 }
 
 /// return a bool to determine if the process should be excluded by uid (GlobalData version)
-fn exclude_uid_gd(uid: u32) -> bool {
+pub fn exclude_uid_gd(uid: u32) -> bool {
     let min = get_exclude_min_uid();
     let max = get_exclude_max_uid();
     if (uid >= min) && (uid <= max) {
@@ -248,59 +240,8 @@ fn is_exact_comm(command: &[u8; 16], name: &[u8]) -> bool {
 }
 
 /// check if a given u32 uid matches the list of u32 uids to look for (GlobalData version)
-fn check_uid_in_uidarray_gd(uid: &u32) -> bool {
+pub fn check_uid_in_uidarray_gd(uid: &u32) -> bool {
     let only_uids_list = get_include_uids();
-
-    // compare initial uid to array, stop at first match
-    for value in only_uids_list.iter() {
-        if value == uid {
-            return true;
-        }
-    }
-    false
-}
-
-/// get the value as a u32 from the map at a desired address and convert into a boolean
-fn get_bool(address: u32, hash_map: &HashMap<u32, u32>) -> bool {
-    // SAFETY: this map holds only u32s filled from the user side, condition if they don't exist is handled.
-    let retrieved_value: &u32 = unsafe { hash_map.get(&address) }.unwrap_or(&0);
-    if retrieved_value == &1 {
-        return true;
-    }
-    false
-}
-
-/// get u32 from the options map by address
-fn get_uid(address: u32, hash_map: &HashMap<u32, u32>) -> u32 {
-    // SAFETY: this map holds only u32s filled from the user side, condition if they don't exist is handled.
-    let _ = match unsafe { hash_map.get(&address) } {
-        Some(x) => return *x,
-        None => return 0_u32,
-    };
-}
-
-/// get an array of usize uids from the uid include list map
-fn get_include_uid_array(map_to_get: &HashMap<u32, [u32; UID_COUNT]>) -> [u32; UID_COUNT] {
-    // SAFETY: this map holds only an array of UID_COUNT x u32s filled from the user side, condition if they don't exist is handled.
-    let _: [u32; UID_COUNT] = match unsafe { map_to_get.get(&0) } {
-        Some(x) => return *x,
-        None => return [0; UID_COUNT],
-    };
-}
-
-/// return a bool to determine if the process should be excluded by uid (HashMap version)
-fn exclude_uid(uid: u32, hash_map: &HashMap<u32, u32>) -> bool {
-    let min = get_uid(UID_OPT_EXCLUDE_MIN, hash_map);
-    let max = get_uid(UID_OPT_EXCLUDE_MAX, hash_map);
-    if (uid >= min) && (uid <= max) {
-        return true;
-    }
-    false
-}
-
-/// check if a given u32 uid matches the list of u32 uids to look for (HashMap version)
-fn check_uid_in_uidarray(uid: &u32, hash_map: &HashMap<u32, [u32; UID_COUNT]>) -> bool {
-    let only_uids_list = get_include_uid_array(hash_map);
 
     // compare initial uid to array, stop at first match
     for value in only_uids_list.iter() {

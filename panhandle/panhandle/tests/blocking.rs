@@ -88,7 +88,7 @@ fn test_resolve_comm_list_mode_both_error() {
     assert!(result.is_err());
 
     match result {
-        Err(common::PanhandleError::Config(msg)) => {
+        Err(msg) => {
             assert!(msg.contains("Allow and deny list both provided"));
         }
         _ => panic!("Expected Config error"),

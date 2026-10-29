@@ -36,7 +36,12 @@ mod monitor_network_usage;
 mod monitor_process_bounds;
 mod procfs_helpers;
 mod unit_tests;
-use helpers::*;
+// Use explicit imports to avoid conflicts with panhandle_common
+use helpers::{
+    attach_kprobe, attach_lsm_hook, consume_execve_ebpf_map, consume_shell_ebpf_map,
+    consume_socket_stats_ebpf_map, get_canonical_executable_list, resolve_comm_list_mode,
+    validate_count, validate_syslog, validate_url,
+};
 use input_configs::*;
 use monitor_cpu_usage::*;
 use monitor_gpu_usage::*;
@@ -782,14 +787,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bytes = comm_str.as_bytes();
             let len = bytes.len().min(15); // Already validated above to be <= MAX_COMM_LENGTH (15); min() is just a defensive clamp
             comm[..len].copy_from_slice(&bytes[..len]);
-            comm_list.insert(comm, list_type, 0)?;
+            comm_list.insert(&comm, &list_type, 0)?;
         }
 
         // Insert mode indicator key to tell eBPF which mode we're in.
         // This known key within the hashmap is required for when ebpf side can't find a comm in the map but still needs to know what to do with it
         if list_type != NO_LIST {
             let mode_key = [LIST_MODE; 16];
-            comm_list.insert(mode_key, list_type, 0)?;
+            comm_list.insert(&mode_key, &list_type, 0)?;
         }
 
         // Get the BLOCKED_PATHS map
@@ -805,7 +810,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Populate the denylist with initial paths
         if blocked_paths.is_empty() {
             let path = [0u8; 256];
-            path_denylist.insert(path, 0, 0)?; // value of 0 is a placeholder, check on ebpf side for it to know that no path list was provided
+            path_denylist.insert(&path, &0u8, 0)?; // value of 0 is a placeholder, check on ebpf side for it to know that no path list was provided
             if args.verbose {
                 println!(
                     "Process blocking was turned on but no filepath list was provided. Defaulting to blocking all paths."
@@ -817,7 +822,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bytes = path_str.as_bytes();
             let len = bytes.len(); // Already validated above (CLI value_parser or the config-file check) to be <= MAX_PATH_LENGTH (255)
             path[..len].copy_from_slice(&bytes[..len]);
-            path_denylist.insert(path, 1, 0)?;
+            path_denylist.insert(&path, &1u8, 0)?;
         }
 
         // Check for open related syscalls - open, openat, creat
@@ -865,7 +870,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         program
             .attach(
-                "readline_internal_teardown",
+                ["readline_internal_teardown"],
                 &file_string,
                 UProbeScope::AllProcesses,
             )
@@ -888,21 +893,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             HashMap::try_from(readline_uid_options_map).unwrap();
         // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
         // this is the shells identifier
-        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
+        program_options.insert(&UID_OPT_SHELLS, &(args.shells as u32), 0)?;
         // this is the min uid identifier
         program_options.insert(
-            UID_OPT_EXCLUDE_MIN,
-            args.exclude_min_uid.unwrap_or(MINUID),
+            &UID_OPT_EXCLUDE_MIN,
+            &args.exclude_min_uid.unwrap_or(MINUID),
             0,
         )?;
         // this is the max uid identifier
         program_options.insert(
-            UID_OPT_EXCLUDE_MAX,
-            args.exclude_max_uid.unwrap_or(MAXUID),
+            &UID_OPT_EXCLUDE_MAX,
+            &args.exclude_max_uid.unwrap_or(MAXUID),
             0,
         )?;
         // this is the include uid list option identifier
-        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
+        program_options.insert(&UID_OPT_INCLUDE_ENABLED, &(include_uid_bool as u32), 0)?;
 
         // get the uid_include_list map from ebpf land
         let readline_uid_include_list_map =
@@ -925,7 +930,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        readline_uid_list_map.insert(0, zeroed_array, 0)?;
+        readline_uid_list_map.insert(&0, &zeroed_array, 0)?;
 
         // Process events from the ring buffer
         let ring_buf = RingBuf::try_from(ebpf.take_map("readline_events").ok_or_else(|| {
@@ -988,7 +993,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             error!("failed to load uprobe 'zlentry': {}", e);
         })?;
         program
-            .attach("zleentry", &file_string, UProbeScope::AllProcesses)
+            .attach(["zleentry"], &file_string, UProbeScope::AllProcesses)
             .inspect_err(|e| {
                 error!(
                     "failed to attach uprobe 'zlentry' to '{}': {}",
@@ -1008,21 +1013,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             HashMap::try_from(zlentry_uid_options_map).unwrap();
         // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
         // this is the shells identifier
-        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
+        program_options.insert(&UID_OPT_SHELLS, &(args.shells as u32), 0)?;
         // this is the min uid identifier
         program_options.insert(
-            UID_OPT_EXCLUDE_MIN,
-            args.exclude_min_uid.unwrap_or(MINUID),
+            &UID_OPT_EXCLUDE_MIN,
+            &args.exclude_min_uid.unwrap_or(MINUID),
             0,
         )?;
         // this is the max uid identifier
         program_options.insert(
-            UID_OPT_EXCLUDE_MAX,
-            args.exclude_max_uid.unwrap_or(MAXUID),
+            &UID_OPT_EXCLUDE_MAX,
+            &args.exclude_max_uid.unwrap_or(MAXUID),
             0,
         )?;
         // this is the include uid list option identifier
-        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
+        program_options.insert(&UID_OPT_INCLUDE_ENABLED, &(include_uid_bool as u32), 0)?;
 
         // get the uid_include_list map from ebpf land
         let zlentry_uid_include_list_map =
@@ -1045,7 +1050,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        zlentry_uid_list_map.insert(0, zeroed_array, 0)?;
+        zlentry_uid_list_map.insert(&0, &zeroed_array, 0)?;
 
         // Process events from the ring buffer
         let ring_buf = RingBuf::try_from(ebpf.take_map("zlentry_events").ok_or_else(|| {
@@ -1122,21 +1127,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut program_options: HashMap<_, u32, u32> = HashMap::try_from(uid_options_map).unwrap();
         // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
         // this is the shells identifier
-        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
+        program_options.insert(&UID_OPT_SHELLS, &(args.shells as u32), 0)?;
         // this is the min uid identifier
         program_options.insert(
-            UID_OPT_EXCLUDE_MIN,
-            args.exclude_min_uid.unwrap_or(MINUID),
+            &UID_OPT_EXCLUDE_MIN,
+            &args.exclude_min_uid.unwrap_or(MINUID),
             0,
         )?;
         // this is the max uid identifier
         program_options.insert(
-            UID_OPT_EXCLUDE_MAX,
-            args.exclude_max_uid.unwrap_or(MAXUID),
+            &UID_OPT_EXCLUDE_MAX,
+            &args.exclude_max_uid.unwrap_or(MAXUID),
             0,
         )?;
         // this is the include uid list option identifier
-        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
+        program_options.insert(&UID_OPT_INCLUDE_ENABLED, &(include_uid_bool as u32), 0)?;
 
         // get the uid_include_list map from ebpf land
         let uid_include_list_map = ebpf.take_map("uid_include_list").ok_or_else(|| {
@@ -1158,7 +1163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        uid_list_map.insert(0, zeroed_array, 0)?;
+        uid_list_map.insert(&0, &zeroed_array, 0)?;
 
         // Process events from the ring buffer
         let ring_buf =

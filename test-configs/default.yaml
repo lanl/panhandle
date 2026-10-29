@@ -1,7 +1,7 @@
 shells: true
-execve: true
+syscall_execve: true
 exclude_min_uid: 0
 json: true
-http: "http://localhost:4319/raw-audit"
-syslog: "hpcsyslog.lanl.gov:514/tcp"
-file: "/var/log/panhandle/panhandle.log"
+output:
+  - file: "/var/log/panhandle/panhandle.log"
+  - syslog: "hpcsyslog.lanl.gov:514/tcp"

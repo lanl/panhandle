@@ -1110,7 +1110,7 @@ fn test_helpers_validate_count_error_message() {
     assert_eq!(
         err.to_string(),
         format!(
-            "Configuration error: The number of executables requested to monitor exceeds the maximum of {}",
+            "The number of executables requested to monitor exceeds the maximum of {}",
             common::EXECUTABLE_COUNT
         )
     );
@@ -1119,7 +1119,7 @@ fn test_helpers_validate_count_error_message() {
     assert_eq!(
         err.to_string(),
         format!(
-            "Configuration error: The number of UIDs requested to monitor exceeds the maximum of {}",
+            "The number of UIDs requested to monitor exceeds the maximum of {}",
             common::UID_COUNT
         )
     );

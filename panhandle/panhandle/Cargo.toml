@@ -29,6 +29,9 @@ network-interface = "2.0.5"
 machine-info = "1.0.9"
 linux-taskstats = "0.7.0"
 yaml_serde = "0.10.7"
+thiserror = "2.0"
+serde-saphyr = "2.0"
+log = "0.4"
 
 [build-dependencies]
 aya-build = { workspace = true }

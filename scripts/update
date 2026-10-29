@@ -30,13 +30,14 @@ cd "$PROJECT_ROOT"
 
 echo "=== Updating Node.js dependencies ==="
 cd "$PROJECT_ROOT"
-npm update
+# Use npm ci to install exact versions from package-lock.json (respects pinned versions)
+npm ci
 # Fix all npm vulnerabilities including breaking changes
 npm audit fix --force || true
 
 echo "=== Cleaning and updating Cargo dependencies ==="
 cd "$PROJECT_ROOT/panhandle"
-cargo clean
+cargo clean || true
 cargo update --verbose
 
 echo "=== Formatting code ==="

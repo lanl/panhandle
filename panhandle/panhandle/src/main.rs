@@ -229,7 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             syslog_address = if let Some(inner) = syslog {
                 // inner is Option<String>
                 match inner {
-                    Some(addr) => Arc::new(addr.clone()), // --syslog unix or --syslog /dev/log
+                    Some(addr) => Arc::new(addr), // --syslog unix or --syslog /dev/log
                     None => Arc::new(String::from("/dev/log")), // plain --syslog <nothing>, give it /dev/log as a placeholder
                 }
             } else {
@@ -689,7 +689,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let syslog = syslog_address.clone();
         let verbose_mode = args.verbose;
         let client = Client::new();
-        let net_wait_for_task = net_wait.clone();
+        let net_wait_for_task = net_wait;
 
         bound_handle = Some(tokio::task::spawn(async move {
             loop {

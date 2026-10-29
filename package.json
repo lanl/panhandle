@@ -11,6 +11,6 @@
   "license": "ISC",
   "devDependencies": {
     "jsonlint": "^1.6.3",
-    "markdownlint-cli": "^0.48.0"
+    "markdownlint-cli": "^0.43.0"
   }
 }

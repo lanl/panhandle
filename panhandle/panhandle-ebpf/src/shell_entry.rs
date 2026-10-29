@@ -7,13 +7,13 @@ use aya_ebpf::{
         bpf_probe_read_user_str_bytes,
     },
     macros::{map, uretprobe},
-    maps::{HashMap, RingBuf},
+    maps::RingBuf,
     programs::RetProbeContext,
 };
 use aya_log_ebpf::{debug, warn};
 use panhandle_common::Readline;
 
-use crate::*;
+use crate::{check_uid_in_uidarray_gd, exclude_uid_gd, get_include_enabled};
 /// Shared implementation for capturing shell command-line entries via libreadline's
 /// (bash) or zle's (zsh) teardown hooks. Both shells need their own top-level
 /// `#[uretprobe]` function (each is attached to a different target binary/symbol), but
@@ -22,29 +22,13 @@ use crate::*;
 // 256 KiB: Readline entries are ~440 bytes each
 #[map(name = "readline_events")]
 static READLINE_EVENTS: RingBuf = RingBuf::with_byte_size(1 << 18, 0);
-#[map(name = "readline_uid_options")]
-static READLINE_UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
-#[map(name = "readline_uid_include_list")]
-static READLINE_UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
-    HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
 
 #[map(name = "zlentry_events")]
 static ZLENTRY_EVENTS: RingBuf = RingBuf::with_byte_size(1 << 18, 0);
-#[map(name = "zlentry_uid_options")]
-static ZLENTRY_UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
-#[map(name = "zlentry_uid_include_list")]
-static ZLENTRY_UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
-    HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
 
 #[uretprobe]
 pub fn readline(ctx: RetProbeContext) -> u32 {
-    match try_shell_entry(
-        &ctx,
-        "readline",
-        &READLINE_EVENTS,
-        &READLINE_UID_OPTIONS,
-        &READLINE_UID_INCLUDE_LIST,
-    ) {
+    match try_shell_entry(&ctx, "readline", &READLINE_EVENTS) {
         Ok(ret) => ret,
         Err(ret) => ret as u32,
     }
@@ -52,32 +36,20 @@ pub fn readline(ctx: RetProbeContext) -> u32 {
 
 #[uretprobe]
 pub fn zlentry(ctx: RetProbeContext) -> u32 {
-    match try_shell_entry(
-        &ctx,
-        "zlentry",
-        &ZLENTRY_EVENTS,
-        &ZLENTRY_UID_OPTIONS,
-        &ZLENTRY_UID_INCLUDE_LIST,
-    ) {
+    match try_shell_entry(&ctx, "zlentry", &ZLENTRY_EVENTS) {
         Ok(ret) => ret,
         Err(ret) => ret as u32,
     }
 }
 
 #[inline(always)]
-fn try_shell_entry(
-    ctx: &RetProbeContext,
-    name: &str,
-    events: &RingBuf,
-    uid_options: &HashMap<u32, u32>,
-    uid_include_list: &HashMap<u32, [u32; UID_COUNT]>,
-) -> Result<u32, i64> {
+fn try_shell_entry(ctx: &RetProbeContext, name: &str, events: &RingBuf) -> Result<u32, i64> {
     // get the pointer to this event
     let ret_ptr: *const u8 = ctx.ret();
     let initial_uid: u32 = bpf_get_current_uid_gid() as u32;
 
-    // skip event if the uid is not in the range of UIDs
-    if exclude_uid(initial_uid, uid_options) {
+    // skip event if the uid is not in the range of UIDs (GlobalData version)
+    if exclude_uid_gd(initial_uid) {
         debug!(
             ctx,
             "{}: skipping, uid {} excluded by range filter", name, initial_uid
@@ -85,11 +57,8 @@ fn try_shell_entry(
         return Ok(0);
     }
 
-    // skip if not in the include uids list
-    // the uid_options map has an entry for if the uid_include_list is defined / desired in userland to reduce overhead
-    if get_bool(UID_OPT_INCLUDE_ENABLED, uid_options)
-        && !check_uid_in_uidarray(&initial_uid, uid_include_list)
-    {
+    // skip if not in the include uids list (GlobalData version)
+    if get_include_enabled() && !check_uid_in_uidarray_gd(&initial_uid) {
         debug!(
             ctx,
             "{}: skipping, uid {} not in include list", name, initial_uid

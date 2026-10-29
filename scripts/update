@@ -1,8 +1,56 @@
 #!/bin/bash
+# Update all dependencies and tools
+set -euo pipefail
+
+# Get the directory of this script and navigate to project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo "=== Project root: $PROJECT_ROOT ==="
+
+echo "=== Updating Rust toolchain ==="
 rustup self update
 rustup update
-cargo clean
+
+echo "=== Updating bpf-linker ==="
+# Install bpf-linker using pre-built binary (recommended method)
+# See https://github.com/aya-rs/bpf-linker#installation
+BPF_LINKER_VERSION="0.12.0"
+# Use musl binary for maximum compatibility
+BPF_LINKER_URL="https://github.com/aya-rs/bpf-linker/releases/download/v${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+echo "Downloading bpf-linker v${BPF_LINKER_VERSION}..."
+cd /tmp
+# Install zstd if not available
+command -v zstd >/dev/null 2>&1 || (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y zstd) || (command -v dnf >/dev/null 2>&1 && dnf install -y zstd) || (command -v apk >/dev/null 2>&1 && apk add --no-cache zstd) || true
+curl -sSL "${BPF_LINKER_URL}" | zstd -d | tar x
+mv bpf-linker "${HOME}/.cargo/bin/bpf-linker"
+chmod +x "${HOME}/.cargo/bin/bpf-linker"
+echo "bpf-linker installed to ${HOME}/.cargo/bin/bpf-linker"
+cd "$PROJECT_ROOT"
+
+echo "=== Updating Node.js dependencies ==="
+cd "$PROJECT_ROOT"
+# Use npm ci to install exact versions from package-lock.json (respects pinned versions)
+npm ci
+# Fix all npm vulnerabilities including breaking changes
+npm audit fix --force || true
+
+echo "=== Cleaning and updating Cargo dependencies ==="
+cd "$PROJECT_ROOT/panhandle"
+cargo clean || true
 cargo update --verbose
+
+echo "=== Formatting code ==="
 cargo fmt --all
+
+echo "=== Running security checks ==="
 cargo deny check
+cargo audit --format terminal || true
+
+echo "=== Checking for outdated dependencies ==="
+cargo outdated --root-deps-only --exit-code 1 || true
+
+echo "=== Generating SBOM ==="
 cargo sbom > ../panhandle-sbom.spdx
+
+echo "=== All updates complete! ==="

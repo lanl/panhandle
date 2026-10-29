@@ -1,24 +1,26 @@
 use aya::Btf;
-use aya::programs::{KProbe, Lsm};
 use aya::maps::{MapData, RingBuf};
-use procfs::process::Process;
-use tokio::{io::unix::AsyncFd, net::lookup_host, time::Duration};
+use aya::programs::{KProbe, Lsm};
+use chrono::prelude::*;
 use port_check::*;
-use std::{fs::canonicalize, sync::Arc};
-use url::Url;
+use procfs::process::Process;
 use reqwest::{Client, Error, Response, header::CONTENT_TYPE};
 use simplelog::{debug, error, info};
+use std::{fs::canonicalize, sync::Arc};
 use syslog::{Error as SyslogError, Facility, Formatter3164};
+use tokio::{io::unix::AsyncFd, net::lookup_host, time::Duration};
+use url::Url;
 use uzers::get_user_by_uid;
-use chrono::prelude::*;
 
 /// Reconstruct an owned, `#[repr(C)]`/`Copy` event struct from a ring buffer item. Ring buffer
 /// reservations are always contiguous (unlike perf array samples), so no head/tail
 /// reconstruction is needed here.
 ///
-/// SAFETY: `T` must be exactly the plain-old-data struct written by the corresponding
+/// # Safety
+///
+/// `T` must be exactly the plain-old-data struct written by the corresponding
 /// `RingBuf::submit` call on the eBPF side, with `bytes.len() >= size_of::<T>()`.
-pub(crate) unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
+pub unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
     unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const T) }
 }
 
@@ -64,7 +66,7 @@ pub async fn consume_shell_ebpf_map(
         let ring_buf = guard.get_inner_mut();
         while let Some(item) = ring_buf.next() {
             if item.len() >= core::mem::size_of::<Readline>() {
-                // SAFETY: this is implemented by a shared struct and zero'd on the ebpf side for consistency
+                // SAFETY: this is implemented by a shared struct and zero'd on the eBPF side for consistency
                 events.push(unsafe { read_ring_item::<Readline>(&item) });
             }
         }
@@ -147,10 +149,7 @@ pub async fn consume_shell_ebpf_map(
             } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
-                    hostname,
-                    user,
-                    data,
-                    formatted_utc
+                    hostname, user, data, formatted_utc
                 );
                 if http {
                     let http_string = Arc::new(string.clone());
@@ -210,7 +209,7 @@ pub async fn consume_execve_ebpf_map(
         let ring_buf = guard.get_inner_mut();
         while let Some(item) = ring_buf.next() {
             if item.len() >= core::mem::size_of::<ExecveEvent>() {
-                // SAFETY: this is implemented by a shared struct and zero'd on the ebpf side for consistency
+                // SAFETY: this is implemented by a shared struct and zero'd on the eBPF side for consistency
                 events.push(unsafe { read_ring_item::<ExecveEvent>(&item) });
             }
         }
@@ -296,7 +295,7 @@ pub async fn consume_execve_ebpf_map(
                             error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                } 
+                }
                 if syslog {
                     let syslog_string: Arc<String> = Arc::new(json_string.clone());
                     let result: Result<(), SyslogError> =
@@ -317,10 +316,7 @@ pub async fn consume_execve_ebpf_map(
             } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
-                    hostname,
-                    user,
-                    data,
-                    formatted_utc
+                    hostname, user, data, formatted_utc
                 );
                 if http {
                     let http_string: Arc<String> = Arc::new(string.clone());
@@ -332,7 +328,7 @@ pub async fn consume_execve_ebpf_map(
                             error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                } 
+                }
                 if syslog {
                     let syslog_string: Arc<String> = Arc::new(string.clone());
                     let result: Result<(), SyslogError> =
@@ -344,7 +340,7 @@ pub async fn consume_execve_ebpf_map(
                             error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
-                } 
+                }
                 // this is the human readable output
                 info!("{}", string);
             }
@@ -459,7 +455,9 @@ pub async fn send_syslog(
     // execve/shell event processing for every process on the host) for as long as the
     // OS connect timeout takes. block_in_place tells tokio this closure may block, so
     // it moves other tasks off this worker thread instead of getting stuck behind it.
-    tokio::task::block_in_place(|| send_syslog_blocking(hostname, arc_string, syslog_address, json, debug))
+    tokio::task::block_in_place(|| {
+        send_syslog_blocking(hostname, arc_string, syslog_address, json, debug)
+    })
 }
 
 fn send_syslog_blocking(
@@ -788,22 +786,21 @@ pub fn calc_delta(current: u64, last: Option<u64>) -> u64 {
 
 /// wrapper method to handle output formatting to syslog or http
 pub async fn output_message(
-    http: &bool, 
-    syslog: &bool, 
+    http: &bool,
+    syslog: &bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
-    use_json: &bool, 
-    plain_string: &String, 
-    json_string: &String, 
-    client: &Client, 
-    debug: &bool
+    use_json: &bool,
+    plain_string: &String,
+    json_string: &String,
+    client: &Client,
+    debug: &bool,
 ) {
     if *http {
         if *use_json {
-            let arc_string = Arc::new(json_string.clone().to_string());
-            let result =
-                send_http_post(client, global_url, &arc_string, use_json, debug).await;
+            let arc_string = Arc::new(json_string.clone());
+            let result = send_http_post(client, global_url, &arc_string, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -811,9 +808,8 @@ pub async fn output_message(
                 }
             }
         } else {
-            let arc_string = Arc::new(plain_string.clone().to_string());
-            let result =
-                send_http_post(client, global_url, &arc_string, use_json, debug).await;
+            let arc_string = Arc::new(plain_string.clone());
+            let result = send_http_post(client, global_url, &arc_string, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -824,10 +820,8 @@ pub async fn output_message(
     }
     if *syslog {
         if *use_json {
-            let arc_string = Arc::new(json_string.clone().to_string());
-            let result =
-                send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
-                    .await;
+            let arc_string = Arc::new(json_string.clone());
+            let result = send_syslog(hostname, &arc_string, syslog_address, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -835,10 +829,8 @@ pub async fn output_message(
                 }
             }
         } else {
-            let arc_string = Arc::new(plain_string.clone().to_string());
-            let result =
-                send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
-                    .await;
+            let arc_string = Arc::new(plain_string.clone());
+            let result = send_syslog(hostname, &arc_string, syslog_address, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -866,16 +858,12 @@ pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str) -> Result<(), any
             error!("failed to load eBPF program '{}': {}", program_name, e);
         })?;
 
-    program
-        .load()
-        .inspect_err(|e| {
-            error!("failed to load kprobe '{}': {}", program_name, e);
-        })?;
-    program
-        .attach(program_name, 0)
-        .inspect_err(|e| {
-            error!("failed to attach kprobe '{}': {}", program_name, e);
-        })?;
+    program.load().inspect_err(|e| {
+        error!("failed to load kprobe '{}': {}", program_name, e);
+    })?;
+    program.attach(program_name, 0).inspect_err(|e| {
+        error!("failed to attach kprobe '{}': {}", program_name, e);
+    })?;
 
     debug!("attached eBPF kprobe '{}'", program_name);
     Ok(())

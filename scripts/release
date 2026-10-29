@@ -1,0 +1,102 @@
+#!/bin/bash
+# Release script: version bump, changelog, tag, build
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Usage: ./scripts/release <version> [--dry-run]
+# Example: ./scripts/release 1.0.25
+
+VERSION="${1:-}"
+DRY_RUN="${2:-}"
+
+if [[ -z "$VERSION" ]]; then
+    echo "Usage: $0 <version> [--dry-run]"
+    echo "Example: $0 1.0.25"
+    exit 1
+fi
+
+# Validate version format (semver)
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+    echo "Error: Version must be semver (e.g., 1.0.25)"
+    exit 1
+fi
+
+echo "=== Project root: $PROJECT_ROOT ==="
+echo "=== Releasing version: $VERSION ==="
+
+cd "$PROJECT_ROOT"
+
+# Check for uncommitted changes
+if [[ -n "$(git status --porcelain)" ]]; then
+    echo "Warning: Uncommitted changes detected"
+    git status --short
+    if [[ "$DRY_RUN" != "--dry-run" ]]; then
+        read -p "Continue anyway? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+fi
+
+# Update Cargo.toml version
+CARGO_TOML="$PROJECT_ROOT/panhandle/panhandle/Cargo.toml"
+if [[ "$DRY_RUN" == "--dry-run" ]]; then
+    echo "[DRY RUN] Would update $CARGO_TOML version to $VERSION"
+else
+    sed -i "s/^version = \".*\"/version = \"$VERSION\"/" "$CARGO_TOML"
+    echo "Updated $CARGO_TOML to version $VERSION"
+fi
+
+# Update CHANGELOG.md - add new version header if not present
+CHANGELOG="$PROJECT_ROOT/CHANGELOG.md"
+if ! grep -q "## v$VERSION" "$CHANGELOG"; then
+    if [[ "$DRY_RUN" == "--dry-run" ]]; then
+        echo "[DRY RUN] Would add v$VERSION section to CHANGELOG.md"
+    else
+        # Insert after first line (# CHANGELOG)
+        sed -i "2i\\\n## v$VERSION\n\n- Release version $VERSION\n" "$CHANGELOG"
+        echo "Added v$VERSION section to CHANGELOG.md"
+    fi
+fi
+
+# Update man page date
+MAN_PAGE="$PROJECT_ROOT/files/panhandle.man"
+TODAY=$(date "+%d %B %Y")
+if [[ "$DRY_RUN" == "--dry-run" ]]; then
+    echo "[DRY RUN] Would update man page date to $TODAY"
+else
+    sed -i "s/^\.TH PANHANDLE 1 \".*\"/.TH PANHANDLE 1 \"$TODAY\"/" "$MAN_PAGE"
+    echo "Updated man page date to $TODAY"
+fi
+
+# Run linting
+if [[ "$DRY_RUN" != "--dry-run" ]]; then
+    echo "=== Running lint checks ==="
+    "$SCRIPT_DIR/lint"
+fi
+
+# Build release
+if [[ "$DRY_RUN" == "--dry-run" ]]; then
+    echo "[DRY RUN] Would build release with: cargo build --release"
+else
+    echo "=== Building release ==="
+    cd "$PROJECT_ROOT/panhandle"
+    cargo build --release
+fi
+
+# Create git tag
+if [[ "$DRY_RUN" == "--dry-run" ]]; then
+    echo "[DRY RUN] Would create git tag v$VERSION"
+else
+    echo "=== Creating git tag ==="
+    git add "$CARGO_TOML" "$CHANGELOG" "$MAN_PAGE"
+    git commit -m "v$VERSION: Release version $VERSION"
+    git tag -a "v$VERSION" -m "Release v$VERSION"
+    echo "Created tag v$VERSION"
+    echo "Run 'git push origin v$VERSION' to publish"
+fi
+
+echo "=== Release $VERSION complete! ==="

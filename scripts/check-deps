@@ -1,0 +1,17 @@
+#!/bin/bash
+# Check for unused dependencies with cargo-machete
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo "=== Project root: $PROJECT_ROOT ==="
+
+echo "=== Checking for unused dependencies ==="
+cd "$PROJECT_ROOT/panhandle"
+cargo machete || true
+
+echo "=== Checking for duplicate dependencies ==="
+cargo tree --duplicates || true
+
+echo "=== Dependency check complete! ==="

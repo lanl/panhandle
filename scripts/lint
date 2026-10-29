@@ -1,6 +1,58 @@
 #!/bin/bash
 # fix any syntax issues
-cargo clippy --fix --allow-dirty --all-targets --all-features -- -D warnings -A clippy::too_many_arguments #-W clippy::pedantic
+set -euo pipefail
+
+# Get the directory of this script and navigate to project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo "=== Project root: $PROJECT_ROOT ==="
+
+echo "=== Rust linting ==="
+cd "$PROJECT_ROOT/panhandle"
+cargo clippy --fix --allow-dirty --all-targets --all-features -- -D warnings -A clippy::too_many_arguments
 cargo fmt --all
+
+echo "=== Security audit ==="
+cargo audit --format terminal || true
+
+echo "=== Outdated dependencies ==="
+# cargo-outdated is optional; skip if not installed
+if command -v cargo-outdated >/dev/null 2>&1; then
+    cargo outdated --root-deps-only --exit-code 1 || true
+else
+    echo "cargo-outdated not installed, skipping..."
+fi
+
+echo "=== Markdown linting ==="
+cd "$PROJECT_ROOT"
+npx markdownlint '**/*.md' --fix --ignore node_modules --ignore archive --ignore 'panhandle/target/**'
+
+echo "=== YAML linting ==="
+yamllint -c .yamllint.yaml . -f parsable 2>&1 | grep -v "node_modules" | grep -v "archive" | grep -v "target" | grep -v "^$" || true
+
+echo "=== JSON linting ==="
+npx jsonlint "$PROJECT_ROOT"/package.json "$PROJECT_ROOT"/.opencode/package.json -q
+
+echo "=== Shell script linting ==="
+shellcheck "$PROJECT_ROOT"/scripts/*.sh "$PROJECT_ROOT"/*.sh 2>/dev/null || true
+
+echo "=== Cargo deny check ==="
+cd "$PROJECT_ROOT/panhandle"
 cargo deny check
+
+echo "=== Code Coverage ==="
+if command -v cargo-tarpaulin >/dev/null 2>&1; then
+    # Exclude panhandle-ebpf since it requires eBPF bytecode build which doesn't work in tarpaulin
+    # Set CARGO_TARGET_DIR to a writable location for tarpaulin's sandboxed environment
+    export CARGO_TARGET_DIR="${PROJECT_ROOT}/panhandle/target"
+    cargo tarpaulin --all-features --workspace --exclude panhandle-ebpf --timeout 120 --out Html --output-dir coverage 2>&1 | tail -20
+    echo "Coverage report generated in panhandle/coverage/"
+else
+    echo "cargo-tarpaulin not installed, skipping coverage..."
+fi
+
+echo "=== Tests ==="
 cargo test
+
+echo "=== All checks passed! ==="

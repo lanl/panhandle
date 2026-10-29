@@ -799,7 +799,7 @@ pub async fn output_message(
 ) {
     if *http {
         if *use_json {
-            let arc_string = Arc::new(json_string.clone().to_string());
+            let arc_string = Arc::new(json_string.clone());
             let result = send_http_post(client, global_url, &arc_string, use_json, debug).await;
             match result {
                 Ok(()) => {}
@@ -808,7 +808,7 @@ pub async fn output_message(
                 }
             }
         } else {
-            let arc_string = Arc::new(plain_string.clone().to_string());
+            let arc_string = Arc::new(plain_string.clone());
             let result = send_http_post(client, global_url, &arc_string, use_json, debug).await;
             match result {
                 Ok(()) => {}
@@ -820,7 +820,7 @@ pub async fn output_message(
     }
     if *syslog {
         if *use_json {
-            let arc_string = Arc::new(json_string.clone().to_string());
+            let arc_string = Arc::new(json_string.clone());
             let result = send_syslog(hostname, &arc_string, syslog_address, use_json, debug).await;
             match result {
                 Ok(()) => {}
@@ -829,7 +829,7 @@ pub async fn output_message(
                 }
             }
         } else {
-            let arc_string = Arc::new(plain_string.clone().to_string());
+            let arc_string = Arc::new(plain_string.clone());
             let result = send_syslog(hostname, &arc_string, syslog_address, use_json, debug).await;
             match result {
                 Ok(()) => {}

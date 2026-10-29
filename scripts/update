@@ -31,8 +31,8 @@ cd "$PROJECT_ROOT"
 echo "=== Updating Node.js dependencies ==="
 cd "$PROJECT_ROOT"
 npm update
-# Attempt to fix npm vulnerabilities (non-breaking fixes only)
-npm audit fix || true
+# Fix all npm vulnerabilities including breaking changes
+npm audit fix --force || true
 
 echo "=== Cleaning and updating Cargo dependencies ==="
 cd "$PROJECT_ROOT/panhandle"

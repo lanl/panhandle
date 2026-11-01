@@ -6,6 +6,9 @@ use aya::{
     programs::{BtfTracePoint, RawTracePoint, UProbe, uprobe::UProbeScope},
 };
 use aya_log::EbpfLogger;
+use panhandle_common::{
+    UID_OPT_EXCLUDE_MAX, UID_OPT_EXCLUDE_MIN, UID_OPT_INCLUDE_ENABLED, UID_OPT_SHELLS,
+};
 use tokio::io::{Interest, unix::AsyncFd};
 
 /// Loaded eBPF programs and maps
@@ -14,7 +17,10 @@ pub struct LoadedEbpf {
     pub btf: Option<Btf>,
 }
 
-/// Load and configure the eBPF program with GlobalData
+/// Load the eBPF program and populate the UID-filtering maps for the execve
+/// program (from `panhandle_config`) and for the readline/zlentry programs
+/// (from `shell_config`). These are runtime-configurable maps rather than
+/// load-time GlobalData so they can still be adjusted after load.
 pub fn load_ebpf(
     debug: bool,
     panhandle_config: &PanhandleConfig,
@@ -29,13 +35,36 @@ pub fn load_ebpf(
         loader.verifier_log_level(VerifierLogLevel::DEBUG);
     }
 
-    // Set GlobalData for panhandle (execve) configuration
-    loader.override_global("PANHANDLE_CONFIG", panhandle_config, true);
-
-    // Set GlobalData for shell (readline/zlentry) configuration
-    loader.override_global("SHELL_CONFIG", shell_config, true);
-
     let mut ebpf = loader.load(ebpf_bytes).map_err(PanhandleError::EbpfLoad)?;
+
+    // Populate the execve program's UID filtering maps
+    set_uid_options(
+        &mut ebpf,
+        "uid_options",
+        "uid_include_list",
+        panhandle_config.shells,
+        panhandle_config.exclude_min_uid,
+        panhandle_config.exclude_max_uid,
+        panhandle_config.include_enabled,
+        &panhandle_config.include_uids,
+    )?;
+
+    // Populate the readline/zlentry programs' UID filtering maps
+    for (options_map, include_list_map) in [
+        ("readline_uid_options", "readline_uid_include_list"),
+        ("zlentry_uid_options", "zlentry_uid_include_list"),
+    ] {
+        set_uid_options(
+            &mut ebpf,
+            options_map,
+            include_list_map,
+            shell_config.shells,
+            shell_config.exclude_min_uid,
+            shell_config.exclude_max_uid,
+            shell_config.include_enabled,
+            &shell_config.include_uids,
+        )?;
+    }
 
     // Initialize eBPF logger if debug enabled
     if debug {
@@ -62,6 +91,42 @@ pub fn load_ebpf(
     let btf = Btf::from_sys_fs().ok();
 
     Ok(LoadedEbpf { ebpf, btf })
+}
+
+/// Populate a `uid_options`/`uid_include_list`-shaped pair of maps. `PanhandleConfig` and
+/// `ShellConfig` carry the same fields but are distinct types, so the caller unpacks them.
+#[allow(clippy::too_many_arguments)]
+fn set_uid_options(
+    ebpf: &mut aya::Ebpf,
+    options_map: &str,
+    include_list_map: &str,
+    shells: u32,
+    exclude_min_uid: u32,
+    exclude_max_uid: u32,
+    include_enabled: u32,
+    include_uids: &[u32; panhandle_common::UID_COUNT],
+) -> Result<()> {
+    let mut options: aya::maps::HashMap<_, u32, u32> = get_hash_map(ebpf, options_map)?;
+    options
+        .insert(&UID_OPT_SHELLS, &shells, 0)
+        .map_err(PanhandleError::EbpfMap)?;
+    options
+        .insert(&UID_OPT_EXCLUDE_MIN, &exclude_min_uid, 0)
+        .map_err(PanhandleError::EbpfMap)?;
+    options
+        .insert(&UID_OPT_EXCLUDE_MAX, &exclude_max_uid, 0)
+        .map_err(PanhandleError::EbpfMap)?;
+    options
+        .insert(&UID_OPT_INCLUDE_ENABLED, &include_enabled, 0)
+        .map_err(PanhandleError::EbpfMap)?;
+
+    let mut include_list: aya::maps::HashMap<_, u32, [u32; panhandle_common::UID_COUNT]> =
+        get_hash_map(ebpf, include_list_map)?;
+    include_list
+        .insert(&0, include_uids, 0)
+        .map_err(PanhandleError::EbpfMap)?;
+
+    Ok(())
 }
 
 /// Attach a raw tracepoint
@@ -126,8 +191,10 @@ pub fn attach_uprobe(
     Ok(())
 }
 
-/// Attach a kprobe
-pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str) -> Result<()> {
+/// Attach a kprobe/kretprobe. `function_name` is the kernel function being traced, which
+/// isn't always the same as `program_name` (e.g. both a kprobe and a kretprobe on
+/// `tcp_recvmsg` need distinct program names but attach to the same function).
+pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str, function_name: &str) -> Result<()> {
     use aya::programs::KProbe;
 
     let program: &mut KProbe = ebpf
@@ -137,9 +204,8 @@ pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str) -> Result<()> {
         .map_err(PanhandleError::EbpfAttach)?;
 
     program.load().map_err(PanhandleError::EbpfAttach)?;
-    // KProbe attach requires the function name - use program_name as the function to trace
     program
-        .attach(program_name, 0)
+        .attach(function_name, 0)
         .map_err(PanhandleError::EbpfAttach)?;
 
     Ok(())

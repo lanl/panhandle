@@ -1,6 +1,4 @@
-use aya::Btf;
 use aya::maps::{MapData, RingBuf};
-use aya::programs::{KProbe, Lsm};
 use chrono::prelude::*;
 use port_check::*;
 use procfs::process::Process;
@@ -846,63 +844,6 @@ pub async fn output_message(
     } else {
         info!("{}", plain_string);
     }
-}
-
-/// Helper function to attach a single kprobe
-pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str) -> Result<(), anyhow::Error> {
-    let program: &mut KProbe = ebpf
-        .program_mut(program_name)
-        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
-        .try_into()
-        .inspect_err(|e| {
-            error!("failed to load eBPF program '{}': {}", program_name, e);
-        })?;
-
-    program.load().inspect_err(|e| {
-        error!("failed to load kprobe '{}': {}", program_name, e);
-    })?;
-    program.attach(program_name, 0).inspect_err(|e| {
-        error!("failed to attach kprobe '{}': {}", program_name, e);
-    })?;
-
-    debug!("attached eBPF kprobe '{}'", program_name);
-    Ok(())
-}
-
-/// Helper function to attach a single LSM hook
-pub fn attach_lsm_hook(
-    ebpf: &mut aya::Ebpf,
-    hook_name: &str,
-    program_name: &str,
-) -> Result<(), anyhow::Error> {
-    let program: &mut Lsm = ebpf
-        .program_mut(program_name)
-        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
-        .try_into()
-        .inspect_err(|e| {
-            error!("failed to load eBPF program '{}': {}", program_name, e);
-        })?;
-    let btf = Btf::from_sys_fs().inspect_err(|e| {
-        error!("failed to read BTF from sysfs for '{}': {}", hook_name, e);
-    })?;
-    program.load(hook_name, &btf).inspect_err(|e| {
-        error!(
-            "failed to load LSM hook '{}' ({}): {}",
-            hook_name, program_name, e
-        );
-    })?;
-    program.attach().inspect_err(|e| {
-        error!(
-            "failed to attach LSM hook '{}' ({}): {}",
-            hook_name, program_name, e
-        );
-    })?;
-
-    debug!(
-        "attached eBPF LSM hook '{}' (program '{}')",
-        hook_name, program_name
-    );
-    Ok(())
 }
 
 /// Get process name from PID

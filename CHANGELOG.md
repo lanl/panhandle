@@ -6,17 +6,21 @@
   - **TestRun for eBPF unit tests**: Added test module in
     `panhandle-ebpf/src/main.rs` with `#[test]` functions for eBPF program
     logic.
-  - **GlobalData for config**: Replaced 6 runtime maps with 2 `GlobalData`
-    structs (`PANHANDLE_CONFIG` and `SHELL_CONFIG`) for type-safe, zero-copy
-    config access from eBPF programs.
   - **RawTracepoint for execve**: Changed `#[tracepoint]` to
     `#[raw_tracepoint]` with `ctx.arg()` for direct argument access,
     eliminating BTF dependency.
   - **VerifierLogLevel**: Added `VERIFIER_LOG_LEVEL = DEBUG` in debug mode for
     easier eBPF verifier debugging.
-- **Modular architecture**: Split monolithic `main.rs` into focused modules:
-  `config.rs`, `ebpf_loader.rs`, `output.rs`, `monitors.rs`, `shell.rs`,
-  `blocking.rs`, `error.rs`, `helpers.rs`, `input_configs.rs`.
+  - UID filtering for the execve/readline/zlentry programs stays on the
+    original runtime-configurable `uid_options`/`uid_include_list` maps
+    rather than load-time-only `GlobalData`, so those filters can still be
+    changed without reloading the eBPF program.
+- **`main.rs` now actually uses the modular helpers**: `ebpf_loader.rs`
+  (program loading/attaching, UID-filter map population) and `blocking.rs`
+  (syscall blocking) are wired into `main.rs` instead of duplicating that
+  logic inline. `config.rs`, `monitors.rs`, `shell.rs`, and `output.rs` exist
+  for library/test use but are not yet adopted by `main.rs`, which keeps its
+  own CPU/GPU/IO/memory/process-bounds monitoring and output code.
 - **Proper error types**: Added `thiserror` dependency, created `PanhandleError`
   enum with manual `PartialEq` impl for variants wrapping non-`PartialEq` types.
 - **Removed unused dependencies**: Removed `bytes`, `config`, `bytemuck` crates.
@@ -32,6 +36,8 @@
   conflicts, length/count limits, and unsupported file extensions.
 - **Linting improvements**: Updated `./scripts/lint` to exclude generated docs
   and handle optional `cargo-outdated`.
+- **`aya`/`aya-log`/etc. now pinned to crates.io releases** instead of the
+  `aya-v0.16.0` git tag, now that upstream publishes matching versions there.
 
 ## v1.0.24
 

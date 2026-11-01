@@ -13,7 +13,7 @@ pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Bt
     // Determine list mode (allow/deny)
     let (list_type, comms) = resolve_comm_list_mode(&config.comm_deny, &config.comm_allow)?;
 
-    if list_type == 0 && !comms.is_empty() {
+    if list_type == 0 {
         eprintln!(
             "Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked."
         );

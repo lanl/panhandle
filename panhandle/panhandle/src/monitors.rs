@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 use crate::error::Result;
 use crate::output::OutputConfig;
 use machine_info::Machine;
+use panhandle_common::NetStats;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,37 +11,6 @@ use tokio::time::sleep;
 
 /// Network statistics accumulated from eBPF events
 pub type SharedNetStats = Arc<tokio::sync::Mutex<HashMap<u32, NetStats>>>;
-
-/// Per-PID network statistics
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NetStats {
-    pub tcp_established: u32,
-    pub tcp_syn_recv: u32,
-    pub tcp_close_wait: u32,
-    pub tcp_time_wait: u32,
-    pub tcp_fin_wait: u32,
-    pub udp_sockets: u32,
-    pub bytes_sent: u64,
-    pub bytes_recv: u64,
-    pub packets_sent: u64,
-    pub packets_recv: u64,
-}
-
-impl NetStats {
-    /// Check if there's any network activity
-    pub fn has_activity(&self) -> bool {
-        self.tcp_established > 0
-            || self.tcp_syn_recv > 0
-            || self.tcp_close_wait > 0
-            || self.tcp_time_wait > 0
-            || self.tcp_fin_wait > 0
-            || self.udp_sockets > 0
-            || self.bytes_sent > 0
-            || self.bytes_recv > 0
-            || self.packets_sent > 0
-            || self.packets_recv > 0
-    }
-}
 
 /// Per-PID CPU statistics
 #[derive(Debug, Default, Clone, Copy)]

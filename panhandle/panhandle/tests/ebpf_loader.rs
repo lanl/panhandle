@@ -193,7 +193,7 @@ fn test_attach_kprobe_error_handling() {
         }
     };
 
-    let result = common::attach_kprobe(&mut ebpf, "nonexistent_program");
+    let result = common::attach_kprobe(&mut ebpf, "nonexistent_program", "nonexistent_program");
     assert!(result.is_err());
     match result {
         Err(common::PanhandleError::MissingProgram(name)) => {
@@ -476,7 +476,7 @@ fn test_attach_functions_signatures() {
     ) -> Result<(), common::PanhandleError> = common::attach_btf_tracepoint;
     let _attach_uprobe: fn(&mut aya::Ebpf, &str, &str, &str) -> Result<(), common::PanhandleError> =
         common::attach_uprobe;
-    let _attach_kprobe: fn(&mut aya::Ebpf, &str) -> Result<(), common::PanhandleError> =
+    let _attach_kprobe: fn(&mut aya::Ebpf, &str, &str) -> Result<(), common::PanhandleError> =
         common::attach_kprobe;
     let _attach_lsm: fn(
         &mut aya::Ebpf,

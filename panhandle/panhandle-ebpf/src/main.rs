@@ -10,7 +10,7 @@ use aya_ebpf::{
         bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
     macros::{map, raw_tracepoint},
-    maps::RingBuf,
+    maps::{HashMap, RingBuf},
     programs::RawTracePointContext,
 };
 use aya_log_ebpf::{debug, warn};
@@ -21,30 +21,14 @@ mod shell_entry;
 mod socket;
 mod vmlinux;
 
-// GlobalData for configuration - passed at load time via EbpfLoader::set_global
-// This replaces runtime map population for static configuration
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct PanhandleConfig {
-    pub shells: u32,
-    pub exclude_min_uid: u32,
-    pub exclude_max_uid: u32,
-    pub include_enabled: u32,
-    pub include_uids: [u32; UID_COUNT],
-}
-
-#[unsafe(link_section = ".bss")]
-static mut PANHANDLE_CONFIG: PanhandleConfig = PanhandleConfig {
-    shells: 0,
-    exclude_min_uid: 0,
-    exclude_max_uid: 0,
-    include_enabled: 0,
-    include_uids: [0; UID_COUNT],
-};
-
 // 1 MiB: ExecveEvent is ~11KB, so this comfortably buffers bursts of execve activity
 #[map(name = "panhandle_execve_events")]
 static PANHANDLE_EVENTS: RingBuf = RingBuf::with_byte_size(1 << 20, 0);
+#[map(name = "uid_options")]
+static UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4, 0);
+#[map(name = "uid_include_list")]
+static UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
+    HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
 
 #[raw_tracepoint]
 pub fn panhandle(ctx: RawTracePointContext) -> u32 {
@@ -58,7 +42,7 @@ fn try_panhandle(ctx: RawTracePointContext) -> Result<u32, i64> {
     let initial_uid = bpf_get_current_uid_gid() as u32;
 
     // skip event if the uid is not in the range of UIDs
-    if exclude_uid_gd(initial_uid) {
+    if exclude_uid(initial_uid, &UID_OPTIONS) {
         debug!(
             &ctx,
             "execve: skipping, uid {} excluded by range filter", initial_uid
@@ -73,7 +57,7 @@ fn try_panhandle(ctx: RawTracePointContext) -> Result<u32, i64> {
     };
 
     // filter out commands if shells
-    let shells: bool = get_shells();
+    let shells: bool = get_bool(UID_OPT_SHELLS, &UID_OPTIONS);
     if shells {
         // let's make sure the shell matches the shells we are looking for
         let shell_bool: bool = check_shells(command);
@@ -85,7 +69,10 @@ fn try_panhandle(ctx: RawTracePointContext) -> Result<u32, i64> {
     }
 
     // skip if not in the include uids list
-    if get_include_enabled() && !check_uid_in_uidarray_gd(&initial_uid) {
+    // the uid_options map has an entry for if the uid_include_list is defined / desired in userland to reduce overhead
+    if get_bool(UID_OPT_INCLUDE_ENABLED, &UID_OPTIONS)
+        && !check_uid_in_uidarray(&initial_uid, &UID_INCLUDE_LIST)
+    {
         debug!(
             &ctx,
             "execve: skipping, uid {} not in include list", initial_uid
@@ -176,45 +163,35 @@ fn try_panhandle(ctx: RawTracePointContext) -> Result<u32, i64> {
     Ok(0)
 }
 
-/// Get config from GlobalData
-pub fn get_config() -> &'static PanhandleConfig {
-    unsafe { &PANHANDLE_CONFIG }
+/// get the value as a u32 from the map at a desired address and convert into a boolean
+pub fn get_bool(address: u32, hash_map: &HashMap<u32, u32>) -> bool {
+    // SAFETY: this map holds only u32s filled from the user side, condition if they don't exist is handled.
+    let retrieved_value: &u32 = unsafe { hash_map.get(&address) }.unwrap_or(&0);
+    retrieved_value == &1
 }
 
-/// Get shells config from GlobalData
-pub fn get_shells() -> bool {
-    let config = get_config();
-    config.shells == 1
+/// get u32 from the options map by address
+pub fn get_uid(address: u32, hash_map: &HashMap<u32, u32>) -> u32 {
+    // SAFETY: this map holds only u32s filled from the user side, condition if they don't exist is handled.
+    match unsafe { hash_map.get(&address) } {
+        Some(x) => *x,
+        None => 0,
+    }
 }
 
-/// Get exclude_min_uid from GlobalData
-pub fn get_exclude_min_uid() -> u32 {
-    let config = get_config();
-    config.exclude_min_uid
+/// get an array of usize uids from the uid include list map
+pub fn get_include_uid_array(map_to_get: &HashMap<u32, [u32; UID_COUNT]>) -> [u32; UID_COUNT] {
+    // SAFETY: this map holds only an array of UID_COUNT x u32s filled from the user side, condition if they don't exist is handled.
+    match unsafe { map_to_get.get(&0) } {
+        Some(x) => *x,
+        None => [0; UID_COUNT],
+    }
 }
 
-/// Get exclude_max_uid from GlobalData
-pub fn get_exclude_max_uid() -> u32 {
-    let config = get_config();
-    config.exclude_max_uid
-}
-
-/// Get include_enabled from GlobalData
-pub fn get_include_enabled() -> bool {
-    let config = get_config();
-    config.include_enabled == 1
-}
-
-/// Get include_uids from GlobalData
-pub fn get_include_uids() -> [u32; UID_COUNT] {
-    let config = get_config();
-    config.include_uids
-}
-
-/// return a bool to determine if the process should be excluded by uid (GlobalData version)
-pub fn exclude_uid_gd(uid: u32) -> bool {
-    let min = get_exclude_min_uid();
-    let max = get_exclude_max_uid();
+/// return a bool to determine if the process should be excluded by uid
+pub fn exclude_uid(uid: u32, hash_map: &HashMap<u32, u32>) -> bool {
+    let min = get_uid(UID_OPT_EXCLUDE_MIN, hash_map);
+    let max = get_uid(UID_OPT_EXCLUDE_MAX, hash_map);
     if (uid >= min) && (uid <= max) {
         return true;
     }
@@ -239,9 +216,9 @@ fn is_exact_comm(command: &[u8; 16], name: &[u8]) -> bool {
     command[..len] == *name && command[len] == 0
 }
 
-/// check if a given u32 uid matches the list of u32 uids to look for (GlobalData version)
-pub fn check_uid_in_uidarray_gd(uid: &u32) -> bool {
-    let only_uids_list = get_include_uids();
+/// check if a given u32 uid matches the list of u32 uids to look for
+pub fn check_uid_in_uidarray(uid: &u32, hash_map: &HashMap<u32, [u32; UID_COUNT]>) -> bool {
+    let only_uids_list = get_include_uid_array(hash_map);
 
     // compare initial uid to array, stop at first match
     for value in only_uids_list.iter() {
@@ -297,32 +274,10 @@ mod tests {
     /// Test UID include list logic
     #[test]
     fn test_check_uid_in_uidarray() {
-        // We can't easily test this without GlobalData, but we can verify the logic
-        // by checking the function exists and compiles
-        let _test_uids = [1000, 1001, 1002, 0, 0, 0, 0, 0, 0, 0];
-        // This is tested indirectly through the exclude_uid test above
-        assert_eq!(UID_COUNT, 10);
-    }
-
-    /// Test GlobalData-based UID exclude logic
-    #[test]
-    fn test_exclude_uid_gd() {
-        // Test the exclude_uid_gd logic directly
-        // UID 500 should be excluded (in range 1000-2000? No, 500 < 1000, so NOT excluded)
-        // Wait, the logic is: if uid >= min AND uid <= max, then exclude
-        // So UID 1500 should be excluded, UID 500 should NOT
-        assert!(!exclude_uid_gd(500)); // Not in range
-        assert!(exclude_uid_gd(1500)); // In range
-        assert!(!exclude_uid_gd(2500)); // Above range
-    }
-
-    /// Test GlobalData-based UID include list logic
-    #[test]
-    fn test_check_uid_in_uidarray_gd() {
-        // Test the check_uid_in_uidarray_gd logic directly
-        // This uses the GlobalData include_uids array
-        // Since we can't easily modify GlobalData in tests, we just verify the function compiles
-        // and the logic is correct by checking UID_COUNT
+        // uid_options/uid_include_list are real eBPF maps, which can't be constructed
+        // host-side outside of a loaded eBPF program, so we can't exercise
+        // check_uid_in_uidarray/exclude_uid directly here. This at least checks the
+        // shared constant they're built against stays in sync.
         assert_eq!(UID_COUNT, 10);
     }
 }

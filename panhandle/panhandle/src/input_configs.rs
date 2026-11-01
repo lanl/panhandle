@@ -3,11 +3,7 @@ use std::{fs, path::Path};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-// process blocking
-pub(crate) const MAX_PATH_LENGTH: usize = 255;
-pub(crate) const MAX_COMM_LENGTH: usize = 15;
-pub(crate) const MAX_BLOCKED_PATHS: usize = 64;
-pub(crate) const MAX_BLOCKED_COMMS: usize = 64;
+use panhandle_common::{MAX_BLOCKED_COMMS, MAX_BLOCKED_PATHS, MAX_COMM_LENGTH, MAX_PATH_LENGTH};
 
 /// Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
 /// as well as the ability to monitor specific shells (bash and zsh) on a linux host.

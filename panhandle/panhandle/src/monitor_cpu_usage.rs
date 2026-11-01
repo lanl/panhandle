@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::helpers::*;
 
 // Structure to hold statistics for each monitored PID
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct PidStats {
     pub total_time: u64,      // Total cumulative CPU time
@@ -25,7 +26,8 @@ pub struct PidStats {
 /// (previously inline, duplicated at both call sites) eviction logic can be unit
 /// tested directly - see CHANGELOG v1.0.18's memory-growth-leak fix, which this
 /// protects against regressing.
-pub(crate) fn evict_stale_pids(
+#[allow(dead_code)]
+pub fn evict_stale_pids(
     last_pid_times: &mut HashMap<u32, u64>,
     pid_stats: &mut HashMap<u32, PidStats>,
     live_pids: &HashSet<u32>,
@@ -35,7 +37,8 @@ pub(crate) fn evict_stale_pids(
 }
 
 /// Per-PID CPU%, 100% = fully using one core, 200% = fully using two cores, etc.
-pub(crate) fn calc_cpu_percent(delta_ns: u64, interval_ns: u64) -> f64 {
+#[allow(dead_code)]
+pub fn calc_cpu_percent(delta_ns: u64, interval_ns: u64) -> f64 {
     if interval_ns > 0 {
         (delta_ns as f64 / interval_ns as f64) * 100.0
     } else {
@@ -45,11 +48,8 @@ pub(crate) fn calc_cpu_percent(delta_ns: u64, interval_ns: u64) -> f64 {
 
 /// System-wide CPU%, normalized to 0-100% (100% = every core fully busy), matching the
 /// convention used by tools like top/htop's summary line rather than the per-PID scale.
-pub(crate) fn calc_system_cpu_percent(
-    busy_delta_ns: u64,
-    interval_ns: u64,
-    num_cpus: usize,
-) -> f64 {
+#[allow(dead_code)]
+pub fn calc_system_cpu_percent(busy_delta_ns: u64, interval_ns: u64, num_cpus: usize) -> f64 {
     if interval_ns > 0 && num_cpus > 0 {
         (busy_delta_ns as f64 / (interval_ns as f64 * num_cpus as f64) * 100.0).clamp(0.0, 100.0)
     } else {
@@ -59,24 +59,26 @@ pub(crate) fn calc_system_cpu_percent(
 
 // Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
 // loop afterward only needs to do async formatting/output work.
-pub(crate) struct CpuEntry {
-    pid: u32,
-    comm: String,
-    found: bool,
-    ppid: Option<u32>,
-    parent_comm: Option<String>,
-    uid: Option<u32>,
-    username: Option<String>,
-    state: Option<char>,
-    pub(crate) cpu_time: u64,
-    pub(crate) delta: u64,
-    pub(crate) cpu_percent: f64,
-    pub(crate) avg_cpu_percent: f64,
-    pub(crate) max_cpu_percent: f64,
+#[allow(dead_code)]
+pub struct CpuEntry {
+    pub pid: u32,
+    pub comm: String,
+    pub found: bool,
+    pub ppid: Option<u32>,
+    pub parent_comm: Option<String>,
+    pub uid: Option<u32>,
+    pub username: Option<String>,
+    pub state: Option<char>,
+    pub cpu_time: u64,
+    pub delta: u64,
+    pub cpu_percent: f64,
+    pub avg_cpu_percent: f64,
+    pub max_cpu_percent: f64,
 }
 
 /// Plain-text rendering of a found CPU entry. `verbose` includes parent/owner/state and
 /// timing fields; the compact form keeps just PID/comm plus the CPU percentages.
+#[allow(dead_code)]
 pub fn format_cpu_prose(
     verbose: bool,
     pid: u32,
@@ -121,6 +123,7 @@ pub fn format_cpu_prose(
 }
 
 /// Plain-text rendering of a process that disappeared between the scan and report phases.
+#[allow(dead_code)]
 pub fn format_cpu_not_found_prose(
     verbose: bool,
     pid: u32,
@@ -147,6 +150,7 @@ pub fn format_cpu_not_found_prose(
 /// parent/owner/state and timing fields; the compact form keeps just PID/comm plus the
 /// CPU percentages. All string fields are escaped via `json_quoted` so the document is
 /// always valid JSON even if a comm or username contains quotes or control characters.
+#[allow(dead_code)]
 pub fn format_cpu_json(
     verbose: bool,
     pid: u32,
@@ -197,6 +201,7 @@ pub fn format_cpu_json(
 /// JSON rendering of a process that disappeared between the scan and report phases,
 /// mirroring `format_cpu_not_found_prose`. All string fields are escaped via
 /// `json_quoted` so the document is always valid JSON.
+#[allow(dead_code)]
 pub fn format_cpu_not_found_json(
     verbose: bool,
     pid: u32,
@@ -230,6 +235,7 @@ pub fn format_cpu_not_found_json(
 
 /// Plain-text rendering of the system-wide CPU% summary line, mirroring
 /// `format_system_cpu_json`.
+#[allow(dead_code)]
 pub fn format_system_cpu_prose(
     system_cpu_percent: f64,
     num_cpus: usize,
@@ -243,6 +249,7 @@ pub fn format_system_cpu_prose(
 
 /// JSON rendering of the system-wide CPU% summary line. All values are numeric, so no
 /// string escaping is needed.
+#[allow(dead_code)]
 pub fn format_system_cpu_json(
     system_cpu_percent: f64,
     num_cpus: usize,
@@ -255,6 +262,7 @@ pub fn format_system_cpu_json(
 }
 
 // cpu monitoring helper function
+#[allow(dead_code)]
 pub async fn monitor_cpu_usage(
     pid_filter: &Option<Vec<u32>>,
     json_output: &bool,
@@ -607,7 +615,8 @@ pub async fn monitor_cpu_usage(
 /// Build a CpuEntry for a successfully-read PID, updating the per-PID delta/average/max
 /// tracking state as a side effect. Shared by both the --pid-list-filtered and
 /// all-processes gather paths so the accounting logic isn't duplicated between them.
-pub(crate) fn build_found_entry(
+#[allow(dead_code)]
+pub fn build_found_entry(
     pid: u32,
     stat: Stat,
     ppid: Option<u32>,

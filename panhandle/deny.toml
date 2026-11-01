@@ -114,20 +114,20 @@ exceptions = [
 # Some crates don't have (easily) machine readable licensing information,
 # adding a clarification entry for it allows you to manually specify the
 # licensing information
-#[[licenses.clarify]]
+[[licenses.clarify]]
 # The package spec the clarification applies to
-#crate = "ring"
+crate = "machine-info"
 # The SPDX expression for the license requirements of the crate
-#expression = "MIT AND ISC AND OpenSSL"
+expression = "MIT OR Apache-2.0"
 # One or more files in the crate's source used as the "source of truth" for
 # the license expression. If the contents match, the clarification will be used
 # when running the license check, otherwise the clarification will be ignored
 # and the crate will be checked normally, which may produce warnings or errors
 # depending on the rest of your configuration
-#license-files = [
+license-files = [
 # Each entry is a crate relative path, and the (opaque) hash of its contents
-#{ path = "LICENSE", hash = 0xbd0eed23 }
-#]
+{ path = "LICENSE", hash = 0xbd0eed23 },
+]
 
 [licenses.private]
 # If true, ignores workspace crates that aren't published, or are only
@@ -205,6 +205,11 @@ deny = [
 skip = [
     #"ansi_term@0.11.0",
     #{ crate = "ansi_term@0.11.0", reason = "you can specify a reason why it can't be updated/removed" },
+    { crate = "bitflags", reason = "Version split: v1 (nvml-wrapper) and v2 (aya ecosystem)" },
+    { crate = "core-foundation", reason = "Version split: v0.9 (system-configuration) and v0.10 (security-framework)" },
+    { crate = "syn", reason = "Version split: v2 (darling, thiserror-impl) and v3 (aya, clap, serde)" },
+    { crate = "thiserror", reason = "Version split: v1 (nvml-wrapper) and v2 (aya ecosystem)" },
+    { crate = "thiserror-impl", reason = "Version split: v1 (nvml-wrapper) and v2 (aya ecosystem)" },
 ]
 # Similarly to `skip` allows you to skip certain crates during duplicate
 # detection. Unlike skip, it also includes the entire tree of transitive
@@ -229,7 +234,9 @@ unknown-git = "warn"
 # if not specified. If it is specified but empty, no registries are allowed.
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # List of URLs for allowed Git repositories
-allow-git = []
+allow-git = [
+    "https://github.com/aya-rs/aya",
+]
 
 [sources.allow-org]
 # github.com organizations to allow git sources for

@@ -9,6 +9,9 @@ panhandle-common = { path = "../panhandle-common" }
 aya-ebpf = { workspace = true }
 aya-log-ebpf = { workspace = true }
 
+[dev-dependencies]
+aya = { workspace = true }
+
 [build-dependencies]
 which = { workspace = true }
 

@@ -33,3 +33,5 @@ panhandle/Cargo.lock
 
 .omo/
 .claude/
+.opencode/node_modules/
+node_modules/

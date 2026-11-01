@@ -1,5 +1,4 @@
 use std::{
-    convert::TryInto,
     fs::{File, canonicalize},
     panic,
     path::PathBuf,
@@ -7,18 +6,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use aya::{
-    Btf,
-    maps::{HashMap, RingBuf},
-    programs::{BtfTracePoint, KProbe, TracePoint, UProbe, uprobe::UProbeScope},
-};
-use aya_log::EbpfLogger; // uncomment to see ebpf side logging for cpu monitoring
 use clap::Parser;
 use machine_info::Machine;
+use panhandle::{
+    blocking,
+    config::{AppConfig, PanhandleConfig, ShellConfig},
+    ebpf_loader,
+};
 use reqwest::Client;
 use simplelog::*;
 use tokio::{
-    io::{Interest, unix::AsyncFd},
     signal,
     task::JoinHandle,
     time::{Duration, sleep},
@@ -36,7 +33,12 @@ mod monitor_network_usage;
 mod monitor_process_bounds;
 mod procfs_helpers;
 mod unit_tests;
-use helpers::*;
+// Use explicit imports to avoid conflicts with panhandle_common
+use helpers::{
+    consume_execve_ebpf_map, consume_shell_ebpf_map, consume_socket_stats_ebpf_map,
+    get_canonical_executable_list, resolve_comm_list_mode, validate_count, validate_syslog,
+    validate_url,
+};
 use input_configs::*;
 use monitor_cpu_usage::*;
 use monitor_gpu_usage::*;
@@ -224,7 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             syslog_address = if let Some(inner) = syslog {
                 // inner is Option<String>
                 match inner {
-                    Some(addr) => Arc::new(addr.clone()), // --syslog unix or --syslog /dev/log
+                    Some(addr) => Arc::new(addr), // --syslog unix or --syslog /dev/log
                     None => Arc::new(String::from("/dev/log")), // plain --syslog <nothing>, give it /dev/log as a placeholder
                 }
             } else {
@@ -285,36 +287,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => Arc::new("UNKNOWN_HOST".to_string()),
     };
 
-    // load the built ebpf program
-    // this looks like a failure until the ebpf build runs
-    let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
-        env!("OUT_DIR"),
-        "/panhandle"
-    )))?;
-
-    if args.debug {
-        match EbpfLogger::init(&mut ebpf) {
-            Ok(logger) => {
-                match unsafe { AsyncFd::register_with_interest(logger, Interest::READABLE) } {
-                    Ok(mut async_logger) => {
-                        tokio::spawn(async move {
-                            loop {
-                                let Ok(mut guard) = async_logger.readable_mut().await else {
-                                    continue;
-                                };
-                                guard.get_inner_mut().flush();
-                                guard.clear_ready();
-                            }
-                        });
-                    }
-                    Err(e) => eprintln!("failed to poll eBPF logger: {e}"),
-                }
-            }
-            // not fatal — just means you won't see ebpf-side logs
-            Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
-        }
-    }
-
     // set up executable vars
     let mut canonical_executable_vec = Vec::new();
     if let Some(executables) = args.executables {
@@ -355,6 +327,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("{}", e);
         process::exit(1);
     }
+
+    let mut uid_include_array: [u32; UID_COUNT] = [0; UID_COUNT];
+    if include_uid_bool {
+        for (i, value) in only_these_uids_vec.iter().enumerate() {
+            uid_include_array[i] = *value;
+        }
+        debug!("array of specific uids to watch: {:?}", uid_include_array);
+    }
+
+    // the execve program and the readline/zlentry programs each get their own UID
+    // filter maps (populated below by ebpf_loader::load_ebpf), but today they're
+    // always configured identically from the same CLI/config-file flags
+    let panhandle_uid_config = PanhandleConfig {
+        shells: args.shells as u32,
+        exclude_min_uid: args.exclude_min_uid.unwrap_or(MINUID),
+        exclude_max_uid: args.exclude_max_uid.unwrap_or(MAXUID),
+        include_enabled: include_uid_bool as u32,
+        include_uids: uid_include_array,
+    };
+    let shell_uid_config = ShellConfig {
+        shells: panhandle_uid_config.shells,
+        exclude_min_uid: panhandle_uid_config.exclude_min_uid,
+        exclude_max_uid: panhandle_uid_config.exclude_max_uid,
+        include_enabled: panhandle_uid_config.include_enabled,
+        include_uids: panhandle_uid_config.include_uids,
+    };
+
+    // load the built ebpf program and populate the uid_options/uid_include_list maps
+    // for the execve, readline, and zlentry programs
+    // this looks like a failure until the ebpf build runs
+    let loaded_ebpf = ebpf_loader::load_ebpf(args.debug, &panhandle_uid_config, &shell_uid_config)?;
+    let mut ebpf = loaded_ebpf.ebpf;
+    let shared_btf = loaded_ebpf.btf;
 
     // polling frequency variable for performance monitoring tasks
     let mut polling_freq_seconds: u32 = 30; // default interval is 30 seconds; if changed, be sure to reflect the change in input_config.rs
@@ -454,32 +459,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Network monitoring
     let mut socket_handle: Option<JoinHandle<()>> = None;
     if args.socket {
-        let btf = Btf::from_sys_fs()?;
+        let btf = shared_btf
+            .as_ref()
+            .ok_or("BTF not available on this system - socket monitoring requires it")?;
 
         // Attach all network monitoring programs
-        let program: &mut BtfTracePoint = ebpf
-            .program_mut("inet_sock_set_state")
-            .unwrap()
-            .try_into()
-            .inspect_err(|e| {
-                error!("failed to load eBPF program 'inet_sock_set_state': {}", e);
-            })?;
-        program.load("inet_sock_set_state", &btf).inspect_err(|e| {
-            error!("failed to load BTF tracepoint 'inet_sock_set_state': {}", e);
-        })?;
-        program.attach().inspect_err(|e| {
-            error!(
-                "failed to attach BTF tracepoint 'inet_sock_set_state': {}",
-                e
-            );
-        })?;
+        ebpf_loader::attach_btf_tracepoint(
+            &mut ebpf,
+            "inet_sock_set_state",
+            "inet_sock_set_state",
+            btf,
+        )?;
         debug!("attached eBPF BTF tracepoint 'inet_sock_set_state'");
 
         // Attach kprobes for data transfer tracking
-        attach_kprobe(&mut ebpf, "tcp_sendmsg")?;
-        attach_kprobe(&mut ebpf, "tcp_cleanup_rbuf")?;
-        attach_kprobe(&mut ebpf, "udp_sendmsg")?;
-        attach_kprobe(&mut ebpf, "udp_recvmsg")?;
+        ebpf_loader::attach_kprobe(&mut ebpf, "tcp_sendmsg", "tcp_sendmsg")?;
+        ebpf_loader::attach_kprobe(&mut ebpf, "tcp_cleanup_rbuf", "tcp_cleanup_rbuf")?;
+        ebpf_loader::attach_kprobe(&mut ebpf, "udp_sendmsg", "udp_sendmsg")?;
+        ebpf_loader::attach_kprobe(&mut ebpf, "udp_recvmsg", "udp_recvmsg")?;
 
         // Socket probes stream per-event deltas over a ring buffer rather than
         // maintaining shared aggregate state on the kernel side (see socket.rs for
@@ -488,15 +485,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let net_stats: SharedNetStats =
             Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
-        let socket_ring_buf =
-            RingBuf::try_from(ebpf.take_map("socket_events").ok_or_else(|| {
-                format!(
-                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                    "socket_events"
-                )
-            })?)?;
-        let socket_async_fd =
-            unsafe { AsyncFd::register_with_interest(socket_ring_buf, Interest::READABLE)? };
+        let socket_async_fd = ebpf_loader::create_ring_buffer_async_fd(&mut ebpf, "socket_events")?;
         let net_stats_consumer = net_stats.clone();
         tokio::task::spawn(consume_socket_stats_ebpf_map(
             socket_async_fd,
@@ -638,53 +627,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // set up process bound monitoring
     let mut bound_handle: Option<JoinHandle<()>> = None;
     if args.bound {
-        let program: &mut KProbe = ebpf
-            .program_mut("tcp_recvmsg_entry")
-            .ok_or("eBPF program 'tcp_recvmsg_entry' not found - binary/eBPF build mismatch?")?
-            .try_into()?;
-        program.load()?;
-        program.attach("tcp_recvmsg", 0).inspect_err(|e| {
-            error!(
-                "failed to attach kprobe 'tcp_recvmsg_entry' to tcp_recvmsg: {}",
-                e
-            );
-        })?;
+        ebpf_loader::attach_kprobe(&mut ebpf, "tcp_recvmsg_entry", "tcp_recvmsg")?;
         debug!("attached eBPF kprobe 'tcp_recvmsg_entry' -> tcp_recvmsg");
 
         // Attach kretprobe on return from tcp_recvmsg to compute elapsed wait time and
         // fold it into NET_WAIT.
-        let program: &mut KProbe = ebpf
-            .program_mut("tcp_recvmsg_exit")
-            .ok_or("eBPF program 'tcp_recvmsg_exit' not found - binary/eBPF build mismatch?")?
-            .try_into()?;
-        program.load()?;
-        program.attach("tcp_recvmsg", 0).inspect_err(|e| {
-            error!(
-                "failed to attach kretprobe 'tcp_recvmsg_exit' to tcp_recvmsg: {}",
-                e
-            );
-        })?;
+        ebpf_loader::attach_kprobe(&mut ebpf, "tcp_recvmsg_exit", "tcp_recvmsg")?;
         debug!("attached eBPF kretprobe 'tcp_recvmsg_exit' -> tcp_recvmsg");
 
-        // Pull the NET_WAIT map out and wrap it so it can be shared with the polling
-        // task below. Wrapped in Arc<Mutex<_>> purely for Send/Sync convenience across
-        // the tokio task boundary - the map itself is only ever touched from that one task.
-        let net_wait_map = ebpf.take_map("NET_WAIT").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "NET_WAIT"
-            )
-        })?;
-        let net_wait: aya::maps::HashMap<_, u32, NetWaitStat> =
-            aya::maps::HashMap::try_from(net_wait_map)?;
-        let net_wait = Arc::new(Mutex::new(net_wait));
+        // Wrapped in Arc<Mutex<_>> purely for Send/Sync convenience across the tokio
+        // task boundary - the map itself is only ever touched from that one task.
+        let net_wait: SharedNetWaitMap = Arc::new(Mutex::new(ebpf_loader::get_hash_map(
+            &mut ebpf, "NET_WAIT",
+        )?));
 
         let url = global_url.clone();
         let host = hostname.clone();
         let syslog = syslog_address.clone();
         let verbose_mode = args.verbose;
         let client = Client::new();
-        let net_wait_for_task = net_wait.clone();
+        let net_wait_for_task = net_wait;
 
         bound_handle = Some(tokio::task::spawn(async move {
             loop {
@@ -760,79 +722,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        let blocked_paths: Vec<String> = if let Some(ref paths) = args.block_paths {
-            paths.clone()
-        } else {
-            Vec::new()
+        let blocking_config = AppConfig {
+            comm_allow: args.comm_allow.clone().unwrap_or_default(),
+            comm_deny: args.comm_deny.clone().unwrap_or_default(),
+            block_paths: args.block_paths.clone().unwrap_or_default(),
+            syscalls: syscalls.clone(),
+            ..Default::default()
         };
 
-        // Get the COMMS map
-        let comms_map = ebpf.take_map("COMMS").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "COMMS"
-            )
-        })?;
-        let mut comm_list: aya::maps::HashMap<_, [u8; 16], u8> =
-            aya::maps::HashMap::try_from(comms_map)?;
-
-        // list_type is used on the ebpf side to determine how to handle process blocking
-        for comm_str in comms {
-            let mut comm = [0u8; 16];
-            let bytes = comm_str.as_bytes();
-            let len = bytes.len().min(15); // Already validated above to be <= MAX_COMM_LENGTH (15); min() is just a defensive clamp
-            comm[..len].copy_from_slice(&bytes[..len]);
-            comm_list.insert(comm, list_type, 0)?;
+        if blocking_config.block_paths.is_empty() && args.verbose {
+            println!(
+                "Process blocking was turned on but no filepath list was provided. Defaulting to blocking all paths."
+            );
         }
 
-        // Insert mode indicator key to tell eBPF which mode we're in.
-        // This known key within the hashmap is required for when ebpf side can't find a comm in the map but still needs to know what to do with it
-        if list_type != NO_LIST {
-            let mode_key = [LIST_MODE; 16];
-            comm_list.insert(mode_key, list_type, 0)?;
-        }
-
-        // Get the BLOCKED_PATHS map
-        let blocked_paths_map = ebpf.take_map("BLOCKED_PATHS").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "BLOCKED_PATHS"
-            )
-        })?;
-        let mut path_denylist: aya::maps::HashMap<_, [u8; 256], u8> =
-            aya::maps::HashMap::try_from(blocked_paths_map)?;
-
-        // Populate the denylist with initial paths
-        if blocked_paths.is_empty() {
-            let path = [0u8; 256];
-            path_denylist.insert(path, 0, 0)?; // value of 0 is a placeholder, check on ebpf side for it to know that no path list was provided
-            if args.verbose {
-                println!(
-                    "Process blocking was turned on but no filepath list was provided. Defaulting to blocking all paths."
-                )
-            }
-        }
-        for path_str in blocked_paths {
-            let mut path = [0u8; 256];
-            let bytes = path_str.as_bytes();
-            let len = bytes.len(); // Already validated above (CLI value_parser or the config-file check) to be <= MAX_PATH_LENGTH (255)
-            path[..len].copy_from_slice(&bytes[..len]);
-            path_denylist.insert(path, 1, 0)?;
-        }
-
-        // Check for open related syscalls - open, openat, creat
-        if syscalls
-            .iter()
-            .any(|s| s == "open" || s == "openat" || s == "creat")
-        {
-            attach_lsm_hook(&mut ebpf, "file_open", "block_open")
-                .expect("failed to attach file_open hook");
-        }
-
-        if syscalls.iter().any(|s| s == "execve") {
-            attach_lsm_hook(&mut ebpf, "bprm_check_security", "block_execve")
-                .expect("failed to attach bprm_check_security hook");
-        }
+        let btf = shared_btf
+            .as_ref()
+            .ok_or("BTF not available on this system - syscall blocking requires it")?;
+        blocking::setup_syscall_blocking(&mut ebpf, &blocking_config, btf)?;
     }
 
     if args.bash {
@@ -852,89 +759,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             file_string
         );
 
-        // readline stuff
-        let program: &mut UProbe = ebpf
-            .program_mut("readline")
-            .unwrap()
-            .try_into()
-            .inspect_err(|e| {
-                error!("failed to load eBPF program 'readline': {}", e);
-            })?;
-        program.load().inspect_err(|e| {
-            error!("failed to load uprobe 'readline': {}", e);
-        })?;
-        program
-            .attach(
-                "readline_internal_teardown",
-                &file_string,
-                UProbeScope::AllProcesses,
-            )
-            .inspect_err(|e| {
-                error!(
-                    "failed to attach uprobe 'readline' to '{}': {}",
-                    file_string, e
-                );
-            })?;
+        // readline stuff; the uid_options/uid_include_list maps for this program were
+        // already populated by ebpf_loader::load_ebpf above
+        ebpf_loader::attach_uprobe(
+            &mut ebpf,
+            "readline",
+            "readline_internal_teardown",
+            &file_string,
+        )?;
         debug!("attached eBPF uprobe 'readline' to '{}'", file_string);
 
-        // get the uid_options map from ebpf land
-        let readline_uid_options_map = ebpf.take_map("readline_uid_options").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "readline_uid_options"
-            )
-        })?;
-        let mut program_options: HashMap<_, u32, u32> =
-            HashMap::try_from(readline_uid_options_map).unwrap();
-        // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
-        // this is the shells identifier
-        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
-        // this is the min uid identifier
-        program_options.insert(
-            UID_OPT_EXCLUDE_MIN,
-            args.exclude_min_uid.unwrap_or(MINUID),
-            0,
-        )?;
-        // this is the max uid identifier
-        program_options.insert(
-            UID_OPT_EXCLUDE_MAX,
-            args.exclude_max_uid.unwrap_or(MAXUID),
-            0,
-        )?;
-        // this is the include uid list option identifier
-        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
-
-        // get the uid_include_list map from ebpf land
-        let readline_uid_include_list_map =
-            ebpf.take_map("readline_uid_include_list").ok_or_else(|| {
-                format!(
-                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                    "readline_uid_include_list"
-                )
-            })?;
-        let mut readline_uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
-            HashMap::try_from(readline_uid_include_list_map).unwrap();
-        // set up defaults of a zero'd array
-        let mut zeroed_array: [u32; UID_COUNT] = [0; UID_COUNT];
-
-        if include_uid_bool {
-            for (uid_list_counter, value) in only_these_uids_vec.iter().enumerate() {
-                zeroed_array[uid_list_counter] = *value;
-            }
-            debug!("array of specific uids to watch: {:?}", zeroed_array);
-        }
-
-        // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        readline_uid_list_map.insert(0, zeroed_array, 0)?;
-
         // Process events from the ring buffer
-        let ring_buf = RingBuf::try_from(ebpf.take_map("readline_events").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "readline_events"
-            )
-        })?)?;
-        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
+        let async_fd = ebpf_loader::create_ring_buffer_async_fd(&mut ebpf, "readline_events")?;
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();
@@ -976,85 +812,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             file_string
         );
 
-        // zlentry stuff
-        let program: &mut UProbe = ebpf
-            .program_mut("zlentry")
-            .unwrap()
-            .try_into()
-            .inspect_err(|e| {
-                error!("failed to load eBPF program 'zlentry': {}", e);
-            })?;
-        program.load().inspect_err(|e| {
-            error!("failed to load uprobe 'zlentry': {}", e);
-        })?;
-        program
-            .attach("zleentry", &file_string, UProbeScope::AllProcesses)
-            .inspect_err(|e| {
-                error!(
-                    "failed to attach uprobe 'zlentry' to '{}': {}",
-                    file_string, e
-                );
-            })?;
+        // zlentry stuff; the uid_options/uid_include_list maps for this program were
+        // already populated by ebpf_loader::load_ebpf above
+        ebpf_loader::attach_uprobe(&mut ebpf, "zlentry", "zleentry", &file_string)?;
         debug!("attached eBPF uprobe 'zlentry' to '{}'", file_string);
 
-        // get the uid_options map from ebpf land
-        let zlentry_uid_options_map = ebpf.take_map("zlentry_uid_options").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "zlentry_uid_options"
-            )
-        })?;
-        let mut program_options: HashMap<_, u32, u32> =
-            HashMap::try_from(zlentry_uid_options_map).unwrap();
-        // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
-        // this is the shells identifier
-        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
-        // this is the min uid identifier
-        program_options.insert(
-            UID_OPT_EXCLUDE_MIN,
-            args.exclude_min_uid.unwrap_or(MINUID),
-            0,
-        )?;
-        // this is the max uid identifier
-        program_options.insert(
-            UID_OPT_EXCLUDE_MAX,
-            args.exclude_max_uid.unwrap_or(MAXUID),
-            0,
-        )?;
-        // this is the include uid list option identifier
-        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
-
-        // get the uid_include_list map from ebpf land
-        let zlentry_uid_include_list_map =
-            ebpf.take_map("zlentry_uid_include_list").ok_or_else(|| {
-                format!(
-                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                    "zlentry_uid_include_list"
-                )
-            })?;
-        let mut zlentry_uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
-            HashMap::try_from(zlentry_uid_include_list_map).unwrap();
-        // set up defaults of a zero'd array
-        let mut zeroed_array: [u32; UID_COUNT] = [0; UID_COUNT];
-
-        if include_uid_bool {
-            for (uid_list_counter, value) in only_these_uids_vec.iter().enumerate() {
-                zeroed_array[uid_list_counter] = *value;
-            }
-            debug!("array of specific uids to watch: {:?}", zeroed_array);
-        }
-
-        // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        zlentry_uid_list_map.insert(0, zeroed_array, 0)?;
-
         // Process events from the ring buffer
-        let ring_buf = RingBuf::try_from(ebpf.take_map("zlentry_events").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "zlentry_events"
-            )
-        })?)?;
-        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
+        let async_fd = ebpf_loader::create_ring_buffer_async_fd(&mut ebpf, "zlentry_events")?;
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();
@@ -1094,81 +858,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ) {
         // this is the main program functionality
         // the default option if the other shells are not selected
-        // load the ebpf program
-        let program2: &mut TracePoint = ebpf
-            .program_mut("panhandle")
-            .unwrap()
-            .try_into()
-            .inspect_err(|e| {
-                error!("failed to load eBPF program 'panhandle': {}", e);
-            })?;
-        program2.load().inspect_err(|e| {
-            error!("failed to load tracepoint 'sys_enter_execve': {}", e);
-        })?;
-        program2
-            .attach("syscalls", "sys_enter_execve")
-            .inspect_err(|e| {
-                error!("failed to attach tracepoint 'sys_enter_execve': {}", e);
-            })?;
-        debug!("attached eBPF tracepoint 'syscalls:sys_enter_execve'");
-
-        // get the uid_options map from ebpf land
-        let uid_options_map = ebpf.take_map("uid_options").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "uid_options"
-            )
-        })?;
-        let mut program_options: HashMap<_, u32, u32> = HashMap::try_from(uid_options_map).unwrap();
-        // add the data as u32s to the map by index / the values will be retrieved by index in ebpf-land so the index is hard-coded
-        // this is the shells identifier
-        program_options.insert(UID_OPT_SHELLS, args.shells as u32, 0)?;
-        // this is the min uid identifier
-        program_options.insert(
-            UID_OPT_EXCLUDE_MIN,
-            args.exclude_min_uid.unwrap_or(MINUID),
-            0,
-        )?;
-        // this is the max uid identifier
-        program_options.insert(
-            UID_OPT_EXCLUDE_MAX,
-            args.exclude_max_uid.unwrap_or(MAXUID),
-            0,
-        )?;
-        // this is the include uid list option identifier
-        program_options.insert(UID_OPT_INCLUDE_ENABLED, include_uid_bool as u32, 0)?;
-
-        // get the uid_include_list map from ebpf land
-        let uid_include_list_map = ebpf.take_map("uid_include_list").ok_or_else(|| {
-            format!(
-                "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                "uid_include_list"
-            )
-        })?;
-        let mut uid_list_map: HashMap<_, u32, [u32; UID_COUNT]> =
-            HashMap::try_from(uid_include_list_map).unwrap();
-        // set up defaults of a zero'd array
-        let mut zeroed_array: [u32; UID_COUNT] = [0; UID_COUNT];
-
-        if include_uid_bool {
-            for (uid_list_counter, value) in only_these_uids_vec.iter().enumerate() {
-                zeroed_array[uid_list_counter] = *value;
-            }
-            debug!("array of specific uids to watch: {:?}", zeroed_array);
-        }
-
-        // add the data to the map by index / the values will be retrieved by index in ebpf-land
-        uid_list_map.insert(0, zeroed_array, 0)?;
+        // load the ebpf program; the uid_options/uid_include_list maps for this
+        // program were already populated by ebpf_loader::load_ebpf above
+        ebpf_loader::attach_raw_tracepoint(&mut ebpf, "panhandle", "sys_enter_execve")?;
+        debug!("attached eBPF raw tracepoint 'sys_enter_execve'");
 
         // Process events from the ring buffer
-        let ring_buf =
-            RingBuf::try_from(ebpf.take_map("panhandle_execve_events").ok_or_else(|| {
-                format!(
-                    "eBPF map '{}' not found in loaded object - binary/eBPF build mismatch?",
-                    "panhandle_execve_events"
-                )
-            })?)?;
-        let async_fd = unsafe { AsyncFd::register_with_interest(ring_buf, Interest::READABLE)? };
+        let async_fd =
+            ebpf_loader::create_ring_buffer_async_fd(&mut ebpf, "panhandle_execve_events")?;
 
         let ref_executable_vec: Vec<String> = canonical_executable_vec.clone();
         let ref_global_url = global_url.clone();

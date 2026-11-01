@@ -22,6 +22,12 @@ pub const DENY_LIST: u8 = 1;
 pub const ALLOW_LIST: u8 = 2;
 pub const LIST_MODE: u8 = 255;
 
+// Process blocking limits
+pub const MAX_PATH_LENGTH: usize = 255;
+pub const MAX_COMM_LENGTH: usize = 15;
+pub const MAX_BLOCKED_PATHS: usize = 64;
+pub const MAX_BLOCKED_COMMS: usize = 64;
+
 // Keys into the uid_options / readline_uid_options / zlentry_uid_options maps, shared
 // between userspace (which populates them, main.rs) and eBPF (which reads them via
 // get_bool/get_uid, main.rs and shell_entry.rs). UID_OPT_SHELLS only means anything to
@@ -43,6 +49,40 @@ pub struct Readline {
     pub tgid: u32,
     pub command: [u8; 16],
     pub entry: [u8; ARG_SIZE],
+}
+
+impl Readline {
+    /// Creates a new `Readline` instance for testing or construction.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use panhandle_common::{Readline, ARG_SIZE};
+    ///
+    /// let mut rl = Readline {
+    ///     timestamp: 1_000_000_000,
+    ///     uid: 1000,
+    ///     gid: 1000,
+    ///     pid: 42,
+    ///     tgid: 42,
+    ///     command: [0; 16],
+    ///     entry: [0; ARG_SIZE],
+    /// };
+    /// rl.command[..4].copy_from_slice(b"bash");
+    /// rl.entry[..5].copy_from_slice(b"ls -l");
+    /// assert_eq!(rl.uid, 1000);
+    /// ```
+    pub fn new_for_test() -> Self {
+        Self {
+            timestamp: 0,
+            uid: 0,
+            gid: 0,
+            pid: 0,
+            tgid: 0,
+            command: [0; 16],
+            entry: [0; ARG_SIZE],
+        }
+    }
 }
 
 // Custom struct used for monitoring network usage
@@ -67,7 +107,18 @@ pub struct NetStats {
 }
 
 impl NetStats {
-    // Create a new NetStats instance with all fields initialized to zero
+    /// Create a new `NetStats` instance with all fields initialized to zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use panhandle_common::NetStats;
+    ///
+    /// let stats = NetStats::new();
+    /// assert_eq!(stats.tcp_established, 0);
+    /// assert_eq!(stats.bytes_sent, 0);
+    /// assert!(!stats.has_activity());
+    /// ```
     pub const fn new() -> Self {
         Self {
             tcp_established: 0,
@@ -83,8 +134,25 @@ impl NetStats {
         }
     }
 
-    // Check if this NetStats entry has any activity worth reporting
-    // Returns true if there are any active connections or data transfer
+    /// Check if this `NetStats` entry has any activity worth reporting.
+    ///
+    /// Returns `true` if there are any active connections or data transfer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use panhandle_common::NetStats;
+    ///
+    /// let mut stats = NetStats::new();
+    /// assert!(!stats.has_activity());
+    ///
+    /// stats.tcp_established = 1;
+    /// assert!(stats.has_activity());
+    ///
+    /// let mut stats2 = NetStats::new();
+    /// stats2.bytes_sent = 100;
+    /// assert!(stats2.has_activity());
+    /// ```
     pub const fn has_activity(&self) -> bool {
         self.tcp_established > 0
             || self.tcp_syn_recv > 0
@@ -131,6 +199,18 @@ pub struct SocketStatsEvent {
 }
 
 impl SocketStatsEvent {
+    /// Create a new `SocketStatsEvent` for the given PID with all deltas zeroed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use panhandle_common::SocketStatsEvent;
+    ///
+    /// let event = SocketStatsEvent::new(1234);
+    /// assert_eq!(event.pid, 1234);
+    /// assert_eq!(event.tcp_established_delta, 0);
+    /// assert_eq!(event.bytes_sent_delta, 0);
+    /// ```
     pub const fn new(pid: u32) -> Self {
         Self {
             pid,
@@ -176,6 +256,44 @@ pub struct ExecveEvent {
     pub tgid: u32,
     pub command: [u8; 16], // this can never be anything but per the method docs, hence hard-coded
     pub filename: [u8; LEN_MAX_PATH],
+}
+
+impl ExecveEvent {
+    /// Creates a new `ExecveEvent` instance for testing or construction.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use panhandle_common::{ExecveEvent, ARG_SIZE, ARG_COUNT, ENV_SIZE, ENV_COUNT, LEN_MAX_PATH};
+    ///
+    /// let mut ev = ExecveEvent {
+    ///     timestamp: 1_000_000_000,
+    ///     argv: [[0; ARG_SIZE]; ARG_COUNT],
+    ///     envp: [[0; ENV_SIZE]; ENV_COUNT],
+    ///     pid: 42,
+    ///     gid: 1000,
+    ///     uid: 1000,
+    ///     tgid: 42,
+    ///     command: [0; 16],
+    ///     filename: [0; LEN_MAX_PATH],
+    /// };
+    /// ev.filename[..7].copy_from_slice(b"/bin/ls");
+    /// ev.argv[0][..5].copy_from_slice(b"ls -l");
+    /// assert_eq!(ev.pid, 42);
+    /// ```
+    pub fn new_for_test() -> Self {
+        Self {
+            timestamp: 0,
+            argv: [[0; ARG_SIZE]; ARG_COUNT],
+            envp: [[0; ENV_SIZE]; ENV_COUNT],
+            pid: 0,
+            gid: 0,
+            uid: 0,
+            tgid: 0,
+            command: [0; 16],
+            filename: [0; LEN_MAX_PATH],
+        }
+    }
 }
 
 // trait implementations

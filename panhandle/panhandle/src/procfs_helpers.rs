@@ -26,6 +26,7 @@ struct MajorFaultEntry {
     Method to check if processes or their children have memory faults greater than a certain threshold.
     Takes the desired threshold (integer, u64) and the desired output formatting (json, boolean) as input parameters.
 */
+#[allow(dead_code)]
 pub async fn get_major_faults(
     maj_fault_threshold: u64,
     use_json: &bool,
@@ -172,6 +173,7 @@ struct MemoryUsageEntry {
 
 /// Plain-text rendering of a major-faults entry. `verbose` includes parent/owner/state
 /// fields; the compact form keeps just PID/comm plus the fault counts.
+#[allow(dead_code)]
 pub fn format_faults_prose(
     verbose: bool,
     pid: i32,
@@ -213,6 +215,7 @@ pub fn format_faults_prose(
 /// includes parent/owner/state fields; the compact form keeps just PID/comm plus the
 /// fault counts. All string fields are escaped via `json_quoted` so the document is
 /// always valid JSON even if a comm or username contains quotes or control characters.
+#[allow(dead_code)]
 pub fn format_faults_json(
     verbose: bool,
     pid: i32,
@@ -255,6 +258,7 @@ pub fn format_faults_json(
 
 /// Plain-text rendering of a memory-usage entry. `verbose` includes parent/owner/state
 /// fields; the compact form keeps just PID/comm plus the memory sizes.
+#[allow(dead_code)]
 pub fn format_mem_prose(
     verbose: bool,
     pid: i32,
@@ -304,6 +308,7 @@ pub fn format_mem_prose(
 /// includes parent/owner/state fields; the compact form keeps just PID/comm plus the
 /// memory sizes. All string fields are escaped via `json_quoted` so the document is
 /// always valid JSON even if a comm or username contains quotes or control characters.
+#[allow(dead_code)]
 pub fn format_mem_json(
     verbose: bool,
     pid: i32,
@@ -372,6 +377,7 @@ pub fn format_mem_json(
     - Data+Stack (MB): Data + stack size: size of process heap and stack regions (excludes code/text segment)
     Takes the desired output formatting (json, boolean) and pid filter as input parameters.
 */
+#[allow(dead_code)]
 pub async fn get_all_memory_usage(
     use_json: &bool,
     http: &bool,

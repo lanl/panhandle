@@ -1,12 +1,15 @@
 use aya_ebpf::{
     helpers::{bpf_get_current_pid_tgid, bpf_ktime_get_ns},
     macros::{kprobe, kretprobe, map},
-    maps::HashMap,
+    maps::{HashMap, LruHashMap},
     programs::{ProbeContext, RetProbeContext},
 };
 
+/// LRU HashMap for tracking TCP receive start timestamps.
+/// Automatically evicts oldest entries when full, preventing leaks from kretprobe misses
+/// (e.g., process death, function not returning).
 #[map]
-static START_TS: HashMap<u32, u64> = HashMap::with_max_entries(1024, 0);
+static START_TS: LruHashMap<u32, u64> = LruHashMap::with_max_entries(1024, 0);
 
 #[map]
 static NET_WAIT: HashMap<u32, NetWaitStat> = HashMap::with_max_entries(1024, 0);

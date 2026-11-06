@@ -50,7 +50,7 @@ assets = [
     { source = "../../files/panhandle.service", dest = "/usr/lib/systemd/system/panhandle.service", mode = "644" },
     { source = "../../files/panhandle.man", dest = "/usr/share/man/man1/panhandle.1", mode = "644" },
     { source = "../../files/logrotate-panhandle", dest = "/etc/logrotate.d/panhandle", mode = "644" },
-    { source = "../../files/config.yaml", dest = "/opt/panhandle/panhandle.yaml", mode = "600" },
+    { source = "../../files/config.yaml", dest = "/opt/panhandle/panhandle.yaml", mode = "600", config = "noreplace" },
     { source = "../LICENSE", dest = "/usr/share/doc/panhandle/LICENSE", mode = "644" },
     { source = "../README.md", dest = "/usr/share/doc/panhandle/README.md", mode = "644" },
     { source = "../CHANGELOG.md", dest = "/usr/share/doc/panhandle/CHANGELOG.md", mode = "644" },

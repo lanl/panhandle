@@ -137,13 +137,10 @@ pub async fn consume_shell_ebpf_map(
                     }
                 }
 
-                if debug {
-                    // this is an invalid json string, overriden by the debug
-                    info!("\\{:#?}\\", json_string);
-                } else {
-                    // this is a valid json string
-                    info!("{}", json_string);
-                }
+                // --debug doesn't change the format here (only the `[DEBUG]`-level log
+                // lines elsewhere do); log it as-is rather than mangling it with a
+                // backslash-wrapped Debug-formatted re-escape of the already-valid JSON.
+                info!("{}", json_string);
             } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
@@ -306,11 +303,10 @@ pub async fn consume_execve_ebpf_map(
                         }
                     }
                 }
-                if debug {
-                    info!("\\{:#?}\\", json_string);
-                } else {
-                    info!("{}", json_string);
-                }
+                // --debug doesn't change the format here (only the `[DEBUG]`-level log
+                // lines elsewhere do); log it as-is rather than mangling it with a
+                // backslash-wrapped Debug-formatted re-escape of the already-valid JSON.
+                info!("{}", json_string);
             } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
@@ -842,9 +838,12 @@ pub async fn output_message(
             }
         }
     }
-    if *debug {
-        info!("\\{:#?}\\", json_string);
-    } else if *use_json {
+    if *debug || *use_json {
+        // json_string is always populated here when either flag is set (see
+        // output_needs's needs_json = json_output || debug), unlike plain_string, which
+        // output_needs intentionally skips computing for debug-only/no-other-channel
+        // callers. Log it as-is rather than mangling it with a backslash-wrapped
+        // Debug-formatted re-escape of the already-valid JSON.
         info!("{}", json_string);
     } else {
         info!("{}", plain_string);

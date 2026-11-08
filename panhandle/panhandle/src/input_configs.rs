@@ -396,6 +396,96 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
         final_args.comm_deny = cli_args.comm_deny.clone();
     }
 
+    // Under --debug, show which side (CLI or config file) each overridable value
+    // actually came from, so "why is --poll not taking effect" doesn't require
+    // reading merge_args's source - the CLI always wins when both provide a value.
+    if final_args.debug {
+        let source = |cli_has: bool, config_has: bool| -> Option<&'static str> {
+            match (cli_has, config_has) {
+                (true, _) => Some("cli"),
+                (false, true) => Some("config"),
+                (false, false) => None,
+            }
+        };
+        let fields: [(&str, Option<&'static str>); 11] = [
+            (
+                "exclude_min_uid",
+                source(
+                    cli_args.exclude_min_uid.is_some(),
+                    config_args.exclude_min_uid.is_some(),
+                ),
+            ),
+            (
+                "exclude_max_uid",
+                source(
+                    cli_args.exclude_max_uid.is_some(),
+                    config_args.exclude_max_uid.is_some(),
+                ),
+            ),
+            (
+                "executables",
+                source(
+                    cli_args.executables.is_some(),
+                    config_args.executables.is_some(),
+                ),
+            ),
+            (
+                "include_uid",
+                source(
+                    cli_args.include_uid.is_some(),
+                    config_args.include_uid.is_some(),
+                ),
+            ),
+            (
+                "memory_faults",
+                source(
+                    cli_args.memory_faults.is_some(),
+                    config_args.memory_faults.is_some(),
+                ),
+            ),
+            (
+                "poll",
+                source(cli_args.poll.is_some(), config_args.poll.is_some()),
+            ),
+            (
+                "pid_list",
+                source(cli_args.pid_list.is_some(), config_args.pid_list.is_some()),
+            ),
+            (
+                "syscalls",
+                source(cli_args.syscalls.is_some(), config_args.syscalls.is_some()),
+            ),
+            (
+                "block_paths",
+                source(
+                    cli_args.block_paths.is_some(),
+                    config_args.block_paths.is_some(),
+                ),
+            ),
+            (
+                "comm_allow",
+                source(
+                    cli_args.comm_allow.is_some(),
+                    config_args.comm_allow.is_some(),
+                ),
+            ),
+            (
+                "comm_deny",
+                source(
+                    cli_args.comm_deny.is_some(),
+                    config_args.comm_deny.is_some(),
+                ),
+            ),
+        ];
+        let provenance: Vec<String> = fields
+            .into_iter()
+            .filter_map(|(name, src)| src.map(|s| format!("{}={}", name, s)))
+            .collect();
+        if !provenance.is_empty() {
+            eprintln!("config merge: {}", provenance.join(", "));
+        }
+    }
+
     // Merge CLI output into config output, or create it if missing.
     //
     // Both sides are collapsed into a single file/http/syslog triple first, then any CLI

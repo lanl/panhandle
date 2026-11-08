@@ -478,7 +478,7 @@ pub async fn load_config_args(config_path: String) -> Result<ConfigArgs, String>
 
 // Clap validation functions for comm and path lengths for process blocking feature.
 // Also reused directly on config-file-sourced values, which don't go through clap.
-pub(crate) fn validate_path_length(s: &str) -> Result<String, String> {
+pub fn validate_path_length(s: &str) -> Result<String, String> {
     if s.len() > MAX_PATH_LENGTH {
         Err(format!(
             "Path exceeds maximum length of {} bytes (got {} bytes): {}",
@@ -491,7 +491,7 @@ pub(crate) fn validate_path_length(s: &str) -> Result<String, String> {
     }
 }
 
-pub(crate) fn validate_comm_length(s: &str) -> Result<String, String> {
+pub fn validate_comm_length(s: &str) -> Result<String, String> {
     if s.len() > MAX_COMM_LENGTH {
         Err(format!(
             "Process name (comm) exceeds maximum length of {} bytes (got {} bytes): {}",

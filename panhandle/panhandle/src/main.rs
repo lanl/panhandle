@@ -11,7 +11,8 @@ use machine_info::Machine;
 use panhandle::{
     blocking,
     config::{AppConfig, PanhandleConfig, ShellConfig},
-    ebpf_loader,
+    ebpf_loader, helpers, input_configs, monitor_cpu_usage, monitor_gpu_usage, monitor_io_usage,
+    monitor_network_usage, procfs_helpers,
 };
 use reqwest::Client;
 use simplelog::*;
@@ -22,16 +23,12 @@ use tokio::{
 };
 use uzers::get_current_uid;
 
+// monitor_process_bounds and unit_tests have no library-crate equivalent (the former
+// is bin-only, the latter is this binary's own test module), so they stay as local
+// modules; everything else above comes from the panhandle library crate instead of a
+// second, separately-compiled local copy of the same file.
 #[rustfmt::skip]
-// this is the local import section
-mod helpers;
-mod input_configs;
-mod monitor_cpu_usage;
-mod monitor_gpu_usage;
-mod monitor_io_usage;
-mod monitor_network_usage;
 mod monitor_process_bounds;
-mod procfs_helpers;
 mod unit_tests;
 // Use explicit imports to avoid conflicts with panhandle_common
 use helpers::{

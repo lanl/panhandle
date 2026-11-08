@@ -54,7 +54,6 @@ struct GpuEntry {
 
 /// Plain-text rendering of a per-process GPU entry. `verbose` includes parent/owner
 /// fields; the compact form keeps just PID/comm plus the GPU percentages.
-#[allow(dead_code)]
 pub fn format_gpu_prose(
     verbose: bool,
     pid: u32,
@@ -94,7 +93,6 @@ pub fn format_gpu_prose(
 }
 
 /// Plain-text rendering of a per-GPU summary line, including the temperature in °C.
-#[allow(dead_code)]
 pub fn format_gpu_summary_prose(
     gpu_id: &str,
     gpu_percent: u32,
@@ -114,7 +112,6 @@ pub fn format_gpu_summary_prose(
 /// includes parent/owner fields; the compact form keeps just PID/comm plus the GPU
 /// percentages. All string fields are escaped via `json_quoted` so the document is
 /// always valid JSON even if a comm or username contains quotes or control characters.
-#[allow(dead_code)]
 pub fn format_gpu_process_json(
     verbose: bool,
     pid: u32,
@@ -162,7 +159,6 @@ pub fn format_gpu_process_json(
 /// The GPU_ID is an NVML UUID string (e.g. "GPU-6e6f..." or "00000000:01:00.0"), so it
 /// must be quoted and escaped via `json_quoted` -- the previous unquoted interpolation
 /// produced invalid JSON whenever the id was a UUID rather than a bare number.
-#[allow(dead_code)]
 pub fn format_gpu_summary_json(
     gpu_id: &str,
     gpu_percent: u32,
@@ -184,7 +180,6 @@ pub fn format_gpu_summary_json(
     )
 }
 
-#[allow(dead_code)]
 pub async fn monitor_gpu_usage(
     machine: &Machine,
     json_output: &bool,

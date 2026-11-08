@@ -179,6 +179,7 @@ pub async fn monitor_process_bounds(
     net_wait: &SharedNetWaitMap,
 ) {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *use_json, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Track which pids we actually see this cycle so we can prune NET_WAIT of
     // entries for pids that have exited - otherwise the map grows unboundedly,
@@ -319,5 +320,13 @@ pub async fn monitor_process_bounds(
         for pid in stale {
             let _ = map.remove(&pid);
         }
+    }
+
+    if *debug {
+        eprintln!(
+            "bound: scanned {} processes in {}ms",
+            live_pids.len(),
+            scan_start.elapsed().as_millis()
+        );
     }
 }

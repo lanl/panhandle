@@ -274,6 +274,7 @@ pub async fn monitor_cpu_usage(
 
     // Convert poll interval to nanoseconds for CPU percentage calculation
     let interval_ns = (poll_interval as u64) * 1_000_000_000;
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs lookups up front (off the async executor) so the reporting loop
     // below only does formatting/output work.
@@ -451,6 +452,26 @@ pub async fn monitor_cpu_usage(
 
             (entries, total_busy, num_cpus)
         });
+
+    if *debug {
+        let elapsed_ms = scan_start.elapsed().as_millis();
+        match pid_filter {
+            Some(pids) => {
+                let found = entries.iter().filter(|e| e.found).count();
+                eprintln!(
+                    "cpu: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
+                    found,
+                    pids.len(),
+                    elapsed_ms
+                );
+            }
+            None => eprintln!(
+                "cpu: scanned {} processes in {}ms",
+                entries.len(),
+                elapsed_ms
+            ),
+        }
+    }
 
     for entry in entries {
         if entry.found {

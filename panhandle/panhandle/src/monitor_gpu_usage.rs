@@ -194,6 +194,7 @@ pub async fn monitor_gpu_usage(
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather the NVML query and procfs lookups up front (off the async executor) so the
     // reporting loop below only does formatting/output work.
@@ -278,13 +279,20 @@ pub async fn monitor_gpu_usage(
         gpus
     });
 
-    if *debug && let Some(pids) = pid_list {
-        let matched: usize = gpus.iter().map(|g| g.processes.len()).sum();
-        eprintln!(
-            "gpu: {} of {} requested --pid-list PIDs reported this cycle",
-            matched,
-            pids.len()
-        );
+    if *debug {
+        let elapsed_ms = scan_start.elapsed().as_millis();
+        match pid_list {
+            Some(pids) => {
+                let matched: usize = gpus.iter().map(|g| g.processes.len()).sum();
+                eprintln!(
+                    "gpu: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
+                    matched,
+                    pids.len(),
+                    elapsed_ms
+                );
+            }
+            None => eprintln!("gpu: scanned in {}ms", elapsed_ms),
+        }
     }
 
     for gpu in gpus {

@@ -40,6 +40,7 @@ pub async fn get_major_faults(
     pid_filter: &Option<Vec<u32>>,
 ) {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *use_json, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs data up front (off the async executor) so the reporting loop
     // below only does formatting/output work.
@@ -109,12 +110,21 @@ pub async fn get_major_faults(
         entries
     });
 
-    if *debug && let Some(pids) = pid_filter {
-        eprintln!(
-            "memory-faults: {} of {} requested --pid-list PIDs reported this cycle",
-            entries.len(),
-            pids.len()
-        );
+    if *debug {
+        let elapsed_ms = scan_start.elapsed().as_millis();
+        match pid_filter {
+            Some(pids) => eprintln!(
+                "memory-faults: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
+                entries.len(),
+                pids.len(),
+                elapsed_ms
+            ),
+            None => eprintln!(
+                "memory-faults: {} processes over threshold, scanned in {}ms",
+                entries.len(),
+                elapsed_ms
+            ),
+        }
     }
 
     for entry in entries {
@@ -400,6 +410,7 @@ pub async fn get_all_memory_usage(
     pid_filter: &Option<Vec<u32>>,
 ) {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *use_json, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs data up front (off the async executor) so the reporting loop
     // below only does formatting/output work.
@@ -491,12 +502,21 @@ pub async fn get_all_memory_usage(
         entries
     });
 
-    if *debug && let Some(pids) = pid_filter {
-        eprintln!(
-            "memory: {} of {} requested --pid-list PIDs reported this cycle",
-            entries.len(),
-            pids.len()
-        );
+    if *debug {
+        let elapsed_ms = scan_start.elapsed().as_millis();
+        match pid_filter {
+            Some(pids) => eprintln!(
+                "memory: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
+                entries.len(),
+                pids.len(),
+                elapsed_ms
+            ),
+            None => eprintln!(
+                "memory: scanned {} processes in {}ms",
+                entries.len(),
+                elapsed_ms
+            ),
+        }
     }
 
     for entry in entries {

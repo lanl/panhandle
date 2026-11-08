@@ -155,6 +155,7 @@ pub async fn monitor_io_usage(
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs data up front (off the async executor) so the reporting loop
     // below only does formatting/output work.
@@ -272,12 +273,21 @@ pub async fn monitor_io_usage(
         entries
     });
 
-    if *debug && let Some(pids) = pid_list {
-        eprintln!(
-            "io: {} of {} requested --pid-list PIDs reported this cycle",
-            entries.len(),
-            pids.len()
-        );
+    if *debug {
+        let elapsed_ms = scan_start.elapsed().as_millis();
+        match pid_list {
+            Some(pids) => eprintln!(
+                "io: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
+                entries.len(),
+                pids.len(),
+                elapsed_ms
+            ),
+            None => eprintln!(
+                "io: scanned {} processes in {}ms",
+                entries.len(),
+                elapsed_ms
+            ),
+        }
     }
 
     for entry in entries {

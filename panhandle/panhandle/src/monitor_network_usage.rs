@@ -232,6 +232,7 @@ pub async fn monitor_network_usage(
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs/netlink data up front (off the async executor) so the reporting
     // loop below only does formatting/output work, keeping blocking I/O off the shared
@@ -332,12 +333,21 @@ pub async fn monitor_network_usage(
         entries
     });
 
-    if *debug && let Some(pids) = pid_list {
-        eprintln!(
-            "network: {} of {} requested --pid-list PIDs reported this cycle",
-            entries.len(),
-            pids.len()
-        );
+    if *debug {
+        let elapsed_ms = scan_start.elapsed().as_millis();
+        match pid_list {
+            Some(pids) => eprintln!(
+                "network: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
+                entries.len(),
+                pids.len(),
+                elapsed_ms
+            ),
+            None => eprintln!(
+                "network: scanned {} active entries in {}ms",
+                entries.len(),
+                elapsed_ms
+            ),
+        }
     }
 
     for entry in entries {

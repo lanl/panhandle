@@ -42,8 +42,6 @@
 - **Proper error types**: Added `thiserror` dependency, created `PanhandleError`
   enum with manual `PartialEq` impl for variants wrapping non-`PartialEq` types.
 - **Removed unused dependencies**: Removed `bytes`, `config`, `bytemuck` crates.
-- **Feature flags**: Added optional feature flags for components
-  (`network`, `gpu`, `blocking`, `shell`, `http`, `syslog`, `file`, `default`).
 - **Updated test configs**: All test config files updated to new API format
   (direct `http`, `syslog`, `file` fields instead of `output` array).
 - **Config validation before root check**: Config file loading and validation

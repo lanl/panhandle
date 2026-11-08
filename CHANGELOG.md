@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## v1.0.25
+## v1.0.26
 
 - Implemented Aya 0.16 improvements:
   - **TestRun for eBPF unit tests**: Added test module in

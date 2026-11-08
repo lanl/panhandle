@@ -115,7 +115,7 @@ cargo docs-rs
 ./scripts/install-hooks
 
 # Create a release (version bump, changelog, tag, build)
-./scripts/release 1.0.25
+./scripts/release 1.0.26
 ```
 
 ## Releasability

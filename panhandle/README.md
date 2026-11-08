@@ -64,6 +64,10 @@ correctly and include it in the program.
 # Check for unused/duplicate dependencies
 ./scripts/check-deps
 
+# Verify every CLI/config option actually works against a real kernel (requires
+# sudo; not part of CI - see the script's header for why). Run before a release.
+./scripts/verify-functionality
+
 # Run tests with code coverage
 cd panhandle && cargo tarpaulin --all-features --workspace --out Html --output-dir coverage
 

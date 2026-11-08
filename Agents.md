@@ -58,6 +58,10 @@ cd panhandle && cargo test
 
 # Security check
 cd panhandle && cargo deny check
+
+# Verify every CLI/config option against a real kernel (requires sudo; not part of
+# CI - see the script's own header). Run before a release, not on every change.
+./scripts/verify-functionality
 ```
 
 ### Code Quality
@@ -78,7 +82,9 @@ cd panhandle && cargo deny check
 - **Rust**: 2024 edition, nightly toolchain
 - **eBPF**: Aya 0.16+, kernel 5.10+
 - **Build**: cargo, make
-- **Testing**: cargo test, integration tests in `panhandle/tests/`
+- **Testing**: cargo test, integration tests in `panhandle/tests/`; live CLI/config
+  regression suite (needs root + real eBPF, not run by `cargo test` or CI) via
+  `./scripts/verify-functionality`
 
 ## References
 

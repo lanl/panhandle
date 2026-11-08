@@ -36,8 +36,10 @@
   conflicts, length/count limits, and unsupported file extensions.
 - **Linting improvements**: Updated `./scripts/lint` to exclude generated docs
   and handle optional `cargo-outdated`.
-- **`aya`/`aya-log`/etc. now pinned to crates.io releases** instead of the
+- **`aya`/`aya-log`/etc. now sourced from crates.io releases** instead of the
   `aya-v0.16.0` git tag, now that upstream publishes matching versions there.
+  Pinned to a minimum version (not an exact `=` pin), and bumped `aya-ebpf`/
+  `aya-log-ebpf` to the latest published releases (0.3.0 each).
 
 ## v1.0.24
 

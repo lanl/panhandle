@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::ebpf_loader::{attach_lsm_hook, get_hash_map};
+use crate::ebpf_loader::{attach_lsm_hook, get_hash_map_mut};
 use crate::error::{PanhandleError, Result};
 use aya::{Btf, maps::HashMap};
 use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
@@ -20,7 +20,7 @@ pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Bt
     }
 
     // Populate COMMS map
-    let mut comm_map: HashMap<_, [u8; 16], u8> = get_hash_map(ebpf, "COMMS")?;
+    let mut comm_map: HashMap<_, [u8; 16], u8> = get_hash_map_mut(ebpf, "COMMS")?;
 
     for comm_str in &comms {
         let mut comm = [0u8; 16];
@@ -41,7 +41,7 @@ pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Bt
     }
 
     // Populate BLOCKED_PATHS map
-    let mut path_map: HashMap<_, [u8; 256], u8> = get_hash_map(ebpf, "BLOCKED_PATHS")?;
+    let mut path_map: HashMap<_, [u8; 256], u8> = get_hash_map_mut(ebpf, "BLOCKED_PATHS")?;
 
     if config.block_paths.is_empty() {
         let placeholder = [0u8; 256];

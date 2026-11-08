@@ -3,7 +3,7 @@ use crate::error::{PanhandleError, Result};
 use aya::{
     Btf, EbpfLoader, VerifierLogLevel,
     maps::RingBuf,
-    programs::{BtfTracePoint, RawTracePoint, UProbe, uprobe::UProbeScope},
+    programs::{BtfTracePoint, RawTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
 };
 use aya_log::EbpfLogger;
 use panhandle_common::{
@@ -106,7 +106,7 @@ fn set_uid_options(
     include_enabled: u32,
     include_uids: &[u32; panhandle_common::UID_COUNT],
 ) -> Result<()> {
-    let mut options: aya::maps::HashMap<_, u32, u32> = get_hash_map(ebpf, options_map)?;
+    let mut options: aya::maps::HashMap<_, u32, u32> = get_hash_map_mut(ebpf, options_map)?;
     options
         .insert(&UID_OPT_SHELLS, &shells, 0)
         .map_err(PanhandleError::EbpfMap)?;
@@ -121,10 +121,35 @@ fn set_uid_options(
         .map_err(PanhandleError::EbpfMap)?;
 
     let mut include_list: aya::maps::HashMap<_, u32, [u32; panhandle_common::UID_COUNT]> =
-        get_hash_map(ebpf, include_list_map)?;
+        get_hash_map_mut(ebpf, include_list_map)?;
     include_list
         .insert(&0, include_uids, 0)
         .map_err(PanhandleError::EbpfMap)?;
+
+    Ok(())
+}
+
+/// Attach a (non-raw) tracepoint. Prefer this over `attach_raw_tracepoint` for syscall
+/// tracepoints: the kernel only exposes raw tracepoints named `sys_enter`/`sys_exit`
+/// (shared by every syscall, with no per-syscall raw tracepoint such as
+/// `sys_enter_execve`), so `bpf_raw_tracepoint_open` always fails with ENOENT for a
+/// per-syscall name.
+pub fn attach_tracepoint(
+    ebpf: &mut aya::Ebpf,
+    program_name: &str,
+    category: &str,
+    tracepoint_name: &str,
+) -> Result<()> {
+    let program: &mut TracePoint = ebpf
+        .program_mut(program_name)
+        .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
+        .try_into()
+        .map_err(PanhandleError::EbpfAttach)?;
+
+    program.load().map_err(PanhandleError::EbpfAttach)?;
+    program
+        .attach(category, tracepoint_name)
+        .map_err(PanhandleError::EbpfAttach)?;
 
     Ok(())
 }
@@ -249,7 +274,12 @@ pub fn create_ring_buffer_async_fd(
         .map_err(|e| PanhandleError::AsyncFd(e.to_string()))
 }
 
-/// Get a HashMap from the eBPF maps
+/// Get a HashMap from the eBPF maps, taking ownership of it. Only safe to use once no
+/// program still needs to be loaded/attached: `take_map` removes the map from the
+/// `Ebpf` object's tracked maps, so a program loaded afterward can no longer resolve a
+/// relocation against it ("fd N is not pointing to valid bpf_map" at load time). Needed
+/// (over `get_hash_map_mut`) when the caller must move the map into a `'static` context,
+/// e.g. a spawned task that outlives the function populating it.
 pub fn get_hash_map<K, V>(
     ebpf: &mut aya::Ebpf,
     map_name: &str,
@@ -260,6 +290,24 @@ where
 {
     let map = ebpf
         .take_map(map_name)
+        .ok_or_else(|| PanhandleError::MissingMap(map_name.to_string()))?;
+
+    aya::maps::HashMap::try_from(map).map_err(PanhandleError::EbpfMap)
+}
+
+/// Get a HashMap from the eBPF maps without removing it from the loaded object. Use this
+/// (instead of `get_hash_map`) to populate a map's initial contents at load time, before
+/// any program that relocates against it by name has been loaded/attached.
+pub fn get_hash_map_mut<'a, K, V>(
+    ebpf: &'a mut aya::Ebpf,
+    map_name: &str,
+) -> Result<aya::maps::HashMap<&'a mut aya::maps::MapData, K, V>>
+where
+    K: aya::Pod + Send + Sync + 'static,
+    V: aya::Pod + Send + Sync + 'static,
+{
+    let map = ebpf
+        .map_mut(map_name)
         .ok_or_else(|| PanhandleError::MissingMap(map_name.to_string()))?;
 
     aya::maps::HashMap::try_from(map).map_err(PanhandleError::EbpfMap)

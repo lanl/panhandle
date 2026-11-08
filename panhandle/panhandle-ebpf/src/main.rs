@@ -9,9 +9,9 @@ use aya_ebpf::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
         bpf_ktime_get_boot_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
-    macros::{map, raw_tracepoint},
+    macros::{map, tracepoint},
     maps::{HashMap, RingBuf},
-    programs::RawTracePointContext,
+    programs::TracePointContext,
 };
 use aya_log_ebpf::{debug, warn};
 use panhandle_common::*;
@@ -30,15 +30,15 @@ static UID_OPTIONS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(4,
 static UID_INCLUDE_LIST: HashMap<u32, [u32; UID_COUNT]> =
     HashMap::<u32, [u32; UID_COUNT]>::with_max_entries(1, 0);
 
-#[raw_tracepoint]
-pub fn panhandle(ctx: RawTracePointContext) -> u32 {
+#[tracepoint]
+pub fn panhandle(ctx: TracePointContext) -> u32 {
     match try_panhandle(ctx) {
         Ok(ret) => ret,
         Err(ret) => ret as u32,
     }
 }
 
-fn try_panhandle(ctx: RawTracePointContext) -> Result<u32, i64> {
+fn try_panhandle(ctx: TracePointContext) -> Result<u32, i64> {
     let initial_uid = bpf_get_current_uid_gid() as u32;
 
     // skip event if the uid is not in the range of UIDs
@@ -80,11 +80,13 @@ fn try_panhandle(ctx: RawTracePointContext) -> Result<u32, i64> {
         return Ok(0);
     }
 
-    // Read the tracepoint arguments using RawTracePointContext::arg()
-    // sys_enter_execve args: arg0=filename, arg1=argv, arg2=envp
-    let filename_ptr: *const u8 = ctx.arg::<u64>(0) as *const u8;
-    let argv_ptr: *const *const u8 = ctx.arg::<u64>(1) as *const *const u8;
-    let envp_ptr: *const *const u8 = ctx.arg::<u64>(2) as *const *const u8;
+    // Read the tracepoint data into our SysEnterExecve struct.
+    // SAFETY: this is defined per the kernel docs and may change by version but seems to be pretty stable
+    // kernel-specific docs (RHEL path) /sys/kernel/debug/tracing/events/syscalls/sys_enter_execve/format
+    let data: SysEnterExecve = unsafe { ctx.read_at(0).map_err(|_| -1)? };
+    let filename_ptr: *const u8 = data.command;
+    let argv_ptr: *const *const u8 = data.argv;
+    let envp_ptr: *const *const u8 = data.envp;
 
     // iterate over the argv info and copy to struct in the map
     if !argv_ptr.is_null() {

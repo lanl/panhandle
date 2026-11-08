@@ -860,8 +860,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // the default option if the other shells are not selected
         // load the ebpf program; the uid_options/uid_include_list maps for this
         // program were already populated by ebpf_loader::load_ebpf above
-        ebpf_loader::attach_raw_tracepoint(&mut ebpf, "panhandle", "sys_enter_execve")?;
-        debug!("attached eBPF raw tracepoint 'sys_enter_execve'");
+        ebpf_loader::attach_tracepoint(&mut ebpf, "panhandle", "syscalls", "sys_enter_execve")?;
+        debug!("attached eBPF tracepoint 'syscalls:sys_enter_execve'");
 
         // Process events from the ring buffer
         let async_fd =

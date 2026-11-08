@@ -6,15 +6,30 @@
   - **TestRun for eBPF unit tests**: Added test module in
     `panhandle-ebpf/src/main.rs` with `#[test]` functions for eBPF program
     logic.
-  - **RawTracepoint for execve**: Changed `#[tracepoint]` to
-    `#[raw_tracepoint]` with `ctx.arg()` for direct argument access,
-    eliminating BTF dependency.
   - **VerifierLogLevel**: Added `VERIFIER_LOG_LEVEL = DEBUG` in debug mode for
     easier eBPF verifier debugging.
   - UID filtering for the execve/readline/zlentry programs stays on the
     original runtime-configurable `uid_options`/`uid_include_list` maps
     rather than load-time-only `GlobalData`, so those filters can still be
     changed without reloading the eBPF program.
+- **Fixed: default execve monitoring never actually attached.** An earlier
+  change on this branch moved `panhandle`'s execve tracepoint from
+  `#[tracepoint]` to `#[raw_tracepoint]`, attached by the per-syscall name
+  `sys_enter_execve`. The kernel only exposes raw tracepoints named
+  `sys_enter`/`sys_exit` (shared across every syscall - there is no raw
+  tracepoint per syscall), so `bpf_raw_tracepoint_open` always failed with
+  ENOENT on real hardware. Reverted to a plain `#[tracepoint]` on
+  `syscalls:sys_enter_execve`, which does have its own per-syscall tracepoint.
+  This is the default monitoring mode (no flags needed), so it affected every
+  invocation of the binary that didn't pass `--bash`/`--zsh`/etc.
+- **Fixed: `--bash`/`--zsh`/`--syscalls` failed to load ("fd N is not
+  pointing to valid bpf_map").** `ebpf_loader::load_ebpf` populated the
+  `uid_options`/`uid_include_list`-family maps by `take_map`-ing them, which
+  deregisters a map from the loaded object; the `readline`/`zlentry`
+  programs (and `block_open`/`block_execve` for `--syscalls`) couldn't then
+  resolve their own map relocations when loaded afterward. Added
+  `get_hash_map_mut` (borrows via `map_mut` instead of removing the map) and
+  switched both call sites to it.
 - **`main.rs` now actually uses the modular helpers**: `ebpf_loader.rs`
   (program loading/attaching, UID-filter map population) and `blocking.rs`
   (syscall blocking) are wired into `main.rs` instead of duplicating that

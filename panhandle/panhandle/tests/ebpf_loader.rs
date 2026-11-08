@@ -8,7 +8,8 @@ mod common {
     };
     pub use panhandle::ebpf_loader::{
         LoadedEbpf, attach_btf_tracepoint, attach_kprobe, attach_lsm_hook, attach_raw_tracepoint,
-        attach_uprobe, create_ring_buffer_async_fd, get_hash_map, load_ebpf,
+        attach_tracepoint, attach_uprobe, create_ring_buffer_async_fd, get_hash_map,
+        get_hash_map_mut, load_ebpf,
     };
     pub use panhandle::error::PanhandleError;
 }
@@ -142,6 +143,32 @@ fn test_attach_raw_tracepoint_error_handling() {
 }
 
 #[test]
+fn test_attach_tracepoint_error_handling() {
+    // Test that missing program returns appropriate error
+    let mut ebpf = match aya::Ebpf::load(&[]) {
+        Ok(ebpf) => ebpf,
+        Err(_) => {
+            // Empty bytecode can't be loaded, skip this test
+            return;
+        }
+    };
+
+    let result = common::attach_tracepoint(
+        &mut ebpf,
+        "nonexistent_program",
+        "syscalls",
+        "sys_enter_execve",
+    );
+    assert!(result.is_err());
+    match result {
+        Err(common::PanhandleError::MissingProgram(name)) => {
+            assert_eq!(name, "nonexistent_program");
+        }
+        _ => panic!("Expected MissingProgram error"),
+    }
+}
+
+#[test]
 fn test_attach_btf_tracepoint_error_handling() {
     let mut ebpf = match aya::Ebpf::load(&[]) {
         Ok(ebpf) => ebpf,
@@ -256,6 +283,27 @@ fn test_get_hash_map_error_handling() {
 
     let result: Result<aya::maps::HashMap<_, u32, u32>, _> =
         common::get_hash_map(&mut ebpf, "nonexistent_map");
+    assert!(result.is_err());
+    match result {
+        Err(common::PanhandleError::MissingMap(name)) => {
+            assert_eq!(name, "nonexistent_map");
+        }
+        _ => panic!("Expected MissingMap error"),
+    }
+}
+
+#[test]
+fn test_get_hash_map_mut_error_handling() {
+    let mut ebpf = match aya::Ebpf::load(&[]) {
+        Ok(ebpf) => ebpf,
+        Err(_) => {
+            // Empty bytecode can't be loaded, skip this test
+            return;
+        }
+    };
+
+    let result: Result<aya::maps::HashMap<_, u32, u32>, _> =
+        common::get_hash_map_mut(&mut ebpf, "nonexistent_map");
     assert!(result.is_err());
     match result {
         Err(common::PanhandleError::MissingMap(name)) => {
@@ -468,6 +516,12 @@ fn test_attach_functions_signatures() {
     // Verify all attach functions have correct signatures
     let _attach_raw: fn(&mut aya::Ebpf, &str, &str) -> Result<(), common::PanhandleError> =
         common::attach_raw_tracepoint;
+    let _attach_tracepoint: fn(
+        &mut aya::Ebpf,
+        &str,
+        &str,
+        &str,
+    ) -> Result<(), common::PanhandleError> = common::attach_tracepoint;
     let _attach_btf: fn(
         &mut aya::Ebpf,
         &str,

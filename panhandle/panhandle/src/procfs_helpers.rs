@@ -38,6 +38,7 @@ pub async fn get_major_faults(
     syslog_address: &Arc<String>,
     client: &Client,
     debug: &bool,
+    pid_filter: &Option<Vec<u32>>,
 ) {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *use_json, *debug);
 
@@ -55,6 +56,12 @@ pub async fn get_major_faults(
                 if let Ok(stat) = proc_res.stat()
                     && (stat.majflt > maj_fault_threshold || stat.cmajflt > maj_fault_threshold)
                 {
+                    if let Some(pids) = pid_filter
+                        && !pids.contains(&(stat.pid as u32))
+                    {
+                        continue;
+                    }
+
                     // Retrieve parent process info only if verbose flag is set
                     let (ppid, parent_comm) = if *verbose {
                         if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {

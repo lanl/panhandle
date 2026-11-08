@@ -573,6 +573,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let syslog = syslog_address.clone();
         let verbose_mode = args.verbose;
         let client = Client::new();
+        let pid_filter = args.pid_list.clone();
 
         memory_fault_handle = Some(tokio::task::spawn(async move {
             loop {
@@ -587,6 +588,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &syslog,
                     &client,
                     &args.debug,
+                    &pid_filter,
                 )
                 .await;
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;

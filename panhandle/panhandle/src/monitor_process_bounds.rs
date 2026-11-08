@@ -185,10 +185,14 @@ pub async fn monitor_process_bounds(
     // just like the SharedNetStats accumulator in network.rs.
     let mut live_pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
-    if let Ok(procs) = all_processes() {
+    // Open once per polling cycle rather than once per process: Client::open() does a
+    // full netlink round-trip to resolve the taskstats generic-netlink family id, so
+    // opening it inside the per-process loop below meant every single process on the
+    // host incurred that round-trip on every poll, instead of the one lookup needed
+    // per cycle.
+    if let (Ok(procs), Ok(bound_client)) = (all_processes(), linux_taskstats::Client::open()) {
         for proc_res in procs.flatten() {
             if let Ok(stat) = proc_res.stat()
-                && let Ok(bound_client) = linux_taskstats::Client::open()
                 && let Ok(bound_stats) = bound_client.pid_stats(stat.pid as u32)
             {
                 let pid = stat.pid as u32;

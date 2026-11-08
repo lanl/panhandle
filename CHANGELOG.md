@@ -33,9 +33,12 @@
 - **`main.rs` now actually uses the modular helpers**: `ebpf_loader.rs`
   (program loading/attaching, UID-filter map population) and `blocking.rs`
   (syscall blocking) are wired into `main.rs` instead of duplicating that
-  logic inline. `config.rs`, `monitors.rs`, `shell.rs`, and `output.rs` exist
-  for library/test use but are not yet adopted by `main.rs`, which keeps its
-  own CPU/GPU/IO/memory/process-bounds monitoring and output code.
+  logic inline. `config.rs` is kept (`AppConfig`/`PanhandleConfig`/
+  `ShellConfig` back both of the above). `monitors.rs`, `shell.rs`, and
+  `output.rs` were a second, never-adopted implementation of `main.rs`'s
+  CPU/GPU/IO/memory/process-bounds monitoring and event output - deleted,
+  along with their dedicated tests, rather than left to drift further from
+  what `main.rs` actually does.
 - **Proper error types**: Added `thiserror` dependency, created `PanhandleError`
   enum with manual `PartialEq` impl for variants wrapping non-`PartialEq` types.
 - **Removed unused dependencies**: Removed `bytes`, `config`, `bytemuck` crates.

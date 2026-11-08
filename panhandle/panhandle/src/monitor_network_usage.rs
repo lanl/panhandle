@@ -258,6 +258,10 @@ pub async fn monitor_network_usage(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
 
         for (pid, stats) in snapshot {
             // Skip entries with no activity
@@ -285,7 +289,12 @@ pub async fn monitor_network_usage(
             let (ppid, parent_comm) = if *verbose {
                 let ppid = stat.ppid as u32;
                 let parent_comm = if ppid > 0 {
-                    get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+                    parent_comm_cache
+                        .entry(ppid)
+                        .or_insert_with(|| {
+                            get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+                        })
+                        .clone()
                 } else {
                     "unknown".to_string()
                 };

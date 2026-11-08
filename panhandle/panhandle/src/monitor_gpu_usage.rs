@@ -204,6 +204,10 @@ pub async fn monitor_gpu_usage(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
 
         for gpu in machine.graphics_status() {
             let mut processes = Vec::new();
@@ -224,8 +228,13 @@ pub async fn monitor_gpu_usage(
                 // Retrieve parent process info only if verbose flag is set
                 let (ppid, parent_comm) = if *verbose {
                     if let Ok(parent_pid) = get_parent_pid(process.pid) {
-                        let parent_name =
-                            get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
+                        let parent_name = parent_comm_cache
+                            .entry(parent_pid)
+                            .or_insert_with(|| {
+                                get_process_name(parent_pid)
+                                    .unwrap_or_else(|| "unknown".to_string())
+                            })
+                            .clone();
                         (Some(parent_pid), Some(parent_name))
                     } else {
                         (Some(0), Some("unknown".to_string()))

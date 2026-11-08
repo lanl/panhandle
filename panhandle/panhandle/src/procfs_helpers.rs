@@ -50,6 +50,10 @@ pub async fn get_major_faults(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
 
         if let Ok(procs) = all_processes() {
             for proc_res in procs.flatten() {
@@ -65,8 +69,13 @@ pub async fn get_major_faults(
                     // Retrieve parent process info only if verbose flag is set
                     let (ppid, parent_comm) = if *verbose {
                         if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
-                            let parent_name = get_process_name(parent_pid)
-                                .unwrap_or_else(|| "unknown".to_string());
+                            let parent_name = parent_comm_cache
+                                .entry(parent_pid)
+                                .or_insert_with(|| {
+                                    get_process_name(parent_pid)
+                                        .unwrap_or_else(|| "unknown".to_string())
+                                })
+                                .clone();
                             (Some(parent_pid), Some(parent_name))
                         } else {
                             (Some(0), Some("unknown".to_string()))
@@ -420,6 +429,10 @@ pub async fn get_all_memory_usage(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
         // statm reports shared/data in page counts, not bytes -- unlike vm_rss/vm_hwm
         // (already KB, from /proc/<pid>/status) and stat.vsize (already bytes), so this
         // is the one conversion that actually depends on the system's page size. Query
@@ -453,8 +466,13 @@ pub async fn get_all_memory_usage(
                     // Retrieve parent process info only if verbose flag is set
                     let (ppid, parent_comm) = if *verbose {
                         if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
-                            let parent_name = get_process_name(parent_pid)
-                                .unwrap_or_else(|| "unknown".to_string());
+                            let parent_name = parent_comm_cache
+                                .entry(parent_pid)
+                                .or_insert_with(|| {
+                                    get_process_name(parent_pid)
+                                        .unwrap_or_else(|| "unknown".to_string())
+                                })
+                                .clone();
                             (Some(parent_pid), Some(parent_name))
                         } else {
                             (Some(0), Some("unknown".to_string()))

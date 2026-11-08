@@ -36,10 +36,14 @@ pub struct RawArgs {
     pub config: Option<String>,
 
     /// Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 0.
+    /// Checked before --include-uid, so a uid inside this range is still excluded even if it's
+    /// also listed in --include-uid.
     #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
     pub exclude_min_uid: Option<u32>,
 
     /// Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. Defaults to 999.
+    /// Checked before --include-uid, so a uid inside this range is still excluded even if it's
+    /// also listed in --include-uid.
     #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
     pub exclude_max_uid: Option<u32>,
 
@@ -61,6 +65,8 @@ pub struct RawArgs {
     pub output: Option<OutputCommand>,
 
     /// Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10.
+    /// Does not override --exclude-min-uid/--exclude-max-uid: a uid in the excluded range is
+    /// still excluded even if it's listed here.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     pub include_uid: Option<Vec<String>>,
 

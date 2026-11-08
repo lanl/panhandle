@@ -27,10 +27,10 @@ Specify a comma separated list of absolute executable paths to exclusively monit
 Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
 .TP
 \fB--exclude-min-uid\fI <EXCLUDE_MIN_UID>\fR
-Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 0.
+Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 0. Checked before --include-uid, so a uid inside this range is still excluded even if it's also listed in --include-uid.
 .TP
 \fB--exclude-max-uid\fI <EXCLUDE_MAX_UID>\fR
-Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. Defaults to 999.
+Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. Defaults to 999. Checked before --include-uid, so a uid inside this range is still excluded even if it's also listed in --include-uid.
 .TP
 \fB--file\fI <FILE>\fR
 Specify the absolute path to the desired log file.
@@ -59,7 +59,7 @@ Remote UDP example: --syslog hpcsyslog.lanl.gov:514/udp
 .fi
 .TP
 \fB--include-uid\fI <UID(s)>\fR
-Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10.
+Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10. Does not override --exclude-min-uid/--exclude-max-uid: a uid in the excluded range is still excluded even if it's listed here.
 .TP
 \fB-j, --json\fP
 Output events as valid json strings separated by newlines.

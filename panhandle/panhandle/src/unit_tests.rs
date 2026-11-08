@@ -2504,10 +2504,10 @@ mod tests {
         assert_eq!(parsed["moniker"], "dmcgee");
         assert_eq!(parsed["entry"], hostile_entry);
         assert_eq!(parsed["command"], "bash -c 'x'");
-        assert_eq!(parsed["uid"], "1000");
-        assert_eq!(parsed["pid"], "42");
-        assert_eq!(parsed["gid"], "100");
-        assert_eq!(parsed["tgid"], "42");
+        assert_eq!(parsed["uid"], 1000);
+        assert_eq!(parsed["pid"], 42);
+        assert_eq!(parsed["gid"], 100);
+        assert_eq!(parsed["tgid"], 42);
         assert_eq!(parsed["ts_utc"], "2026-08-13_10:00:00");
 
         let execve = format_execve_event_json(
@@ -2531,10 +2531,10 @@ mod tests {
         assert_eq!(parsed["moniker"], "dmcgee");
         assert_eq!(parsed["filename"], "/bin/echo");
         assert_eq!(parsed["command"], "echo \"hi\"");
-        assert_eq!(parsed["uid"], "1000");
-        assert_eq!(parsed["pid"], "42");
-        assert_eq!(parsed["gid"], "100");
-        assert_eq!(parsed["tgid"], "42");
+        assert_eq!(parsed["uid"], 1000);
+        assert_eq!(parsed["pid"], 42);
+        assert_eq!(parsed["gid"], 100);
+        assert_eq!(parsed["tgid"], 42);
         assert_eq!(parsed["args"], serde_json::json!(["-c", "\"quoted\""]));
         assert_eq!(
             parsed["envs"],

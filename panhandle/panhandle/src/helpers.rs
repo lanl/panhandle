@@ -378,10 +378,12 @@ pub async fn consume_socket_stats_ebpf_map(
     }
 }
 
-/// JSON rendering of a shell (bash/zsh) readline event. All free-form string fields
-/// (hostname, moniker, entry, command, ts) are escaped so the document stays valid
-/// even if a command or entry contains quotes, backslashes, or control characters.
-/// The uid/pid/gid/tgid render as quoted strings, matching the established schema.
+/// JSON rendering of a shell (bash/zsh) readline event. Built via `serde_json::json!`
+/// rather than hand-templated `format!`, so every field - including any future one -
+/// gets correct escaping/typing for free instead of relying on each call site to
+/// remember e.g. `json_quoted`. uid/pid/gid/tgid serialize as JSON numbers (not
+/// quoted strings - quoting them was inconsistent with every other event type in this
+/// codebase, e.g. `format_cpu_json`, and forces consumers to parse them as strings).
 pub fn format_shell_event_json(
     hostname: &str,
     moniker: &str,
@@ -393,23 +395,25 @@ pub fn format_shell_event_json(
     tgid: u32,
     ts_utc: &str,
 ) -> String {
-    format!(
-        "{{\"application\": \"panhandle\", \"hostname\": {}, \"moniker\": {}, \"entry\": {}, \"command\": {}, \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": {}}}",
-        json_quoted(hostname),
-        json_quoted(moniker),
-        json_quoted(entry),
-        json_quoted(command),
-        uid,
-        pid,
-        gid,
-        tgid,
-        json_quoted(ts_utc)
-    )
+    serde_json::json!({
+        "application": "panhandle",
+        "hostname": hostname,
+        "moniker": moniker,
+        "entry": entry,
+        "command": command,
+        "uid": uid,
+        "pid": pid,
+        "gid": gid,
+        "tgid": tgid,
+        "ts_utc": ts_utc,
+    })
+    .to_string()
 }
 
-/// JSON rendering of an execve event. Args and envs serialize as proper JSON arrays
-/// (the previous `{:?}` debug formatting produced Rust-style escapes like `\u{1b}`
-/// that are not valid JSON), and all free-form strings are escaped the same way.
+/// JSON rendering of an execve event, built via `serde_json::json!` for the same
+/// reasons as `format_shell_event_json` above. Args and envs serialize as proper JSON
+/// arrays (the previous `{:?}` debug formatting produced Rust-style escapes like
+/// `\u{1b}` that are not valid JSON).
 pub fn format_execve_event_json(
     hostname: &str,
     moniker: &str,
@@ -423,20 +427,21 @@ pub fn format_execve_event_json(
     envs: &[&str],
     ts_utc: &str,
 ) -> String {
-    format!(
-        "{{\"application\": \"panhandle\", \"hostname\": {}, \"moniker\": {}, \"filename\": {}, \"command\": {}, \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"args\": {}, \"envs\": {}, \"ts_utc\": {}}}",
-        json_quoted(hostname),
-        json_quoted(moniker),
-        json_quoted(filename),
-        json_quoted(command),
-        uid,
-        pid,
-        gid,
-        tgid,
-        serde_json::to_string(args).unwrap_or_else(|_| "[]".to_string()),
-        serde_json::to_string(envs).unwrap_or_else(|_| "[]".to_string()),
-        json_quoted(ts_utc)
-    )
+    serde_json::json!({
+        "application": "panhandle",
+        "hostname": hostname,
+        "moniker": moniker,
+        "filename": filename,
+        "command": command,
+        "uid": uid,
+        "pid": pid,
+        "gid": gid,
+        "tgid": tgid,
+        "args": args,
+        "envs": envs,
+        "ts_utc": ts_utc,
+    })
+    .to_string()
 }
 
 /// send to specified syslog address.

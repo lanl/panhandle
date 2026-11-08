@@ -89,6 +89,10 @@ npm install
 # Check for unused/duplicate dependencies
 ./scripts/check-deps
 
+# Verify every CLI/config option actually works against a real kernel (requires
+# sudo; not part of CI - see the script's header for why). Run before a release.
+./scripts/verify-functionality
+
 # Build the project
 cd panhandle && cargo build --release
 

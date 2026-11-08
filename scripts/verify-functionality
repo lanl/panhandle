@@ -1,0 +1,393 @@
+#!/bin/bash
+# Live functional verification of every CLI/config option against a real kernel.
+#
+# Unlike `cargo test`, this actually runs the compiled binary as root and checks it
+# loads/attaches/produces correct output - the kind of bug `cargo test`/clippy/CI can't
+# catch (e.g. a tracepoint name the kernel doesn't actually expose, or a map population
+# order that breaks a later program's relocation). Every check here was written to
+# catch a real regression found by hand during manual testing.
+#
+# NOT run as part of CI and not wired into scripts/lint or scripts/update: it needs
+# CAP_SYS_ADMIN/root and a kernel with working eBPF (tracepoints/kprobes/uprobes/BTF
+# tracepoints), which most CI runners don't have. Run it by hand, as your normal user
+# (it builds as you and only reaches for sudo on the individual eBPF-loading checks),
+# before a release:
+#
+#   scripts/verify-functionality
+#
+# The --syscalls (LSM-based process blocking) check additionally needs "bpf" in the
+# kernel's active LSM stack (/sys/kernel/security/lsm) and is skipped with a clear
+# message, not failed, if that's absent - true in some sandboxes/containers.
+set -uo pipefail # not -e: run every check and report failures, don't bail on the first
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PANHANDLE_DIR="$PROJECT_ROOT/panhandle"
+BIN="$PANHANDLE_DIR/target/debug/panhandle"
+
+if [ "$(id -u)" -eq 0 ]; then
+    echo "Run this as your normal user, not root - it builds as you and only uses" >&2
+    echo "sudo for the individual checks that need to load eBPF programs." >&2
+    exit 1
+fi
+
+if ! sudo -v; then
+    echo "This script needs sudo to load eBPF programs; couldn't acquire it." >&2
+    exit 1
+fi
+
+WORKDIR="$(mktemp -d /tmp/panhandle-verify.XXXXXX)"
+cleanup() {
+    jobs -p | xargs -r kill 2>/dev/null
+    wait 2>/dev/null
+    rm -rf "$WORKDIR"
+}
+trap cleanup EXIT
+
+PASS=0
+FAIL=0
+SKIP=0
+FAILED_NAMES=()
+
+# Run $2.. as a check named $1; prints PASS/FAIL and tracks totals. The check function
+# itself does the real work and returns a normal exit status.
+check() {
+    local name="$1"
+    shift
+    if "$@"; then
+        echo "PASS: $name"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL: $name"
+        FAIL=$((FAIL + 1))
+        FAILED_NAMES+=("$name")
+    fi
+}
+
+skip() {
+    local name="$1"
+    local reason="$2"
+    echo "SKIP: $name ($reason)"
+    SKIP=$((SKIP + 1))
+}
+
+echo "=== Building panhandle (debug) ==="
+if ! (cd "$PANHANDLE_DIR" && cargo build -p panhandle); then
+    echo "Build failed, aborting." >&2
+    exit 1
+fi
+
+### --- Input validation (no eBPF involved, but exercised here for completeness) --- ###
+
+test_validate_poll_zero() {
+    ! sudo "$BIN" --poll 0 >/dev/null 2>&1
+}
+
+test_validate_uid_range_inverted() {
+    ! sudo "$BIN" --exclude-min-uid 1000 --exclude-max-uid 500 >/dev/null 2>&1
+}
+
+test_validate_include_uid_nonnumeric() {
+    ! sudo "$BIN" --include-uid abc >/dev/null 2>&1
+}
+
+test_validate_comm_allow_deny_conflict() {
+    ! sudo "$BIN" --syscalls execve --comm-allow foo --comm-deny bar >/dev/null 2>&1
+}
+
+test_validate_comm_too_long() {
+    ! sudo "$BIN" --syscalls execve --comm-allow thisnameiswaytoolongforcomm >/dev/null 2>&1
+}
+
+test_validate_missing_config() {
+    ! sudo "$BIN" --config "$WORKDIR/does-not-exist.yaml" >/dev/null 2>&1
+}
+
+test_validate_config_unknown_field() {
+    echo "bogus_field: true" >"$WORKDIR/bad.yaml"
+    ! sudo "$BIN" --config "$WORKDIR/bad.yaml" >/dev/null 2>&1
+}
+
+test_validate_config_bad_extension() {
+    echo "cpu: true" >"$WORKDIR/test.txt"
+    ! sudo "$BIN" --config "$WORKDIR/test.txt" >/dev/null 2>&1
+}
+
+test_validate_invalid_http_url() {
+    local out
+    out=$(sudo "$BIN" output --http "not a url" 2>&1)
+    echo "$out" | grep -q "Invalid URL"
+}
+
+### --- Default execve monitor (no flags) --- ###
+
+test_default_execve_attaches() {
+    local log="$WORKDIR/execve.log"
+    timeout 3 sudo "$BIN" --debug >"$log" 2>&1
+    grep -q "attached eBPF tracepoint 'syscalls:sys_enter_execve'" "$log"
+}
+
+test_default_execve_captures_real_event() {
+    local log="$WORKDIR/execve_event.log"
+    timeout 3 sudo "$BIN" --json >"$log" 2>&1 &
+    local ph_pid=$!
+    sleep 0.5
+    /bin/true
+    wait "$ph_pid" 2>/dev/null
+    grep -q '"application":"panhandle"' "$log" && grep -q '"filename":"/bin/true"' "$log"
+}
+
+### --- bash/zsh readline/zle uprobes --- ###
+
+test_bash_attaches() {
+    local log="$WORKDIR/bash.log"
+    timeout 2 sudo "$BIN" --bash --debug >"$log" 2>&1
+    grep -q "attached eBPF uprobe 'readline'" "$log"
+}
+
+test_zsh_attaches() {
+    local log="$WORKDIR/zsh.log"
+    timeout 2 sudo "$BIN" --zsh --debug >"$log" 2>&1
+    grep -q "attached eBPF uprobe 'zlentry'" "$log"
+}
+
+### --- Resource/perf monitors: each attaches/runs and a --pid-list filter narrows it --- ###
+
+test_cpu_pid_filter() {
+    local log="$WORKDIR/cpu.log"
+    sleep 5 &
+    local target=$!
+    timeout 2 sudo "$BIN" --cpu --poll 1 --pid-list "$target" --json >"$log" 2>&1
+    kill "$target" 2>/dev/null
+    wait "$target" 2>/dev/null
+    # every per-PID line must be our target; the aggregate system-wide line has no PID field
+    ! grep -oE '"PID":[[:space:]]*[0-9]+' "$log" | grep -qvE ":[[:space:]]*${target}\$"
+}
+
+test_io_runs() {
+    local log="$WORKDIR/io.log"
+    timeout 2 sudo "$BIN" --io --poll 1 --json >"$log" 2>&1
+    [ -s "$log" ]
+}
+
+test_memory_runs() {
+    local log="$WORKDIR/memory.log"
+    timeout 2 sudo "$BIN" --memory --poll 1 --json >"$log" 2>&1
+    grep -qE '"Type":[[:space:]]*"mem"' "$log"
+}
+
+test_gpu_runs_without_error() {
+    local log="$WORKDIR/gpu.log"
+    timeout 2 sudo "$BIN" --gpu --poll 1 --debug >"$log" 2>&1
+    # no GPU in most CI/dev hosts, so there may be no output - just confirm it didn't error out
+    ! grep -qi "^Error:" "$log"
+}
+
+# Regression test for: --memory-faults never accepted a pid_filter, despite --pid-list's
+# own help text listing memory_faults as one of the options it filters.
+test_memory_faults_pid_filter() {
+    local log_all="$WORKDIR/mf_all.log"
+    local log_filtered="$WORKDIR/mf_filtered.log"
+    timeout 2 sudo "$BIN" --memory-faults 0 --json >"$log_all" 2>&1
+    timeout 2 sudo "$BIN" --memory-faults 0 --pid-list 1 --json >"$log_filtered" 2>&1
+    local all_count filtered_count
+    all_count=$(grep -cE '"Type":[[:space:]]*"fault"' "$log_all")
+    filtered_count=$(grep -cE '"Type":[[:space:]]*"fault"' "$log_filtered")
+    # the unfiltered run should see more than just init, and the filtered run only PID 1
+    [ "$all_count" -gt 1 ] && [ "$filtered_count" -eq 1 ] \
+        && grep -qE '"PID":[[:space:]]*1,' "$log_filtered"
+}
+
+### --- Socket monitoring: BTF tracepoint + 4 kprobes --- ###
+
+test_socket_attaches() {
+    local log="$WORKDIR/socket.log"
+    timeout 2 sudo "$BIN" --socket --poll 1 --debug >"$log" 2>&1
+    grep -q "attached eBPF BTF tracepoint 'inet_sock_set_state'" "$log"
+}
+
+### --- Process-bounds monitoring (--bound): regression test for the network_bound.rs ###
+### pid/tgid key mismatch fix (NET_WAIT keyed by thread id instead of process id)     ###
+
+test_bound_network_wait() {
+    local log="$WORKDIR/bound.log"
+    local netlog="$WORKDIR/bound_net.log"
+    python3 -u "$SCRIPT_DIR/bound_test.py" 0.3 6 >"$netlog" 2>&1 &
+    local net_pid=$!
+    local target_pid=""
+    for _ in $(seq 1 20); do
+        target_pid=$(grep -oE 'PID: [0-9]+' "$netlog" 2>/dev/null | head -1 | grep -oE '[0-9]+')
+        [ -n "$target_pid" ] && break
+        sleep 0.2
+    done
+    sleep 0.5 # let it get through its first blocking recv() call too
+    timeout 3 sudo "$BIN" --bound --poll 1 --json >"$log" 2>&1
+    kill "$net_pid" 2>/dev/null
+    wait "$net_pid" 2>/dev/null
+    [ -n "$target_pid" ] || return 1
+    local target_line count
+    # NET_WAIT accumulates cumulatively across poll cycles (never reset), so the last
+    # cycle this ran for has the highest count - take that one rather than the first,
+    # which may have fired before the target even made its first blocking recv() call.
+    target_line=$(grep -E "\"PID\":[[:space:]]*${target_pid}," "$log" | tail -1)
+    [ -n "$target_line" ] || return 1
+    count=$(echo "$target_line" | grep -oE '"Network_Wait_Count":[[:space:]]*[0-9]+' | grep -oE '[0-9]+$')
+    [ -n "$count" ] && [ "$count" -gt 0 ]
+}
+
+### --- Config file loading: YAML, merge precedence, output-type merge --- ###
+
+test_config_yaml_merge() {
+    cat >"$WORKDIR/merge.yaml" <<'EOF'
+io: true
+poll: 10
+pid_list: [1]
+EOF
+    local log="$WORKDIR/merge.log"
+    timeout 1 sudo "$BIN" --config "$WORKDIR/merge.yaml" --cpu --poll 1 --verbose >"$log" 2>&1
+    # CLI --poll should win over the config file's poll: 10, config's io/pid_list should carry through
+    grep -q "poll: Some(" "$log" && grep -A1 "poll: Some(" "$log" | grep -q "1," \
+        && grep -q "io: true" "$log" && grep -q "cpu: true" "$log"
+}
+
+test_config_json_format() {
+    echo '{"gpu": true, "exclude_min_uid": 10}' >"$WORKDIR/test.json"
+    local log="$WORKDIR/json_config.log"
+    timeout 1 sudo "$BIN" --config "$WORKDIR/test.json" --verbose >"$log" 2>&1
+    grep -q "gpu: true" "$log" && grep -q "exclude_min_uid: Some(" "$log"
+}
+
+### --- Output: file, http, syslog all active at once; one channel failing shouldn't ###
+### block the others                                                                 ###
+
+test_output_file_http_syslog_combined() {
+    local outlog="$WORKDIR/combined_out.log"
+    local stdout_log="$WORKDIR/combined_stdout.log"
+    # No --quiet here: with --quiet + --file, *all* logging (including this error)
+    # routes to the file only, not stdout - this test wants both so it can check each
+    # independently.
+    timeout 3 sudo "$BIN" output --file "$outlog" --http "http://127.0.0.1:1/x" --syslog unix \
+        >"$stdout_log" 2>&1 &
+    local ph_pid=$!
+    sleep 0.5
+    # Guarantee at least one qualifying execve event: root's own uid (0) falls inside
+    # the default --exclude-min/max-uid range (0-999), so relying on incidental
+    # background activity from some other uid is flaky - trigger one as this script's
+    # own (non-root) invoking user instead.
+    /bin/true
+    wait "$ph_pid" 2>/dev/null
+    [ -s "$outlog" ] && grep -qi "HTTP POST Failed" "$stdout_log"
+}
+
+### --- Meaningful combinations --- ###
+
+test_all_monitors_combined() {
+    local log="$WORKDIR/combo.log"
+    timeout 3 sudo "$BIN" --cpu --gpu --io --memory --socket --bound --poll 1 --pid-list 1,2 --debug \
+        >"$log" 2>&1
+    grep -q "attached eBPF BTF tracepoint" "$log" \
+        && grep -q "attached eBPF kprobe 'tcp_recvmsg_entry'" "$log" \
+        && ! grep -q "sys_enter_execve" "$log" # default execve must NOT run alongside these
+}
+
+test_bash_zsh_shells_combined() {
+    local log="$WORKDIR/bzs.log"
+    timeout 2 sudo "$BIN" --bash --zsh --syscall-execve --shells --debug >"$log" 2>&1
+    grep -q "attached eBPF uprobe 'readline'" "$log" \
+        && grep -q "attached eBPF uprobe 'zlentry'" "$log" \
+        && grep -q "attached eBPF tracepoint 'syscalls:sys_enter_execve'" "$log"
+}
+
+### --- Syscall blocking (LSM): scoped to a disposable, uniquely-named test binary so ###
+### a bug here can't block anything else on the host. Skipped if the kernel's active ###
+### LSM stack doesn't include "bpf".                                                 ###
+
+test_syscalls_block_execve() {
+    local target="$WORKDIR/pnhandle_vrfy" # <=15 chars: the kernel truncates comm there anyway
+    local control="$WORKDIR/pnhandle_ctrl"
+    ln -sf /bin/sleep "$target"
+    ln -sf /bin/sleep "$control"
+
+    local log="$WORKDIR/syscalls.log"
+    timeout 4 sudo "$BIN" --syscalls execve --comm-deny "$(basename "$target")" --debug \
+        >"$log" 2>&1 &
+    local ph_pid=$!
+    sleep 1.5 # let the LSM hook attach
+
+    local blocked_rc=0 allowed_rc=0
+    "$target" 0.1 >/dev/null 2>&1 || blocked_rc=$?
+    "$control" 0.1 >/dev/null 2>&1 || allowed_rc=$?
+
+    kill "$ph_pid" 2>/dev/null
+    wait "$ph_pid" 2>/dev/null
+
+    # the denied comm must fail to exec; the unrelated comm must succeed normally
+    [ "$blocked_rc" -ne 0 ] && [ "$allowed_rc" -eq 0 ]
+}
+
+echo
+echo "=== Input validation ==="
+check "poll=0 rejected" test_validate_poll_zero
+check "inverted uid range rejected" test_validate_uid_range_inverted
+check "non-numeric include-uid rejected" test_validate_include_uid_nonnumeric
+check "comm-allow + comm-deny conflict rejected" test_validate_comm_allow_deny_conflict
+check "overlong comm rejected" test_validate_comm_too_long
+check "missing config file rejected" test_validate_missing_config
+check "unknown config field rejected" test_validate_config_unknown_field
+check "unsupported config extension rejected" test_validate_config_bad_extension
+check "invalid http url rejected" test_validate_invalid_http_url
+
+echo
+echo "=== Default execve monitor ==="
+check "default execve tracepoint attaches" test_default_execve_attaches
+check "default execve captures a real event" test_default_execve_captures_real_event
+
+echo
+echo "=== Shell monitors ==="
+check "--bash readline uprobe attaches" test_bash_attaches
+check "--zsh zlentry uprobe attaches" test_zsh_attaches
+
+echo
+echo "=== Resource monitors ==="
+check "--cpu + --pid-list filters correctly" test_cpu_pid_filter
+check "--io runs and produces output" test_io_runs
+check "--memory runs and produces output" test_memory_runs
+check "--gpu runs without erroring" test_gpu_runs_without_error
+check "--memory-faults + --pid-list filters correctly" test_memory_faults_pid_filter
+
+echo
+echo "=== Socket and process-bounds monitors ==="
+check "--socket BTF tracepoint attaches" test_socket_attaches
+check "--bound reports nonzero network wait" test_bound_network_wait
+
+echo
+echo "=== Config file loading ==="
+check "YAML config + CLI override merge correctly" test_config_yaml_merge
+check "JSON config format parses" test_config_json_format
+
+echo
+echo "=== Output channels ==="
+check "file+http+syslog combined, http failure doesn't block file" test_output_file_http_syslog_combined
+
+echo
+echo "=== Combinations ==="
+check "all resource/socket/bound monitors simultaneously" test_all_monitors_combined
+check "--bash --zsh --syscall-execve --shells simultaneously" test_bash_zsh_shells_combined
+
+echo
+echo "=== Syscall blocking (LSM) ==="
+if grep -q "bpf" /sys/kernel/security/lsm 2>/dev/null; then
+    check "--syscalls execve --comm-deny blocks only the targeted comm" test_syscalls_block_execve
+else
+    skip "--syscalls execve blocking" "kernel's active LSM stack has no 'bpf' entry (/sys/kernel/security/lsm)"
+fi
+
+echo
+echo "=== Summary: $PASS passed, $FAIL failed, $SKIP skipped ==="
+if [ "$FAIL" -gt 0 ]; then
+    echo "Failed checks:"
+    for name in "${FAILED_NAMES[@]}"; do
+        echo "  - $name"
+    done
+    exit 1
+fi

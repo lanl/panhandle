@@ -1373,6 +1373,50 @@ mod tests {
         );
     }
 
+    // test that merge_provenance reports "cli" for a field only the CLI set, "config"
+    // for a field only the config file set, "cli" for a field both set (CLI always
+    // wins per merge_args), and omits a field neither side set entirely
+    #[test]
+    fn test_merge_provenance_reports_effective_source_per_field() {
+        let cli = RawArgs {
+            poll: Some(1),                           // cli-only
+            pid_list: Some(vec![1]),                 // both sides set -> cli should win
+            comm_allow: Some(vec!["x".to_string()]), // cli-only
+            ..Default::default()
+        };
+        let config = ConfigArgs {
+            pid_list: Some(vec![2]), // both sides set -> cli should win
+            syscalls: Some(vec!["execve".to_string()]), // config-only
+            // exclude_min_uid, exclude_max_uid, executables, include_uid,
+            // memory_faults, block_paths, comm_deny: neither side sets these
+            ..Default::default()
+        };
+
+        let provenance = merge_provenance(&cli, &config);
+
+        assert!(provenance.contains(&"poll=cli".to_string()));
+        assert!(provenance.contains(&"pid_list=cli".to_string()));
+        assert!(provenance.contains(&"comm_allow=cli".to_string()));
+        assert!(provenance.contains(&"syscalls=config".to_string()));
+        // exactly these 4 fields were set by either side; every other field is absent
+        assert_eq!(provenance.len(), 4);
+    }
+
+    // test that merge_provenance returns nothing when neither side set any of the
+    // Option-typed fields it tracks (e.g. a config file that only sets bool flags)
+    #[test]
+    fn test_merge_provenance_empty_when_nothing_set() {
+        let cli = RawArgs {
+            ..Default::default()
+        };
+        let config = ConfigArgs {
+            cpu: true, // a bool field - merge_provenance doesn't track these at all
+            ..Default::default()
+        };
+
+        assert!(merge_provenance(&cli, &config).is_empty());
+    }
+
     // test that apply_socket_stats_event folds deltas from the socket_events ring
     // buffer into the shared per-pid accumulator correctly: repeated events for the
     // same pid accumulate, a decrement below zero saturates at 0 instead of

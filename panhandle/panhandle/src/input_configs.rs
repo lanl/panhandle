@@ -347,6 +347,96 @@ pub fn should_run_default_execve_monitor(
             && !syscalls_set)
 }
 
+/// For each Option-typed field `merge_args` overrides, report which side (CLI or
+/// config file) actually supplied the effective value - CLI always wins when both
+/// provide one, matching `merge_args`'s own `if cli_args.X.is_some() { ... }` checks.
+/// Fields neither side set are omitted entirely. Bool fields are excluded: they're
+/// always OR'd together, so "which side won" isn't a meaningful question for them
+/// the way it is for a value that's either present or absent.
+pub fn merge_provenance(cli_args: &RawArgs, config_args: &ConfigArgs) -> Vec<String> {
+    let source = |cli_has: bool, config_has: bool| -> Option<&'static str> {
+        match (cli_has, config_has) {
+            (true, _) => Some("cli"),
+            (false, true) => Some("config"),
+            (false, false) => None,
+        }
+    };
+    let fields: [(&str, Option<&'static str>); 11] = [
+        (
+            "exclude_min_uid",
+            source(
+                cli_args.exclude_min_uid.is_some(),
+                config_args.exclude_min_uid.is_some(),
+            ),
+        ),
+        (
+            "exclude_max_uid",
+            source(
+                cli_args.exclude_max_uid.is_some(),
+                config_args.exclude_max_uid.is_some(),
+            ),
+        ),
+        (
+            "executables",
+            source(
+                cli_args.executables.is_some(),
+                config_args.executables.is_some(),
+            ),
+        ),
+        (
+            "include_uid",
+            source(
+                cli_args.include_uid.is_some(),
+                config_args.include_uid.is_some(),
+            ),
+        ),
+        (
+            "memory_faults",
+            source(
+                cli_args.memory_faults.is_some(),
+                config_args.memory_faults.is_some(),
+            ),
+        ),
+        (
+            "poll",
+            source(cli_args.poll.is_some(), config_args.poll.is_some()),
+        ),
+        (
+            "pid_list",
+            source(cli_args.pid_list.is_some(), config_args.pid_list.is_some()),
+        ),
+        (
+            "syscalls",
+            source(cli_args.syscalls.is_some(), config_args.syscalls.is_some()),
+        ),
+        (
+            "block_paths",
+            source(
+                cli_args.block_paths.is_some(),
+                config_args.block_paths.is_some(),
+            ),
+        ),
+        (
+            "comm_allow",
+            source(
+                cli_args.comm_allow.is_some(),
+                config_args.comm_allow.is_some(),
+            ),
+        ),
+        (
+            "comm_deny",
+            source(
+                cli_args.comm_deny.is_some(),
+                config_args.comm_deny.is_some(),
+            ),
+        ),
+    ];
+    fields
+        .into_iter()
+        .filter_map(|(name, src)| src.map(|s| format!("{}={}", name, s)))
+        .collect()
+}
+
 // function to load all args given. Merges config and cli args with cli args overwriting those given in the config file.
 pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     let mut final_args = config_args.clone();
@@ -406,87 +496,7 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     // actually came from, so "why is --poll not taking effect" doesn't require
     // reading merge_args's source - the CLI always wins when both provide a value.
     if final_args.debug {
-        let source = |cli_has: bool, config_has: bool| -> Option<&'static str> {
-            match (cli_has, config_has) {
-                (true, _) => Some("cli"),
-                (false, true) => Some("config"),
-                (false, false) => None,
-            }
-        };
-        let fields: [(&str, Option<&'static str>); 11] = [
-            (
-                "exclude_min_uid",
-                source(
-                    cli_args.exclude_min_uid.is_some(),
-                    config_args.exclude_min_uid.is_some(),
-                ),
-            ),
-            (
-                "exclude_max_uid",
-                source(
-                    cli_args.exclude_max_uid.is_some(),
-                    config_args.exclude_max_uid.is_some(),
-                ),
-            ),
-            (
-                "executables",
-                source(
-                    cli_args.executables.is_some(),
-                    config_args.executables.is_some(),
-                ),
-            ),
-            (
-                "include_uid",
-                source(
-                    cli_args.include_uid.is_some(),
-                    config_args.include_uid.is_some(),
-                ),
-            ),
-            (
-                "memory_faults",
-                source(
-                    cli_args.memory_faults.is_some(),
-                    config_args.memory_faults.is_some(),
-                ),
-            ),
-            (
-                "poll",
-                source(cli_args.poll.is_some(), config_args.poll.is_some()),
-            ),
-            (
-                "pid_list",
-                source(cli_args.pid_list.is_some(), config_args.pid_list.is_some()),
-            ),
-            (
-                "syscalls",
-                source(cli_args.syscalls.is_some(), config_args.syscalls.is_some()),
-            ),
-            (
-                "block_paths",
-                source(
-                    cli_args.block_paths.is_some(),
-                    config_args.block_paths.is_some(),
-                ),
-            ),
-            (
-                "comm_allow",
-                source(
-                    cli_args.comm_allow.is_some(),
-                    config_args.comm_allow.is_some(),
-                ),
-            ),
-            (
-                "comm_deny",
-                source(
-                    cli_args.comm_deny.is_some(),
-                    config_args.comm_deny.is_some(),
-                ),
-            ),
-        ];
-        let provenance: Vec<String> = fields
-            .into_iter()
-            .filter_map(|(name, src)| src.map(|s| format!("{}={}", name, s)))
-            .collect();
+        let provenance = merge_provenance(&cli_args, &config_args);
         if !provenance.is_empty() {
             eprintln!("config merge: {}", provenance.join(", "));
         }

@@ -364,6 +364,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         polling_freq_seconds = poll;
     }
 
+    // One-line summary of what's about to start, so a user staring at a wall of
+    // startup debug noise (eBPF relocation, verifier output, etc.) can tell at a
+    // glance what's actually active without reconstructing it from the args dump.
+    {
+        let mut enabled: Vec<String> = Vec::new();
+        if args.cpu {
+            enabled.push("cpu".to_string());
+        }
+        if args.gpu {
+            enabled.push("gpu".to_string());
+        }
+        if args.io {
+            enabled.push("io".to_string());
+        }
+        if args.memory {
+            enabled.push("memory".to_string());
+        }
+        if let Some(threshold) = args.memory_faults {
+            enabled.push(format!("memory-faults(threshold={})", threshold));
+        }
+        if args.socket {
+            enabled.push("socket".to_string());
+        }
+        if args.bound {
+            enabled.push("bound".to_string());
+        }
+        if args.bash {
+            enabled.push("bash".to_string());
+        }
+        if args.zsh {
+            enabled.push("zsh".to_string());
+        }
+        if let Some(syscalls) = &args.syscalls {
+            enabled.push(format!("syscalls({})", syscalls.join(",")));
+        }
+        if should_run_default_execve_monitor(
+            args.syscall_execve,
+            args.bash,
+            args.zsh,
+            args.memory_faults.is_some(),
+            args.socket,
+            args.memory,
+            args.cpu,
+            args.gpu,
+            args.io,
+            args.bound,
+            args.syscalls.is_some(),
+        ) {
+            enabled.push("execve".to_string());
+        }
+
+        let pid_filter_desc = args
+            .pid_list
+            .as_ref()
+            .map(|pids| format!(", pid_filter={:?}", pids))
+            .unwrap_or_default();
+        debug!(
+            "enabled: [{}]{}, poll={}s",
+            enabled.join(", "),
+            pid_filter_desc,
+            polling_freq_seconds
+        );
+    }
+
     // move to if statements for the main program args
     // goal is to try to allow a combination of all of the args
     // this introduces some code duplication

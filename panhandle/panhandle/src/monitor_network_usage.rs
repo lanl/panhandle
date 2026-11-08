@@ -332,6 +332,14 @@ pub async fn monitor_network_usage(
         entries
     });
 
+    if *debug && let Some(pids) = pid_list {
+        eprintln!(
+            "network: {} of {} requested --pid-list PIDs reported this cycle",
+            entries.len(),
+            pids.len()
+        );
+    }
+
     for entry in entries {
         // send all info to print function
         report_network_stats(

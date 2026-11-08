@@ -278,6 +278,15 @@ pub async fn monitor_gpu_usage(
         gpus
     });
 
+    if *debug && let Some(pids) = pid_list {
+        let matched: usize = gpus.iter().map(|g| g.processes.len()).sum();
+        eprintln!(
+            "gpu: {} of {} requested --pid-list PIDs reported this cycle",
+            matched,
+            pids.len()
+        );
+    }
+
     for gpu in gpus {
         for process in gpu.processes {
             let (plain_string, json_string) = if *verbose {

@@ -272,6 +272,14 @@ pub async fn monitor_io_usage(
         entries
     });
 
+    if *debug && let Some(pids) = pid_list {
+        eprintln!(
+            "io: {} of {} requested --pid-list PIDs reported this cycle",
+            entries.len(),
+            pids.len()
+        );
+    }
+
     for entry in entries {
         report_io_and_inode_stats(
             entry.pid,

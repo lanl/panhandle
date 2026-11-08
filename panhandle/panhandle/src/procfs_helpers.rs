@@ -109,6 +109,14 @@ pub async fn get_major_faults(
         entries
     });
 
+    if *debug && let Some(pids) = pid_filter {
+        eprintln!(
+            "memory-faults: {} of {} requested --pid-list PIDs reported this cycle",
+            entries.len(),
+            pids.len()
+        );
+    }
+
     for entry in entries {
         let plain_string = if needs_plain {
             format_faults_prose(
@@ -482,6 +490,14 @@ pub async fn get_all_memory_usage(
 
         entries
     });
+
+    if *debug && let Some(pids) = pid_filter {
+        eprintln!(
+            "memory: {} of {} requested --pid-list PIDs reported this cycle",
+            entries.len(),
+            pids.len()
+        );
+    }
 
     for entry in entries {
         let plain_string = if needs_plain {

@@ -256,18 +256,4 @@ impl AppConfig {
         }
         Ok(())
     }
-
-    /// Check if default execve monitor should run
-    pub fn should_run_execve_monitor(&self) -> bool {
-        self.execve
-            || (!self.bash
-                && !self.zsh
-                && !self.cpu
-                && !self.gpu
-                && !self.network
-                && !self.io
-                && !self.memory
-                && self.memory_faults.is_none()
-                && self.syscalls.is_empty())
-    }
 }

@@ -307,6 +307,42 @@ pub fn attach_lsm_hook(
     Ok(())
 }
 
+/// Attach an LSM hook scoped to a single cgroup v2 directory instead of system-wide
+/// (requires a kernel with LsmCgroup support, 6.0+). `cgroup_path` must be a cgroup v2
+/// directory such as `/sys/fs/cgroup/myjob.slice`.
+pub fn attach_lsm_cgroup_hook(
+    ebpf: &mut aya::Ebpf,
+    hook_name: &str,
+    program_name: &str,
+    btf: &Btf,
+    cgroup_path: &std::path::Path,
+) -> Result<()> {
+    use aya::programs::LsmCgroup;
+
+    let cgroup_file = std::fs::File::open(cgroup_path).map_err(|e| {
+        PanhandleError::Config(format!(
+            "Could not open cgroup path '{}': {}",
+            cgroup_path.display(),
+            e
+        ))
+    })?;
+
+    let program: &mut LsmCgroup = ebpf
+        .program_mut(program_name)
+        .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
+        .try_into()
+        .map_err(PanhandleError::EbpfAttach)?;
+
+    program
+        .load(hook_name, btf)
+        .map_err(PanhandleError::EbpfAttach)?;
+    program
+        .attach(cgroup_file)
+        .map_err(PanhandleError::EbpfAttach)?;
+
+    Ok(())
+}
+
 /// Create an AsyncFd for a ring buffer map
 pub fn create_ring_buffer_async_fd(
     ebpf: &mut aya::Ebpf,

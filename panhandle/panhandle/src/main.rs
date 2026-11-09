@@ -805,6 +805,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             comm_deny: args.comm_deny.clone().unwrap_or_default(),
             block_paths: args.block_paths.clone().unwrap_or_default(),
             syscalls: syscalls.clone(),
+            cgroup_path: args.cgroup.clone(),
             ..Default::default()
         };
 

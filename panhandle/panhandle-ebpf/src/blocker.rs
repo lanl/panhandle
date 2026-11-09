@@ -2,7 +2,7 @@
 use aya_ebpf::{
     cty::c_long,
     helpers::{bpf_d_path, bpf_get_current_comm},
-    macros::{lsm, map},
+    macros::{lsm, lsm_cgroup, map},
     maps::{HashMap, PerCpuArray},
     programs::LsmContext,
 };
@@ -34,12 +34,26 @@ static COMMS: HashMap<[u8; 16], u8> = HashMap::with_max_entries(64, 0);
 #[map(name = "BLOCKED_PATHS")]
 static BLOCKED_PATHS: HashMap<[u8; 256], u8> = HashMap::with_max_entries(64, 0);
 
+// System-wide (BPF_LSM_MAC) LSM programs return 0 to allow or a negative errno (-EPERM
+// here) to deny. Cgroup-scoped (BPF_LSM_CGROUP) programs use a different kernel-enforced
+// convention: the verifier rejects anything outside 0 (allow) / 1 (deny) - confirmed via
+// the verifier log when this was first wired up: "At program exit the register R0 ...
+// should have been in [0, 1]". should_block_open/should_block_execve below return that
+// shared deny decision as a plain bool; each #[lsm]/#[lsm_cgroup] wrapper translates it
+// into whichever convention its attach type requires.
 #[lsm(hook = "file_open")]
 pub fn block_open(ctx: LsmContext) -> i32 {
-    match try_block_open(ctx) {
-        Ok(ret) => ret,
-        Err(ret) => ret,
-    }
+    if should_block_open(ctx) { EPERM } else { 0 }
+}
+
+// Cgroup-scoped equivalent of block_open above, for --cgroup: identical logic (and the
+// same COMMS/BLOCKED_PATHS maps), but a separate program because the eBPF-side
+// attachment mechanism (BPF_LSM_CGROUP vs BPF_LSM_MAC) requires its own macro/section,
+// even though the two only ever differ in how userspace attaches them (and, as of this
+// comment, their return-value convention - see above).
+#[lsm_cgroup(hook = "file_open")]
+pub fn block_open_cgroup(ctx: LsmContext) -> i32 {
+    if should_block_open(ctx) { 1 } else { 0 }
 }
 
 // Blocking a comm here can be narrowed to specific paths via BLOCKED_PATHS: if that
@@ -50,15 +64,17 @@ pub fn block_open(ctx: LsmContext) -> i32 {
 // open. This is deliberately different from block_execve below, which has no such
 // narrowing: a blocked comm can never execute at all, full stop - blocking specific
 // paths doesn't apply to "should this binary be allowed to run".
-fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
+fn should_block_open(ctx: LsmContext) -> bool {
     // Check if this comm should be blocked based on allow/deny lists
     if !comm_is_blocked() {
-        return Ok(0);
+        return false;
     }
 
     let f: *const file = ctx.arg(0);
 
-    let ptr = PATH_SCRATCH.get_ptr_mut(0).ok_or(0i32)?;
+    let Some(ptr) = PATH_SCRATCH.get_ptr_mut(0) else {
+        return true; // couldn't get scratch space, deny by default
+    };
     let scratch = unsafe { &mut *ptr };
 
     let path_ptr = unsafe { &(*f).f_path } as *const _ as *mut core::ffi::c_void;
@@ -83,29 +99,29 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
 
         // If path map has real entries (not just placeholder) and this path isn't blocked, allow it
         if !is_path_map_empty() && !path_is_blocked(path_bytes) {
-            return Ok(0); // comm is blocked but the path isn't, return ok
+            return false; // comm is blocked but the path isn't, allow it
         }
     }
 
     // if we couldn't get the path, or path checking indicates block, deny by default
-    Ok(EPERM)
+    true
 }
 
-// Hook for strictly blocking execve: unlike try_block_open above, a blocked comm is
+// Hook for strictly blocking execve: unlike should_block_open above, a blocked comm is
 // always denied here with no path-based narrowing.
 #[lsm(hook = "bprm_check_security")]
 pub fn block_execve(ctx: LsmContext) -> i32 {
-    match unsafe { try_block_execve(ctx) } {
-        Ok(ret) => ret,
-        Err(ret) => ret,
-    }
+    if should_block_execve(ctx) { EPERM } else { 0 }
 }
 
-unsafe fn try_block_execve(_ctx: LsmContext) -> Result<i32, i32> {
-    if !comm_is_blocked() {
-        return Ok(0);
-    }
-    Ok(EPERM)
+// Cgroup-scoped equivalent of block_execve above, for --cgroup. See block_open_cgroup.
+#[lsm_cgroup(hook = "bprm_check_security")]
+pub fn block_execve_cgroup(ctx: LsmContext) -> i32 {
+    if should_block_execve(ctx) { 1 } else { 0 }
+}
+
+fn should_block_execve(_ctx: LsmContext) -> bool {
+    comm_is_blocked()
 }
 
 // Returns true if the current task's comm should be blocked.

@@ -42,6 +42,9 @@ pub struct AppConfig {
     pub comm_allow: Vec<String>,
     pub comm_deny: Vec<String>,
     pub syscalls: Vec<String>,
+    /// Scope --syscalls blocking to this cgroup v2 directory instead of system-wide.
+    /// See blocking::setup_syscall_blocking.
+    pub cgroup_path: Option<std::path::PathBuf>,
     pub pid_list: Vec<u32>,
     pub poll_seconds: u32,
     pub debug: bool,
@@ -76,6 +79,7 @@ impl Default for AppConfig {
             comm_allow: Vec::new(),
             comm_deny: Vec::new(),
             syscalls: Vec::new(),
+            cgroup_path: None,
             pid_list: Vec::new(),
             poll_seconds: 30,
             debug: false,

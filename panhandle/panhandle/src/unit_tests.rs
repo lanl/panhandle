@@ -3051,4 +3051,71 @@ mod tests {
         );
         assert!(escaped.contains("\"Comm\": \"a\\\"b\""));
     }
+
+    // --- --cgroup: config-file parsing and CLI-vs-config merge precedence ---
+
+    #[tokio::test]
+    async fn test_load_config_args_cgroup_field() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().join("cgroup.yaml");
+        std::fs::write(
+            &temp_path,
+            "syscalls: [execve]\ncomm_deny: [sshd]\ncgroup: /sys/fs/cgroup/myjob.slice\n",
+        )
+        .unwrap();
+
+        let result = load_config_args(temp_path.to_string_lossy().to_string())
+            .await
+            .expect("valid config with a cgroup field should load");
+
+        assert_eq!(
+            result.cgroup,
+            Some(std::path::PathBuf::from("/sys/fs/cgroup/myjob.slice"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_args_cgroup_cli_overrides_config() {
+        let config = ConfigArgs {
+            cgroup: Some(std::path::PathBuf::from("/sys/fs/cgroup/from-config")),
+            ..Default::default()
+        };
+        let cli = RawArgs {
+            cgroup: Some(std::path::PathBuf::from("/sys/fs/cgroup/from-cli")),
+            ..Default::default()
+        };
+
+        let merged = merge_args(cli, config).await;
+        assert_eq!(
+            merged.cgroup,
+            Some(std::path::PathBuf::from("/sys/fs/cgroup/from-cli"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_args_cgroup_preserved_from_config_when_cli_unset() {
+        let config = ConfigArgs {
+            cgroup: Some(std::path::PathBuf::from("/sys/fs/cgroup/from-config")),
+            ..Default::default()
+        };
+        let cli = RawArgs::default();
+
+        let merged = merge_args(cli, config).await;
+        assert_eq!(
+            merged.cgroup,
+            Some(std::path::PathBuf::from("/sys/fs/cgroup/from-config"))
+        );
+    }
+
+    #[test]
+    fn test_merge_provenance_cgroup() {
+        let cli = RawArgs {
+            cgroup: Some(std::path::PathBuf::from("/sys/fs/cgroup/x")),
+            ..Default::default()
+        };
+        let config = ConfigArgs::default();
+
+        let provenance = merge_provenance(&cli, &config);
+        assert!(provenance.contains(&"cgroup=cli".to_string()));
+    }
 }

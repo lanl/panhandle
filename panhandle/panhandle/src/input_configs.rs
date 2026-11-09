@@ -160,6 +160,13 @@ pub struct RawArgs {
     #[arg(long, value_parser = validate_comm_length, num_args = 1..=MAX_BLOCKED_COMMS, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub comm_deny: Option<Vec<String>>,
+
+    /// Scope --syscalls blocking to a single cgroup v2 directory (e.g.
+    /// /sys/fs/cgroup/myjob.slice) instead of blocking system-wide. Requires a kernel with
+    /// LsmCgroup support (6.0+) and, like --syscalls generally, "bpf" in the kernel's active
+    /// LSM list to actually enforce anything.
+    #[arg(long, value_name = "PATH", global = true)]
+    pub cgroup: Option<std::path::PathBuf>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -255,6 +262,8 @@ pub struct ConfigArgs {
     pub comm_allow: Option<Vec<String>>,
 
     pub comm_deny: Option<Vec<String>>,
+
+    pub cgroup: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -312,6 +321,7 @@ impl From<ConfigArgs> for RawArgs {
             block_paths: cfg.block_paths,
             comm_allow: cfg.comm_allow,
             comm_deny: cfg.comm_deny,
+            cgroup: cfg.cgroup,
             // output subcommand
             output,
             config: None,
@@ -364,7 +374,7 @@ pub fn merge_provenance(cli_args: &RawArgs, config_args: &ConfigArgs) -> Vec<Str
             (false, false) => None,
         }
     };
-    let fields: [(&str, Option<&'static str>); 11] = [
+    let fields: [(&str, Option<&'static str>); 12] = [
         (
             "exclude_min_uid",
             source(
@@ -433,6 +443,10 @@ pub fn merge_provenance(cli_args: &RawArgs, config_args: &ConfigArgs) -> Vec<Str
                 config_args.comm_deny.is_some(),
             ),
         ),
+        (
+            "cgroup",
+            source(cli_args.cgroup.is_some(), config_args.cgroup.is_some()),
+        ),
     ];
     fields
         .into_iter()
@@ -493,6 +507,9 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     }
     if cli_args.comm_deny.is_some() {
         final_args.comm_deny = cli_args.comm_deny.clone();
+    }
+    if cli_args.cgroup.is_some() {
+        final_args.cgroup = cli_args.cgroup.clone();
     }
 
     // Under --debug, show which side (CLI or config file) each overridable value

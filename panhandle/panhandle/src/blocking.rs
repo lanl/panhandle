@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::ebpf_loader::{attach_lsm_hook, get_hash_map_mut};
+use crate::ebpf_loader::{attach_lsm_cgroup_hook, attach_lsm_hook, get_hash_map_mut};
 use crate::error::{PanhandleError, Result};
 use aya::{Btf, maps::HashMap};
 use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
@@ -9,7 +9,7 @@ use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
 /// attach successfully via BPF_RAW_TRACEPOINT_OPEN even when this is false
 /// (that call only requires CONFIG_BPF_LSM=y), but the kernel's security
 /// framework will never actually invoke the hook, so blocking silently does
-/// nothing. See docs/lsm-blocking.md.
+/// nothing (applies to both system-wide and --cgroup-scoped blocking).
 fn bpf_lsm_active() -> bool {
     std::fs::read_to_string("/sys/kernel/security/lsm")
         .map(|contents| lsm_list_contains_bpf(&contents))
@@ -87,17 +87,30 @@ pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Bt
         }
     }
 
-    // Attach LSM hooks based on syscalls
+    // Attach LSM hooks based on syscalls - scoped to config.cgroup_path via the
+    // *_cgroup program variants if given (--cgroup), system-wide otherwise.
     for syscall in &config.syscalls {
-        match syscall.as_str() {
-            "open" | "openat" | "creat" => {
-                attach_lsm_hook(ebpf, "file_open", "block_open", btf)?;
-            }
-            "execve" => {
-                attach_lsm_hook(ebpf, "bprm_check_security", "block_execve", btf)?;
-            }
+        let (hook_name, program_name, cgroup_program_name) = match syscall.as_str() {
+            "open" | "openat" | "creat" => ("file_open", "block_open", "block_open_cgroup"),
+            "execve" => ("bprm_check_security", "block_execve", "block_execve_cgroup"),
             _ => {
                 eprintln!("Warning: Unknown syscall for blocking: {}", syscall);
+                continue;
+            }
+        };
+
+        match &config.cgroup_path {
+            Some(cgroup_path) => {
+                attach_lsm_cgroup_hook(ebpf, hook_name, cgroup_program_name, btf, cgroup_path)?;
+                eprintln!(
+                    "attached eBPF LSM cgroup hook '{}' -> {} (scoped to {})",
+                    cgroup_program_name,
+                    hook_name,
+                    cgroup_path.display()
+                );
+            }
+            None => {
+                attach_lsm_hook(ebpf, hook_name, program_name, btf)?;
             }
         }
     }

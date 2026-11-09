@@ -2,6 +2,23 @@
 
 ## v1.0.26
 
+- **Added `--cgroup <PATH>`**: scopes `--syscalls` blocking to a single cgroup v2
+  directory (e.g. `/sys/fs/cgroup/myjob.slice`) instead of system-wide. Uses aya's
+  `LsmCgroup` program type (separate `block_open_cgroup`/`block_execve_cgroup`
+  eBPF programs alongside the existing system-wide `block_open`/`block_execve` -
+  the kernel's BPF_LSM_CGROUP and BPF_LSM_MAC attach types need their own
+  `#[lsm_cgroup]`/`#[lsm]` sections even though the blocking logic is identical).
+  Requires a kernel with LsmCgroup support (6.0+) and, like `--syscalls` generally,
+  "bpf" in the kernel's active LSM list to actually enforce anything (same
+  startup warning as plain `--syscalls` applies). Works through `--config` (YAML
+  and JSON) with the usual CLI-overrides-config precedence.
+  **Along the way, found a real correctness issue specific to this attach type**:
+  cgroup-scoped LSM programs must return `0` (allow) or `1` (deny) - the verifier
+  rejects the `-EPERM` convention the system-wide programs use ("At program exit
+  the register R0 ... should have been in [0, 1]"). The shared blocking decision
+  logic was refactored to a plain bool (`should_block_open`/`should_block_execve`),
+  with each `#[lsm]`/`#[lsm_cgroup]` wrapper translating it to whichever
+  convention its attach type requires.
 - **`--bound`'s network-wait timing now covers UDP, not just TCP**: added an
   `udp_recvmsg` fentry/fexit pair alongside the existing `tcp_recvmsg` one,
   folding into the same `NET_WAIT` accumulator per process - "Network_Wait"

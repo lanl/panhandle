@@ -114,6 +114,11 @@ Specify a comma separated list of process names (comm) that will be allowed to e
 .TP
 \fB--comm-deny\fI <COMMS>\fR
 Specify a comma separated list of process names (comm) that will be denied from executing the syscalls specified in --syscalls. Maximum 64 process names, 15 characters each.
+.TP
+\fB--cgroup\fI <PATH>\fR
+Scope --syscalls blocking to a single cgroup v2 directory (e.g. /sys/fs/cgroup/myjob.slice)
+instead of blocking system-wide. Requires a kernel with LsmCgroup support (6.0+) and, like
+--syscalls generally, "bpf" in the kernel's active LSM list to actually enforce anything.
 .SH FILES
 .TP
 \fC/opt/panhandle/panhandle.yaml\fR

@@ -136,6 +136,9 @@ pub struct RawArgs {
     pub poll: Option<u32>,
 
     /// Specify a comma separated list of syscalls to be blocked. Provide comm_allow or comm_deny to control which processes are blocked when executing these syscalls.
+    /// Requires "bpf" in the kernel's active LSM list (/sys/kernel/security/lsm) to actually
+    /// enforce anything; otherwise the program loads and attaches without error but the kernel
+    /// never invokes it, and panhandle prints a startup warning instead of blocking silently.
     #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
     #[serde(default)]
     pub syscalls: Option<Vec<String>>,

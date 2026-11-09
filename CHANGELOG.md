@@ -104,6 +104,20 @@
   runs the compiled binary against a real kernel as root, covering every
   CLI/config option and the combinations most likely to interact. Not run
   by CI by default (needs root and working eBPF) - see the script's header.
+- **Fixed: `--syscalls` could silently block nothing, with no error.**
+  Verified live via `strace`: a `BPF_PROG_TYPE_LSM` program's
+  `BPF_PROG_LOAD`/`BPF_RAW_TRACEPOINT_OPEN` (attach) calls both succeed
+  purely based on `CONFIG_BPF_LSM=y` being compiled into the kernel - they
+  don't check whether `bpf` is actually part of the kernel's *active* LSM
+  list (`/sys/kernel/security/lsm`). If it isn't, the kernel's security
+  framework never calls the attached hook at all, so `--syscalls` starts up
+  clean, logs nothing unusual, and enforces nothing. Added a startup check
+  (`blocking::bpf_lsm_active`) that prints a loud warning when `bpf` is
+  absent from `/sys/kernel/security/lsm`, so an operator can't mistake a
+  running-with-no-errors process for one that's actually blocking anything.
+  `scripts/verify-functionality` now asserts this warning fires on hosts
+  where the condition reproduces (this dev host included), and skips the
+  actual-blocking assertion there instead of silently appearing to pass.
 
 ## v1.0.24
 

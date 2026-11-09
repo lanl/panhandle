@@ -4,10 +4,37 @@ use crate::error::{PanhandleError, Result};
 use aya::{Btf, maps::HashMap};
 use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
 
+/// Returns true if the "bpf" LSM is present in the kernel's active LSM list
+/// (`/sys/kernel/security/lsm`). A BPF_PROG_TYPE_LSM program can load and
+/// attach successfully via BPF_RAW_TRACEPOINT_OPEN even when this is false
+/// (that call only requires CONFIG_BPF_LSM=y), but the kernel's security
+/// framework will never actually invoke the hook, so blocking silently does
+/// nothing. See docs/lsm-blocking.md.
+fn bpf_lsm_active() -> bool {
+    std::fs::read_to_string("/sys/kernel/security/lsm")
+        .map(|contents| lsm_list_contains_bpf(&contents))
+        .unwrap_or(false)
+}
+
+fn lsm_list_contains_bpf(contents: &str) -> bool {
+    contents.trim().split(',').any(|lsm| lsm == "bpf")
+}
+
 /// Setup syscall blocking (LSM hooks)
 pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Btf) -> Result<()> {
     if config.syscalls.is_empty() {
         return Ok(());
+    }
+
+    if !bpf_lsm_active() {
+        eprintln!(
+            "WARNING: --syscalls requested, but the \"bpf\" LSM is not in this kernel's active \
+             LSM list (/sys/kernel/security/lsm). The BPF_PROG_TYPE_LSM program will load and \
+             attach without error, but the kernel will never invoke it, so NO process will \
+             actually be blocked. Add \"bpf\" to the kernel's lsm= boot parameter (or your \
+             distro's CONFIG_LSM default list) and reboot to enable real enforcement. \
+             Continuing to run with blocking effectively disabled."
+        );
     }
 
     // Determine list mode (allow/deny)
@@ -95,5 +122,29 @@ fn resolve_comm_list_mode(
         Ok((ALLOW_LIST, comm_allow.to_vec()))
     } else {
         Ok((0, Vec::new()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lsm_list_contains_bpf;
+
+    #[test]
+    fn detects_bpf_present() {
+        assert!(lsm_list_contains_bpf("lockdown,capability,bpf,yama\n"));
+        assert!(lsm_list_contains_bpf("bpf"));
+    }
+
+    #[test]
+    fn detects_bpf_absent() {
+        assert!(!lsm_list_contains_bpf(
+            "lockdown,capability,landlock,yama,apparmor,ima,evm\n"
+        ));
+        assert!(!lsm_list_contains_bpf(""));
+    }
+
+    #[test]
+    fn does_not_match_substring() {
+        assert!(!lsm_list_contains_bpf("ebpf,bpfilter"));
     }
 }

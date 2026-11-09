@@ -325,6 +325,19 @@ test_syscalls_block_execve() {
     [ "$blocked_rc" -ne 0 ] && [ "$allowed_rc" -eq 0 ]
 }
 
+### --- On a kernel where "bpf" is absent from the active LSM list, the LSM program ###
+### still loads and attaches without error (BPF_RAW_TRACEPOINT_OPEN doesn't check   ###
+### LSM registration), but the kernel never invokes the hook, so --syscalls silently ###
+### blocks nothing. panhandle must warn loudly about this instead of running quiet. ###
+
+test_syscalls_warns_when_lsm_inactive() {
+    local log="$WORKDIR/syscalls_warn.log"
+    timeout 2 sudo "$BIN" --syscalls execve --comm-deny nonexistent_cmm --debug \
+        >"$log" 2>&1
+    grep -qi "WARNING.*bpf.*LSM.*not.*active\|WARNING.*never be invoked\|WARNING.*effectively disabled" "$log" \
+        || grep -qi "bpf.*is not in this kernel's active LSM list" "$log"
+}
+
 echo
 echo "=== Input validation ==="
 check "poll=0 rejected" test_validate_poll_zero
@@ -380,6 +393,7 @@ if grep -q "bpf" /sys/kernel/security/lsm 2>/dev/null; then
     check "--syscalls execve --comm-deny blocks only the targeted comm" test_syscalls_block_execve
 else
     skip "--syscalls execve blocking" "kernel's active LSM stack has no 'bpf' entry (/sys/kernel/security/lsm)"
+    check "--syscalls warns that blocking is a silent no-op on this kernel" test_syscalls_warns_when_lsm_inactive
 fi
 
 echo

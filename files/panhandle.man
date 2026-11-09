@@ -102,6 +102,9 @@ Polling interval in seconds that specifies the frequency of information returned
 .TP
 \fB--syscalls\fI <SYSCALLS>\fR
 Specify a comma separated list of syscalls to be blocked. Provide comm_allow or comm_deny to control which processes are blocked when executing these syscalls.
+Requires "bpf" in the kernel's active LSM list (/sys/kernel/security/lsm) to actually enforce
+anything; otherwise the program loads and attaches without error but the kernel never invokes
+it, and panhandle prints a startup warning instead of blocking silently.
 .TP
 \fB--block-paths\fI <FILEPATHS>\fR
 Specify a comma separated list of file paths to be blocked when blocking processes using --syscalls. Provide comm_allow or comm_deny to control which processes are blocked.

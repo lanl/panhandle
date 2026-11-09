@@ -55,7 +55,55 @@
 - **`aya`/`aya-log`/etc. now sourced from crates.io releases** instead of the
   `aya-v0.16.0` git tag, now that upstream publishes matching versions there.
   Pinned to a minimum version (not an exact `=` pin), and bumped `aya-ebpf`/
-  `aya-log-ebpf` to the latest published releases (0.3.0 each).
+  `aya-log-ebpf` to the latest published releases.
+- **Fixed: `--bound`'s network-wait stats were silently zero for
+  multi-threaded processes.** `tcp_recvmsg_entry`/`tcp_recvmsg_exit` keyed
+  the `NET_WAIT` accumulator by the raw kernel pid (the specific *thread*
+  that called `tcp_recvmsg`) instead of the tgid (the process id every
+  consumer, including `monitor_process_bounds.rs`'s procfs-driven lookup,
+  actually uses). Any process whose network I/O ran on a thread other than
+  the group leader - normal for most multi-threaded servers/clients - never
+  showed `Network_Wait_Count`/`Network_Wait_Time_MS` above 0.
+- **Fixed: `--memory-faults` silently ignored `--pid-list`**, despite
+  `--pid-list`'s own help text listing `memory_faults` as one of the
+  options it filters - it never accepted a `pid_filter` parameter at all.
+- **Performance: `--bound` opened a fresh netlink socket per process, per
+  poll cycle.** `linux_taskstats::Client::open()` does a full generic-netlink
+  round trip to resolve the taskstats family id; it's now opened once per
+  cycle and reused across every process instead.
+- **Performance: parent-process-name lookups weren't cached under
+  `--verbose`** for `memory`/`memory-faults`/`io`/`network`/`gpu` (many
+  processes commonly share one parent - a shell, container init, etc.) -
+  `cpu` already cached this; the same per-poll cache is now applied
+  consistently.
+- **Fixed: `--debug` mangled event output into invalid pseudo-JSON.**
+  `info!("\\{:#?}\\", json_string)` debug-formatted an already-serialized
+  JSON *string*, re-escaping it and wrapping the result in literal
+  backslashes - not pretty-printed, not readable, and not valid JSON. All
+  three call sites now log the already-valid JSON or prose string as-is.
+- **Execve/shell event JSON now built with `serde_json::json!`** instead of
+  hand-templated `format!`, and uid/pid/gid/tgid serialize as JSON numbers
+  instead of quoted strings, matching every other event type in this
+  codebase.
+- **`main.rs` no longer duplicates library modules.** `helpers.rs`,
+  `input_configs.rs`, `monitor_cpu_usage.rs`, `monitor_gpu_usage.rs`,
+  `monitor_io_usage.rs`, `monitor_network_usage.rs`, and `procfs_helpers.rs`
+  were each compiled twice - once in the `panhandle` lib target, again as a
+  separate local copy in the bin - letting the two drift out of sync
+  undetected. `main.rs` now imports these from the lib crate instead.
+- **New debug/verbose diagnostics**: a one-line summary of what's actually
+  enabled (monitors, `--pid-list`, poll interval) at startup; per-poll scan
+  timing and `--pid-list` match counts for every procfs-scanning monitor;
+  and which side (CLI or config file) supplied each merged value when both
+  are used together - all under `--debug`.
+- **Documented exclude/include UID precedence**: a uid inside
+  `--exclude-min-uid`/`--exclude-max-uid`'s range stays excluded even if
+  it's also listed in `--include-uid` (the eBPF side checks exclude first);
+  now noted in `--help` and the man page.
+- **Added `scripts/verify-functionality`**: a live regression suite that
+  runs the compiled binary against a real kernel as root, covering every
+  CLI/config option and the combinations most likely to interact. Not run
+  by CI by default (needs root and working eBPF) - see the script's header.
 
 ## v1.0.24
 

@@ -100,5 +100,20 @@ Linux server or VM and run there.
 
 ## Limitations
 
-The minimum kernel version supported is 4.3 per the [PerfEventArray /
-AsyncPerfEventArray docs](https://docs.rs/aya/latest/aya/maps/perf/struct.AsyncPerfEventArray.html)
+The minimum kernel version supported is **5.8**, per the
+[`RingBuf`](https://docs.rs/aya/latest/aya/maps/ring_buf/struct.RingBuf.html)
+map type every build of panhandle loads unconditionally (used for every
+event-producing probe: execve, shell, and socket events). Some individual
+features need more:
+
+- `--syscalls`/`--comm-allow`/`--comm-deny`/`--block-paths` (system-wide LSM
+  blocking): kernel 5.7+ ([`Lsm`](https://docs.rs/aya/latest/aya/programs/lsm/struct.Lsm.html)).
+- `--cgroup` (cgroup-scoped LSM blocking): kernel 6.0+
+  ([`LsmCgroup`](https://docs.rs/aya/latest/aya/programs/lsm_cgroup/struct.LsmCgroup.html)).
+- `--socket`/`--bound` (BTF tracepoints and fentry/fexit programs): kernel
+  5.5+, and require `CONFIG_DEBUG_INFO_BTF=y`.
+- `--syscalls`/`--cgroup` additionally require `CONFIG_BPF_LSM=y`, and "bpf"
+  in the kernel's active LSM list (`/sys/kernel/security/lsm`, usually set
+  via the `lsm=` boot parameter) to actually enforce anything - otherwise
+  the program attaches without error but blocks nothing. panhandle detects
+  this and prints a warning at startup rather than failing silently.

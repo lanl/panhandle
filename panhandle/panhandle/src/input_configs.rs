@@ -101,22 +101,22 @@ pub struct RawArgs {
     #[serde(default)]
     pub zsh: bool,
 
-    /// Receive a report of CPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    /// Receive a report of CPU usage over time. Filter by pid using --pid-list. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub cpu: bool,
 
-    /// Receive a report of GPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    /// Receive a report of GPU usage over time. Filter by pid using --pid-list. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub gpu: bool,
 
-    /// Receive a report of per-PID memory usage over time, such as RSS and stack usage. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    /// Receive a report of per-PID memory usage over time, such as RSS and stack usage. Filter by pid using --pid-list. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub memory: bool,
 
-    /// Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    /// Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub io: bool,

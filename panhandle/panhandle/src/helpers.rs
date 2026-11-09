@@ -865,7 +865,7 @@ pub fn get_parent_pid(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
     Ok(stat.ppid as u32)
 }
 
-/// Get the real UID that owns a process, from /proc/<pid>/status.
+/// Get the real UID that owns a process, from `/proc/<pid>/status`.
 pub fn get_process_uid(pid: u32) -> Option<u32> {
     Some(Process::new(pid as i32).ok()?.status().ok()?.ruid)
 }

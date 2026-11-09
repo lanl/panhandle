@@ -286,7 +286,7 @@ test_all_monitors_combined() {
     timeout 3 sudo "$BIN" --cpu --gpu --io --memory --socket --bound --poll 1 --pid-list 1,2 --debug \
         >"$log" 2>&1
     grep -q "attached eBPF BTF tracepoint" "$log" \
-        && grep -q "attached eBPF kprobe 'tcp_recvmsg_entry'" "$log" \
+        && grep -q "attached eBPF fentry 'tcp_recvmsg_entry'" "$log" \
         && ! grep -q "sys_enter_execve" "$log" # default execve must NOT run alongside these
 }
 

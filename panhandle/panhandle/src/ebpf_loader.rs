@@ -3,7 +3,9 @@ use crate::error::{PanhandleError, Result};
 use aya::{
     Btf, EbpfLoader, VerifierLogLevel,
     maps::RingBuf,
-    programs::{BtfTracePoint, RawTracePoint, TracePoint, UProbe, uprobe::UProbeScope},
+    programs::{
+        BtfTracePoint, FEntry, FExit, RawTracePoint, TracePoint, UProbe, uprobe::UProbeScope,
+    },
 };
 use aya_log::EbpfLogger;
 use panhandle_common::{
@@ -189,6 +191,52 @@ pub fn attach_btf_tracepoint(
 
     program
         .load(tracepoint_name, btf)
+        .map_err(PanhandleError::EbpfAttach)?;
+    program.attach().map_err(PanhandleError::EbpfAttach)?;
+
+    Ok(())
+}
+
+/// Attach an fentry program (BTF trampoline fired on entry to `function_name`).
+/// Prefer this over `attach_kprobe` for hot kernel functions: fentry/fexit attach via a
+/// BTF trampoline instead of a breakpoint trap, at near-zero overhead per call (Linux 5.5+,
+/// already implied by this crate's RingBuf-based event maps requiring 5.8+).
+pub fn attach_fentry(
+    ebpf: &mut aya::Ebpf,
+    program_name: &str,
+    function_name: &str,
+    btf: &Btf,
+) -> Result<()> {
+    let program: &mut FEntry = ebpf
+        .program_mut(program_name)
+        .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
+        .try_into()
+        .map_err(PanhandleError::EbpfAttach)?;
+
+    program
+        .load(function_name, btf)
+        .map_err(PanhandleError::EbpfAttach)?;
+    program.attach().map_err(PanhandleError::EbpfAttach)?;
+
+    Ok(())
+}
+
+/// Attach an fexit program (BTF trampoline fired on return from `function_name`).
+/// See `attach_fentry` for why this is preferred over `attach_kprobe`/kretprobe.
+pub fn attach_fexit(
+    ebpf: &mut aya::Ebpf,
+    program_name: &str,
+    function_name: &str,
+    btf: &Btf,
+) -> Result<()> {
+    let program: &mut FExit = ebpf
+        .program_mut(program_name)
+        .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
+        .try_into()
+        .map_err(PanhandleError::EbpfAttach)?;
+
+    program
+        .load(function_name, btf)
         .map_err(PanhandleError::EbpfAttach)?;
     program.attach().map_err(PanhandleError::EbpfAttach)?;
 

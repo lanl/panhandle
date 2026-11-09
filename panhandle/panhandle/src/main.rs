@@ -533,11 +533,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         debug!("attached eBPF BTF tracepoint 'inet_sock_set_state'");
 
-        // Attach kprobes for data transfer tracking
-        ebpf_loader::attach_kprobe(&mut ebpf, "tcp_sendmsg", "tcp_sendmsg")?;
-        ebpf_loader::attach_kprobe(&mut ebpf, "tcp_cleanup_rbuf", "tcp_cleanup_rbuf")?;
-        ebpf_loader::attach_kprobe(&mut ebpf, "udp_sendmsg", "udp_sendmsg")?;
-        ebpf_loader::attach_kprobe(&mut ebpf, "udp_recvmsg", "udp_recvmsg")?;
+        // Attach fentry/fexit for data transfer tracking - fexit is required for
+        // tcp_sendmsg/udp_sendmsg/udp_recvmsg, which need the real return value (see
+        // socket.rs); tcp_cleanup_rbuf only needs fentry since its argument is already
+        // accurate at entry.
+        ebpf_loader::attach_fexit(&mut ebpf, "tcp_sendmsg", "tcp_sendmsg", btf)?;
+        ebpf_loader::attach_fentry(&mut ebpf, "tcp_cleanup_rbuf", "tcp_cleanup_rbuf", btf)?;
+        ebpf_loader::attach_fexit(&mut ebpf, "udp_sendmsg", "udp_sendmsg", btf)?;
+        ebpf_loader::attach_fexit(&mut ebpf, "udp_recvmsg", "udp_recvmsg", btf)?;
 
         // Socket probes stream per-event deltas over a ring buffer rather than
         // maintaining shared aggregate state on the kernel side (see socket.rs for
@@ -690,13 +693,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // set up process bound monitoring
     let mut bound_handle: Option<JoinHandle<()>> = None;
     if args.bound {
-        ebpf_loader::attach_kprobe(&mut ebpf, "tcp_recvmsg_entry", "tcp_recvmsg")?;
-        debug!("attached eBPF kprobe 'tcp_recvmsg_entry' -> tcp_recvmsg");
+        let btf = shared_btf
+            .as_ref()
+            .ok_or("BTF not available on this system - process-bound monitoring requires it")?;
 
-        // Attach kretprobe on return from tcp_recvmsg to compute elapsed wait time and
+        ebpf_loader::attach_fentry(&mut ebpf, "tcp_recvmsg_entry", "tcp_recvmsg", btf)?;
+        debug!("attached eBPF fentry 'tcp_recvmsg_entry' -> tcp_recvmsg");
+
+        // Attach fexit on return from tcp_recvmsg to compute elapsed wait time and
         // fold it into NET_WAIT.
-        ebpf_loader::attach_kprobe(&mut ebpf, "tcp_recvmsg_exit", "tcp_recvmsg")?;
-        debug!("attached eBPF kretprobe 'tcp_recvmsg_exit' -> tcp_recvmsg");
+        ebpf_loader::attach_fexit(&mut ebpf, "tcp_recvmsg_exit", "tcp_recvmsg", btf)?;
+        debug!("attached eBPF fexit 'tcp_recvmsg_exit' -> tcp_recvmsg");
+
+        // Same timing pair for UDP, folding into the same NET_WAIT entry per process -
+        // "Network_Wait" is meant to cover time spent waiting on any socket read.
+        ebpf_loader::attach_fentry(&mut ebpf, "udp_recvmsg_entry", "udp_recvmsg", btf)?;
+        debug!("attached eBPF fentry 'udp_recvmsg_entry' -> udp_recvmsg");
+
+        ebpf_loader::attach_fexit(&mut ebpf, "udp_recvmsg_exit", "udp_recvmsg", btf)?;
+        debug!("attached eBPF fexit 'udp_recvmsg_exit' -> udp_recvmsg");
 
         // Wrapped in Arc<Mutex<_>> purely for Send/Sync convenience across the tokio
         // task boundary - the map itself is only ever touched from that one task.

@@ -2,6 +2,27 @@
 
 ## v1.0.26
 
+- **`--bound`'s network-wait timing now covers UDP, not just TCP**: added an
+  `udp_recvmsg` fentry/fexit pair alongside the existing `tcp_recvmsg` one,
+  folding into the same `NET_WAIT` accumulator per process - "Network_Wait"
+  is meant to be protocol-agnostic time spent waiting on any socket read.
+- **`--bound`/`--socket`'s kprobes replaced with fentry/fexit** (aya 0.16
+  exposes `FEntry`/`FExit` program types): `tcp_recvmsg`/`udp_recvmsg` (wait
+  timing), `tcp_sendmsg`/`tcp_cleanup_rbuf`/`udp_sendmsg`/`udp_recvmsg` (byte
+  counting). fentry/fexit attach via a BTF trampoline instead of a kprobe's
+  breakpoint trap, at near-zero overhead per call - worth it here since these
+  all run on every socket read/write.
+- **Fixed: `--socket`'s UDP received-byte count was the requested buffer
+  size, not the actual bytes received.** The old kprobe on `udp_recvmsg`
+  read its `len` argument at function entry - the size of the buffer the
+  caller passed to `recvfrom()`/`recvmsg()`, not how much data arrived.
+  Verified live: 50 datagrams of 10 real bytes each, read into a
+  65507-byte buffer, reported ~3 MB received instead of the correct ~0 MB.
+  Moving to fexit and reading the function's actual return value (bytes
+  received, or a negative errno on failure) fixes this; the same
+  entry-vs-return-value issue applied to `tcp_sendmsg`/`udp_sendmsg` (a
+  short write or a failed send could be counted as a full-size success),
+  fixed the same way.
 - Implemented Aya 0.16 improvements:
   - **TestRun for eBPF unit tests**: Added test module in
     `panhandle-ebpf/src/main.rs` with `#[test]` functions for eBPF program

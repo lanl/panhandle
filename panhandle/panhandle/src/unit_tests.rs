@@ -7,8 +7,11 @@ mod tests {
 
     use crate::{
         helpers::*, input_configs::*, monitor_cpu_usage::*, monitor_gpu_usage::*,
-        monitor_io_usage::*, monitor_network_usage::*, procfs_helpers::*,
+        monitor_io_usage::*, monitor_network_usage::*, monitor_process_bounds::*,
+        procfs_helpers::*,
     };
+    use panhandle::config::{AppConfig, PanhandleConfig, ShellConfig};
+    use panhandle::error::PanhandleError;
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
     #[tokio::test]
@@ -2625,5 +2628,427 @@ mod tests {
             zeroed.to_string(),
             "entry: , command: , uid: 0, pid: 0, gid: 0, tgid: 0"
         );
+    }
+
+    // --- AppConfig validation: each validate_* method, direct unit coverage ---
+    // (previously only exercised indirectly via config_integration.rs's CLI-spawn tests)
+
+    #[test]
+    fn test_app_config_validate_uid_range() {
+        let config = AppConfig {
+            exclude_min_uid: 500,
+            exclude_max_uid: 100,
+            ..Default::default()
+        };
+        match config.validate_uid_range() {
+            Err(PanhandleError::UidValidation(msg)) => {
+                assert!(msg.contains("must not be greater than"));
+            }
+            other => panic!("Expected UidValidation error, got {other:?}"),
+        }
+
+        let ok = AppConfig {
+            exclude_min_uid: 100,
+            exclude_max_uid: 500,
+            ..Default::default()
+        };
+        assert!(ok.validate_uid_range().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_validate_include_uids() {
+        let config = AppConfig {
+            include_uids: (0..=UID_COUNT as u32).collect(), // UID_COUNT + 1 entries
+            ..Default::default()
+        };
+        match config.validate_include_uids() {
+            Err(PanhandleError::UidValidation(msg)) => {
+                assert!(msg.contains("Too many include UIDs"));
+            }
+            other => panic!("Expected UidValidation error, got {other:?}"),
+        }
+
+        let ok = AppConfig {
+            include_uids: (0..UID_COUNT as u32).collect(), // exactly UID_COUNT
+            ..Default::default()
+        };
+        assert!(ok.validate_include_uids().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_validate_executables() {
+        let config = AppConfig {
+            executables: vec!["/bin/1".to_string(); EXECUTABLE_COUNT + 1],
+            ..Default::default()
+        };
+        match config.validate_executables() {
+            Err(PanhandleError::InvalidArgument(msg)) => {
+                assert!(msg.contains("Too many executables"));
+            }
+            other => panic!("Expected InvalidArgument error, got {other:?}"),
+        }
+
+        let ok = AppConfig {
+            executables: vec!["/bin/1".to_string(); EXECUTABLE_COUNT],
+            ..Default::default()
+        };
+        assert!(ok.validate_executables().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_validate_block_paths() {
+        let config = AppConfig {
+            block_paths: vec!["/path".to_string(); MAX_BLOCKED_PATHS + 1],
+            ..Default::default()
+        };
+        match config.validate_block_paths() {
+            Err(PanhandleError::PathValidation(msg)) => {
+                assert!(msg.contains("Too many block paths"));
+            }
+            other => panic!("Expected PathValidation error, got {other:?}"),
+        }
+
+        let ok = AppConfig {
+            block_paths: vec!["/path".to_string(); MAX_BLOCKED_PATHS],
+            ..Default::default()
+        };
+        assert!(ok.validate_block_paths().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_validate_comm_lists() {
+        let both = AppConfig {
+            comm_allow: vec!["bash".to_string()],
+            comm_deny: vec!["zsh".to_string()],
+            ..Default::default()
+        };
+        match both.validate_comm_lists() {
+            Err(PanhandleError::CommValidation(msg)) => {
+                assert!(msg.contains("Cannot specify both --comm-allow and --comm-deny"));
+            }
+            other => panic!("Expected CommValidation error, got {other:?}"),
+        }
+
+        let too_many = AppConfig {
+            comm_allow: vec!["c".to_string(); MAX_BLOCKED_COMMS + 1],
+            ..Default::default()
+        };
+        match too_many.validate_comm_lists() {
+            Err(PanhandleError::CommValidation(msg)) => {
+                assert!(msg.contains("Too many comm entries"));
+            }
+            other => panic!("Expected CommValidation error, got {other:?}"),
+        }
+
+        let too_long = AppConfig {
+            comm_allow: vec!["a".repeat(MAX_COMM_LENGTH + 1)],
+            ..Default::default()
+        };
+        match too_long.validate_comm_lists() {
+            Err(PanhandleError::CommValidation(msg)) => {
+                assert!(msg.contains("exceeds max length"));
+            }
+            other => panic!("Expected CommValidation error, got {other:?}"),
+        }
+
+        let ok = AppConfig {
+            comm_allow: vec!["bash".to_string(), "zsh".to_string()],
+            ..Default::default()
+        };
+        assert!(ok.validate_comm_lists().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_validate_block_path_lengths() {
+        let config = AppConfig {
+            block_paths: vec!["a".repeat(MAX_PATH_LENGTH + 1)],
+            ..Default::default()
+        };
+        match config.validate_block_path_lengths() {
+            Err(PanhandleError::PathValidation(msg)) => {
+                assert!(msg.contains("exceeds max length"));
+            }
+            other => panic!("Expected PathValidation error, got {other:?}"),
+        }
+
+        let ok = AppConfig {
+            block_paths: vec!["a".repeat(MAX_PATH_LENGTH)],
+            ..Default::default()
+        };
+        assert!(ok.validate_block_path_lengths().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_validate_all_syscalls_and_poll() {
+        let bad_syscall = AppConfig {
+            syscalls: vec!["invalid_syscall".to_string()],
+            ..Default::default()
+        };
+        match bad_syscall.validate_all() {
+            Err(PanhandleError::InvalidArgument(msg)) => {
+                assert!(msg.contains("Invalid syscall"));
+            }
+            other => panic!("Expected InvalidArgument error, got {other:?}"),
+        }
+
+        let ok_syscalls = AppConfig {
+            syscalls: vec![
+                "open".to_string(),
+                "openat".to_string(),
+                "creat".to_string(),
+                "execve".to_string(),
+            ],
+            ..Default::default()
+        };
+        assert!(ok_syscalls.validate_all().is_ok());
+
+        let zero_poll = AppConfig {
+            poll_seconds: 0,
+            ..Default::default()
+        };
+        match zero_poll.validate_all() {
+            Err(PanhandleError::InvalidArgument(msg)) => {
+                assert!(msg.contains("--poll must be at least 1"));
+            }
+            other => panic!("Expected InvalidArgument error, got {other:?}"),
+        }
+
+        assert!(AppConfig::default().validate_all().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_build_global_configs() {
+        let config = AppConfig {
+            shells: true,
+            exclude_min_uid: 100,
+            exclude_max_uid: 999,
+            include_uids: vec![1000, 1001],
+            ..Default::default()
+        };
+
+        let (panhandle_config, shell_config) = config.build_global_configs();
+
+        for cfg in [
+            (
+                panhandle_config.shells,
+                panhandle_config.exclude_min_uid,
+                panhandle_config.exclude_max_uid,
+                panhandle_config.include_enabled,
+                panhandle_config.include_uids,
+            ),
+            (
+                shell_config.shells,
+                shell_config.exclude_min_uid,
+                shell_config.exclude_max_uid,
+                shell_config.include_enabled,
+                shell_config.include_uids,
+            ),
+        ] {
+            assert_eq!(cfg.0, 1);
+            assert_eq!(cfg.1, 100);
+            assert_eq!(cfg.2, 999);
+            assert_eq!(cfg.3, 1);
+            assert_eq!(cfg.4[0], 1000);
+            assert_eq!(cfg.4[1], 1001);
+        }
+    }
+
+    #[test]
+    fn test_app_config_build_global_configs_no_include_uids() {
+        let config = AppConfig {
+            include_uids: vec![],
+            ..Default::default()
+        };
+
+        let (panhandle_config, shell_config) = config.build_global_configs();
+
+        assert_eq!(panhandle_config.include_enabled, 0);
+        assert_eq!(panhandle_config.include_uids, [0u32; UID_COUNT]);
+        assert_eq!(shell_config.include_enabled, 0);
+        assert_eq!(shell_config.include_uids, [0u32; UID_COUNT]);
+    }
+
+    // --- PanhandleConfig/ShellConfig: defaults and Pod-safety (byte-reinterpretable, no padding) ---
+
+    #[test]
+    fn test_panhandle_and_shell_config_default() {
+        let p = PanhandleConfig::default();
+        let s = ShellConfig::default();
+        for (shells, min_uid, max_uid, include_enabled, include_uids) in [
+            (
+                p.shells,
+                p.exclude_min_uid,
+                p.exclude_max_uid,
+                p.include_enabled,
+                p.include_uids,
+            ),
+            (
+                s.shells,
+                s.exclude_min_uid,
+                s.exclude_max_uid,
+                s.include_enabled,
+                s.include_uids,
+            ),
+        ] {
+            assert_eq!(shells, 0);
+            assert_eq!(min_uid, 0);
+            assert_eq!(max_uid, 0);
+            assert_eq!(include_enabled, 0);
+            assert_eq!(include_uids, [0u32; UID_COUNT]);
+        }
+    }
+
+    #[test]
+    fn test_panhandle_and_shell_config_pod_size() {
+        let p = PanhandleConfig::default();
+        let bytes = unsafe {
+            core::slice::from_raw_parts(&p as *const _ as *const u8, size_of::<PanhandleConfig>())
+        };
+        assert_eq!(bytes.len(), size_of::<PanhandleConfig>());
+
+        let s = ShellConfig::default();
+        let bytes = unsafe {
+            core::slice::from_raw_parts(&s as *const _ as *const u8, size_of::<ShellConfig>())
+        };
+        assert_eq!(bytes.len(), size_of::<ShellConfig>());
+    }
+
+    // --- ConfigArgs/RawArgs: every bool flag defaults to false, no accidental "always-on" field ---
+
+    #[test]
+    fn test_config_args_default_all_flags_false() {
+        let config = ConfigArgs::default();
+        assert!(!config.bash);
+        assert!(!config.debug);
+        assert!(!config.syscall_execve);
+        assert!(!config.json);
+        assert!(!config.verbose);
+        assert!(!config.zsh);
+        assert!(!config.quiet);
+        assert!(!config.shells);
+        assert!(!config.socket);
+        assert!(!config.io);
+        assert!(!config.cpu);
+        assert!(!config.gpu);
+        assert!(!config.memory);
+    }
+
+    #[test]
+    fn test_raw_args_default_all_flags_false() {
+        let args = RawArgs::default();
+        assert!(!args.bash);
+        assert!(!args.debug);
+        assert!(!args.syscall_execve);
+        assert!(!args.json);
+        assert!(!args.verbose);
+        assert!(!args.zsh);
+        assert!(!args.quiet);
+        assert!(!args.shells);
+        assert!(!args.socket);
+        assert!(!args.io);
+        assert!(!args.cpu);
+        assert!(!args.gpu);
+        assert!(!args.memory);
+        assert_eq!(args.poll, None);
+        assert_eq!(args.executables, None);
+        assert!(args.output.is_none());
+    }
+
+    // --- monitor_process_bounds::format_bound_{prose,json}: no prior coverage at all ---
+
+    #[test]
+    fn test_format_bound_prose() {
+        let verbose = format_bound_prose(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            10,
+            20,
+            30,
+            40,
+            50,
+            60,
+            70,
+            80,
+            90,
+            100,
+            110,
+            120,
+        );
+        assert_eq!(
+            verbose,
+            "Type: bound, PID: 42, Comm: bash, Parent PID: 1, Parent Comm: systemd, \
+            CPU Wait Count: 10, CPU Wait Time MS: 20, Voluntary Ctx Switches: 30, Nonvoluntary Ctx Switches: 40, \
+            BlkIO Wait Count: 50, BlkIO Wait Time MS: 60, \
+            Swapin Wait Count: 70, Swapin Wait Time MS: 80, \
+            Page Wait Count: 90, Page Wait Time MS: 100, \
+            Network Wait Count: 110, Network Wait Time MS: 120"
+        );
+
+        let compact = format_bound_prose(
+            false, 42, "bash", None, None, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+        );
+        assert_eq!(
+            compact,
+            "Type: bound, PID: 42, Comm: bash, \
+            CPU Wait Count: 10, CPU Wait Time MS: 20, Voluntary Ctx Switches: 30, Nonvoluntary Ctx Switches: 40, \
+            BlkIO Wait Count: 50, BlkIO Wait Time MS: 60, \
+            Swapin Wait Count: 70, Swapin Wait Time MS: 80, \
+            Page Wait Count: 90, Page Wait Time MS: 100, \
+            Network Wait Count: 110, Network Wait Time MS: 120"
+        );
+    }
+
+    #[test]
+    fn test_format_bound_json() {
+        let verbose = format_bound_json(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            10,
+            20,
+            30,
+            40,
+            50,
+            60,
+            70,
+            80,
+            90,
+            100,
+            110,
+            120,
+        );
+        assert_eq!(
+            verbose,
+            "{\"Type\": \"bound\", \"PID\": 42, \"Comm\": \"bash\", \"PPID\": 1, \"Parent_Comm\": \"systemd\", \
+            \"CPU_Wait_Count\": 10, \"CPU_Wait_Time_MS\": 20, \"Voluntary_Ctx_Switches\": 30, \"Nonvoluntary_Ctx_Switches\": 40, \
+            \"BlkIO_Wait_Count\": 50, \"BlkIO_Wait_Time_MS\": 60, \
+            \"Swapin_Wait_Count\": 70, \"Swapin_Wait_Time_MS\": 80, \
+            \"Page_Wait_Count\": 90, \"Page_Wait_Time_MS\": 100, \
+            \"Network_Wait_Count\": 110, \"Network_Wait_Time_MS\": 120}"
+        );
+
+        let compact = format_bound_json(
+            false, 42, "bash", None, None, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+        );
+        assert_eq!(
+            compact,
+            "{\"Type\": \"bound\", \"PID\": 42, \"Comm\": \"bash\", \
+            \"CPU_Wait_Count\": 10, \"CPU_Wait_Time_MS\": 20, \"Voluntary_Ctx_Switches\": 30, \"Nonvoluntary_Ctx_Switches\": 40, \
+            \"BlkIO_Wait_Count\": 50, \"BlkIO_Wait_Time_MS\": 60, \
+            \"Swapin_Wait_Count\": 70, \"Swapin_Wait_Time_MS\": 80, \
+            \"Page_Wait_Count\": 90, \"Page_Wait_Time_MS\": 100, \
+            \"Network_Wait_Count\": 110, \"Network_Wait_Time_MS\": 120}"
+        );
+
+        // comm containing characters that need JSON escaping must come through json_quoted
+        let escaped = format_bound_json(
+            false, 7, "a\"b", None, None, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        );
+        assert!(escaped.contains("\"Comm\": \"a\\\"b\""));
     }
 }

@@ -4,8 +4,9 @@
 zypper install -y gcc gcc7 vim
 zypper update -y
 curl https://sh.rustup.rs -sSf | sh -s -- -y
+# shellcheck source=/dev/null
 source ~/.cargo/env
-cd ~/panhandle
+cd ~/panhandle || exit
 ~/.cargo/bin/rustup toolchain install stable
 ~/.cargo/bin/rustup toolchain install nightly --component rust-src
 ~/.cargo/bin/cargo install cargo-generate-rpm bpf-linker

@@ -2,7 +2,7 @@
 # script to build on rz-m001
 #export OPENSSL_INCLUDE_DIR="/usr/include/openssl"
 #export OPENSSL_LIB_DIR="/etc/ssl"
-cd /root/skip/panhandle/panhandle
+cd /root/skip/panhandle/panhandle || exit
 rm -f /root/skip/panhandle/rpmbuild/sles/panhandle*.rpm
 #cargo install cross
 git pull

@@ -4,6 +4,7 @@ set -euo pipefail
 
 echo "=== Installing Rust toolchain ==="
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# shellcheck source=/dev/null
 source "$HOME/.cargo/env"
 
 echo "=== Installing required Rust toolchains ==="

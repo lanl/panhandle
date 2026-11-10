@@ -131,6 +131,17 @@ fn set_uid_options(
     Ok(())
 }
 
+/// Log which program failed (to every configured log output, not just stderr) before
+/// wrapping the error - the bare `EbpfAttach(...)` error doesn't name the program.
+fn attach_failed(program_name: &str, e: aya::programs::ProgramError) -> PanhandleError {
+    log::error!(
+        "failed to load/attach eBPF program '{}': {}",
+        program_name,
+        e
+    );
+    PanhandleError::EbpfAttach(e)
+}
+
 /// Attach a (non-raw) tracepoint. Prefer this over `attach_raw_tracepoint` for syscall
 /// tracepoints: the kernel only exposes raw tracepoints named `sys_enter`/`sys_exit`
 /// (shared by every syscall, with no per-syscall raw tracepoint such as
@@ -146,12 +157,12 @@ pub fn attach_tracepoint(
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
-    program.load().map_err(PanhandleError::EbpfAttach)?;
+    program.load().map_err(|e| attach_failed(program_name, e))?;
     program
         .attach(category, tracepoint_name)
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }
@@ -166,12 +177,12 @@ pub fn attach_raw_tracepoint(
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
-    program.load().map_err(PanhandleError::EbpfAttach)?;
+    program.load().map_err(|e| attach_failed(program_name, e))?;
     program
         .attach(tracepoint_name)
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }
@@ -187,12 +198,14 @@ pub fn attach_btf_tracepoint(
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     program
         .load(tracepoint_name, btf)
-        .map_err(PanhandleError::EbpfAttach)?;
-    program.attach().map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
+    program
+        .attach()
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }
@@ -211,12 +224,14 @@ pub fn attach_fentry(
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     program
         .load(function_name, btf)
-        .map_err(PanhandleError::EbpfAttach)?;
-    program.attach().map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
+    program
+        .attach()
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }
@@ -233,12 +248,14 @@ pub fn attach_fexit(
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     program
         .load(function_name, btf)
-        .map_err(PanhandleError::EbpfAttach)?;
-    program.attach().map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
+    program
+        .attach()
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }
@@ -254,12 +271,12 @@ pub fn attach_uprobe(
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
-    program.load().map_err(PanhandleError::EbpfAttach)?;
+    program.load().map_err(|e| attach_failed(program_name, e))?;
     program
         .attach([attach_point], binary_path, UProbeScope::AllProcesses)
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }
@@ -274,12 +291,12 @@ pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str, function_name: &s
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
-    program.load().map_err(PanhandleError::EbpfAttach)?;
+    program.load().map_err(|e| attach_failed(program_name, e))?;
     program
         .attach(function_name, 0)
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }
@@ -297,12 +314,14 @@ pub fn attach_lsm_hook(
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     program
         .load(hook_name, btf)
-        .map_err(PanhandleError::EbpfAttach)?;
-    program.attach().map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
+    program
+        .attach()
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }
@@ -331,14 +350,14 @@ pub fn attach_lsm_cgroup_hook(
         .program_mut(program_name)
         .ok_or_else(|| PanhandleError::MissingProgram(program_name.to_string()))?
         .try_into()
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     program
         .load(hook_name, btf)
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
     program
         .attach(cgroup_file)
-        .map_err(PanhandleError::EbpfAttach)?;
+        .map_err(|e| attach_failed(program_name, e))?;
 
     Ok(())
 }

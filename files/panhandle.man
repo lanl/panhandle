@@ -54,7 +54,7 @@ Monitor events from the execve syscall. This is the program default if no other 
 Output execve syscall events only from the shells: bash, tcsh, & zsh. This does not effect the output of the bash or zsh options.
 .TP
 \fB--socket\fP
-Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll.
+Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll. Requires kernel 5.17+ (or a distro kernel with the bpf_get_func_ret helper backported) and kernel BTF.
 .TP
 \fB--cpu\fP
 Receive a report of CPU usage over time. Filter by pid using --pid-list. Specify information polling interval with --poll.

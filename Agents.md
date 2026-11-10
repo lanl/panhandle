@@ -82,7 +82,7 @@ cd panhandle && cargo deny check
 - **Rust**: 2024 edition, nightly toolchain
 - **eBPF**: Aya 0.16+, kernel 5.8+ (RingBuf, always loaded); some features need
   more - see panhandle/README.md's Limitations section (5.7+ for --syscalls,
-  6.0+ for --cgroup, 5.5+ and CONFIG_DEBUG_INFO_BTF for --socket/--bound)
+  6.0+ for --cgroup, 5.17+ for --socket, 5.5+ for --bound; both need CONFIG_DEBUG_INFO_BTF)
 - **Build**: cargo, make
 - **Testing**: cargo test, integration tests in `panhandle/tests/`; live CLI/config
   regression suite (needs root + real eBPF, not run by `cargo test` or CI) via

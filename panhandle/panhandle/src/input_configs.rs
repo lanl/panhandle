@@ -52,6 +52,7 @@ pub struct RawArgs {
     pub executables: Option<Vec<String>>,
 
     /// Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll.
+    /// Requires kernel 5.17+ (or a distro kernel with the bpf_get_func_ret helper backported) and kernel BTF.
     #[arg(long, global = true)]
     #[serde(default)]
     pub socket: bool,

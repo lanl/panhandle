@@ -110,8 +110,11 @@ features need more:
   blocking): kernel 5.7+ ([`Lsm`](https://docs.rs/aya/latest/aya/programs/lsm/struct.Lsm.html)).
 - `--cgroup` (cgroup-scoped LSM blocking): kernel 6.0+
   ([`LsmCgroup`](https://docs.rs/aya/latest/aya/programs/lsm_cgroup/struct.LsmCgroup.html)).
-- `--socket`/`--bound` (BTF tracepoints and fentry/fexit programs): kernel
-  5.5+, and require `CONFIG_DEBUG_INFO_BTF=y`.
+- `--socket`: kernel 5.17+ (its fexit programs read return values with the
+  `bpf_get_func_ret` helper, added in 5.17 - some distro kernels backport it),
+  and `CONFIG_DEBUG_INFO_BTF=y`. On older kernels it fails at startup.
+- `--bound` (fentry/fexit programs): kernel 5.5+, and
+  `CONFIG_DEBUG_INFO_BTF=y`.
 - `--syscalls`/`--cgroup` additionally require `CONFIG_BPF_LSM=y`, and "bpf"
   in the kernel's active LSM list (`/sys/kernel/security/lsm`, usually set
   via the `lsm=` boot parameter) to actually enforce anything - otherwise

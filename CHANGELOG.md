@@ -2,6 +2,13 @@
 
 ## v1.0.25
 
+- **Fixed: `--bound`'s `NET_WAIT` accumulator had the same cross-CPU
+  lost-update race `socket.rs` was already redesigned around** - two threads
+  of the same process finishing a network wait on different CPUs at the same
+  time could race and lose an update. Fixed the same way: eBPF streams a
+  `NetWaitEvent` delta per completed wait over a new `net_wait_events` ring
+  buffer, and `monitor_process_bounds.rs` accumulates them in its own
+  userspace-owned map instead.
 - **Added `--cgroup <PATH>`**: scopes `--syscalls` blocking to a single cgroup v2
   directory (e.g. `/sys/fs/cgroup/myjob.slice`) instead of system-wide. Uses aya's
   `LsmCgroup` program type (separate `block_open_cgroup`/`block_execve_cgroup`

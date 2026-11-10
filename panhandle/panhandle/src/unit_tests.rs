@@ -3118,4 +3118,37 @@ mod tests {
         let provenance = merge_provenance(&cli, &config);
         assert!(provenance.contains(&"cgroup=cli".to_string()));
     }
+
+    // --- apply_net_wait_event: userspace accumulation of NetWaitEvent deltas, the
+    // fix for network_bound.rs's NET_WAIT cross-CPU lost-update race (see
+    // NetWaitEvent's doc comment) ---
+
+    #[test]
+    fn test_apply_net_wait_event_accumulates_per_pid() {
+        let net_wait: SharedNetWaitMap =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
+        apply_net_wait_event(&net_wait, &NetWaitEvent::new(42, 1_000_000));
+        apply_net_wait_event(&net_wait, &NetWaitEvent::new(42, 2_000_000));
+        apply_net_wait_event(&net_wait, &NetWaitEvent::new(7, 500_000));
+
+        let map = net_wait.lock().unwrap();
+        let stat42 = map.get(&42).expect("pid 42 should have an entry");
+        assert_eq!(stat42.count, 2);
+        assert_eq!(stat42.total_ns, 3_000_000);
+
+        let stat7 = map.get(&7).expect("pid 7 should have an entry");
+        assert_eq!(stat7.count, 1);
+        assert_eq!(stat7.total_ns, 500_000);
+    }
+
+    #[test]
+    fn test_apply_net_wait_event_unknown_pid_absent() {
+        let net_wait: SharedNetWaitMap =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        apply_net_wait_event(&net_wait, &NetWaitEvent::new(1, 100));
+
+        let map = net_wait.lock().unwrap();
+        assert!(map.get(&2).is_none());
+    }
 }

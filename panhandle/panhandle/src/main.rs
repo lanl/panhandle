@@ -713,11 +713,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ebpf_loader::attach_fexit(&mut ebpf, "udp_recvmsg_exit", "udp_recvmsg", btf)?;
         debug!("attached eBPF fexit 'udp_recvmsg_exit' -> udp_recvmsg");
 
-        // Wrapped in Arc<Mutex<_>> purely for Send/Sync convenience across the tokio
-        // task boundary - the map itself is only ever touched from that one task.
-        let net_wait: SharedNetWaitMap = Arc::new(Mutex::new(ebpf_loader::get_hash_map(
-            &mut ebpf, "NET_WAIT",
-        )?));
+        // Network-wait probes stream per-event deltas over a ring buffer rather than
+        // maintaining shared aggregate state on the kernel side (see network_bound.rs
+        // for why); this userspace-owned map accumulates them, and
+        // monitor_process_bounds both reads and prunes it.
+        let net_wait: SharedNetWaitMap = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        let net_wait_async_fd =
+            ebpf_loader::create_ring_buffer_async_fd(&mut ebpf, "net_wait_events")?;
+        let net_wait_consumer = net_wait.clone();
+        tokio::task::spawn(consume_net_wait_ebpf_map(
+            net_wait_async_fd,
+            net_wait_consumer,
+        ));
 
         let url = global_url.clone();
         let host = hostname.clone();

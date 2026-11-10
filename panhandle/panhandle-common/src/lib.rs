@@ -228,6 +228,38 @@ impl SocketStatsEvent {
     }
 }
 
+/// One completed network wait (a single `tcp_recvmsg`/`udp_recvmsg` call returning),
+/// reported by `network_bound.rs`'s fentry/fexit pair. Sent over a ring buffer rather
+/// than accumulated in a kernel-side map for the same reason as `SocketStatsEvent`:
+/// a shared per-pid map updated via get -> mutate -> insert is not atomic across CPUs,
+/// so two threads of the same process finishing a wait on different CPUs at the same
+/// time can race and lose an update. Each event always represents exactly one
+/// completed wait, so there's no separate "count" field - userspace increments its own
+/// accumulator's count by one per event received.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NetWaitEvent {
+    pub pid: u32,
+    pub elapsed_ns: u64,
+}
+
+impl NetWaitEvent {
+    /// Create a new `NetWaitEvent` for the given PID and elapsed wait time.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use panhandle_common::NetWaitEvent;
+    ///
+    /// let event = NetWaitEvent::new(1234, 5_000_000);
+    /// assert_eq!(event.pid, 1234);
+    /// assert_eq!(event.elapsed_ns, 5_000_000);
+    /// ```
+    pub const fn new(pid: u32, elapsed_ns: u64) -> Self {
+        Self { pid, elapsed_ns }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SysEnterExecve {

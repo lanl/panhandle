@@ -8,9 +8,16 @@ use aya_ebpf::{
 };
 use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
 
-use crate::vmlinux::file;
-
 const PATH_SIZE: usize = 256;
+
+/// Byte offset of `f_path` within `struct file` on the running kernel, written by
+/// userspace at load time from kernel BTF (see panhandle's btf_offsets.rs). Rust eBPF
+/// code has no CO-RE field relocations, and `struct file`'s layout differs between
+/// kernels (f_path moved around 6.12), so a compiled-in offset only works on some of
+/// them. This lives in frozen .rodata, so the verifier sees it as a constant and still
+/// accepts the resulting pointer as a `struct path *` for bpf_d_path.
+#[unsafe(no_mangle)]
+static FILE_F_PATH_OFFSET: u32 = 0;
 
 // -EPERM: what we return to actually block the operation
 const EPERM: i32 = -1;
@@ -69,14 +76,22 @@ fn should_block_open(ctx: LsmContext) -> bool {
         return false;
     }
 
-    let f: *const file = ctx.arg(0);
+    let f: *const u8 = ctx.arg(0);
 
     let Some(ptr) = PATH_SCRATCH.get_ptr_mut(0) else {
         return true; // couldn't get scratch space, deny by default
     };
     let scratch = unsafe { &mut *ptr };
+    // Zero first: bpf_d_path writes the path plus a NUL and leaves the rest of the
+    // buffer untouched, so after this the buffer is exactly the zero-padded key format
+    // userspace uses for BLOCKED_PATHS and can be looked up directly. (Copying a
+    // variable-length path into a separate stack key is rejected by the verifier as an
+    // unbounded variable-offset stack write.)
+    scratch.buf = [0u8; PATH_SIZE];
 
-    let path_ptr = unsafe { &(*f).f_path } as *const _ as *mut core::ffi::c_void;
+    // read_volatile so the compiler can't fold in the placeholder 0 at build time
+    let f_path_offset = unsafe { core::ptr::read_volatile(&FILE_F_PATH_OFFSET) } as usize;
+    let path_ptr = unsafe { f.add(f_path_offset) } as *mut core::ffi::c_void;
 
     #[cfg(bpf_target_arch = "aarch64")]
     let buf_ptr = scratch.buf.as_mut_ptr() as *mut u8;
@@ -87,17 +102,8 @@ fn should_block_open(ctx: LsmContext) -> bool {
     let ret: c_long = unsafe { bpf_d_path(path_ptr as *mut _, buf_ptr, PATH_SIZE as u32) };
 
     if ret > 0 {
-        // bpf_d_path's return value includes the trailing NUL and, in the worst
-        // case, could equal PATH_SIZE -- clamp (don't wrap) so a full-length path
-        // is never mistaken for an empty one and slicing stays in-bounds.
-        let len = (ret as usize).min(PATH_SIZE);
-        // Linux paths are arbitrary bytes, not guaranteed valid UTF-8, so compare
-        // raw bytes rather than constructing a &str (which path_is_blocked would
-        // just call .as_bytes() on anyway).
-        let path_bytes = &scratch.buf[..len];
-
         // If path map has real entries (not just placeholder) and this path isn't blocked, allow it
-        if !is_path_map_empty() && !path_is_blocked(path_bytes) {
+        if !is_path_map_empty() && !path_is_blocked(&scratch.buf) {
             return false; // comm is blocked but the path isn't, allow it
         }
     }
@@ -175,11 +181,10 @@ fn get_list_mode() -> u8 {
 }
 
 // Returns true if the provided file path is in the forbidden file list
-fn path_is_blocked(path_bytes: &[u8]) -> bool {
-    let mut key: [u8; 256] = [0u8; 256];
-    let len = path_bytes.len().min(256);
-    key[..len].copy_from_slice(&path_bytes[..len]);
-    unsafe { BLOCKED_PATHS.get(&key).is_some() }
+// `path` is a NUL-terminated, zero-padded path buffer - the same layout userspace uses
+// for BLOCKED_PATHS keys. Linux paths are arbitrary bytes, so this compares raw bytes.
+fn path_is_blocked(path: &[u8; PATH_SIZE]) -> bool {
+    unsafe { BLOCKED_PATHS.get(path).is_some() }
 }
 
 // Returns true if the path map only contains the placeholder (meaning it's effectively empty)

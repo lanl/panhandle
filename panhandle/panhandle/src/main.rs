@@ -357,7 +357,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // load the built ebpf program and populate the uid_options/uid_include_list maps
     // for the execve, readline, and zlentry programs
     // this looks like a failure until the ebpf build runs
-    let loaded_ebpf = ebpf_loader::load_ebpf(args.debug, &panhandle_uid_config, &shell_uid_config)?;
+    // open/openat/creat blocking needs struct file's f_path offset for this kernel; only
+    // look it up (and only fail on a missing BTF) when that blocking is requested
+    let blocks_opens = args.syscalls.as_ref().is_some_and(|syscalls| {
+        syscalls
+            .iter()
+            .any(|s| matches!(s.as_str(), "open" | "openat" | "creat"))
+    });
+    let file_f_path_offset = if blocks_opens {
+        match panhandle::btf_offsets::kernel_struct_member_offset("file", "f_path") {
+            Ok(offset) => offset,
+            Err(e) => {
+                error!(
+                    "--syscalls open/openat/creat needs kernel BTF to locate struct file's f_path: {e}"
+                );
+                process::exit(1);
+            }
+        }
+    } else {
+        0
+    };
+
+    let loaded_ebpf = ebpf_loader::load_ebpf(
+        args.debug,
+        &panhandle_uid_config,
+        &shell_uid_config,
+        file_f_path_offset,
+    )?;
     let mut ebpf = loaded_ebpf.ebpf;
     let shared_btf = loaded_ebpf.btf;
 

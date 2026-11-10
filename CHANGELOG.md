@@ -2,6 +2,18 @@
 
 ## v1.0.25
 
+- **Fixed: `--syscalls open/openat/creat` failed to load on newer kernels**
+  (roughly 6.12+, including RHEL 10). `block_open` reached `f_path` at an
+  offset compiled in from a bundled `vmlinux.rs`, but `struct file`'s layout
+  differs between kernels. The offset is now read from the running kernel's
+  BTF at startup and injected as a load-time global; `vmlinux.rs` is gone.
+- **Fixed: listing more than one of `open`/`openat`/`creat` exited at
+  startup** - they share one program, which was loaded once per name.
+- A panic in one monitor no longer silently kills the whole daemon
+  (workspace `panic = "abort"` removed; the non-debug panic hook now logs).
+- Attach failures now name the failing eBPF program in the log.
+- `--socket` documented as needing kernel 5.17+ (`bpf_get_func_ret`).
+- Dropped RHEL 8 (4.18 kernel) builds.
 - **Fixed: `--bound`'s `NET_WAIT` accumulator had the same cross-CPU
   lost-update race `socket.rs` was already redesigned around** - two threads
   of the same process finishing a network wait on different CPUs at the same

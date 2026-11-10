@@ -499,7 +499,7 @@ fn test_load_ebpf_integration() {
 
     // Note: In a real test environment with the eBPF bytecode available,
     // we would test:
-    // let result = common::load_ebpf(false, &common::PanhandleConfig::default(), &common::ShellConfig::default());
+    // let result = common::load_ebpf(false, &common::PanhandleConfig::default(), &common::ShellConfig::default(), 0);
     // assert!(result.is_ok());
 
     // For unit tests without the bytecode, we just verify the function exists
@@ -508,6 +508,7 @@ fn test_load_ebpf_integration() {
         bool,
         &common::PanhandleConfig,
         &common::ShellConfig,
+        u32,
     ) -> Result<common::LoadedEbpf, common::PanhandleError> = common::load_ebpf;
 }
 

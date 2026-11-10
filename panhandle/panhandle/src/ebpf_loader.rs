@@ -23,14 +23,21 @@ pub struct LoadedEbpf {
 /// program (from `panhandle_config`) and for the readline/zlentry programs
 /// (from `shell_config`). These are runtime-configurable maps rather than
 /// load-time GlobalData so they can still be adjusted after load.
+///
+/// `file_f_path_offset` is the running kernel's offset of `f_path` in `struct file`
+/// (from `btf_offsets`), injected as a load-time global for the open-blocking LSM
+/// programs. Pass 0 when open/openat/creat blocking isn't requested - those programs
+/// are then never loaded, so the value is never used.
 pub fn load_ebpf(
     debug: bool,
     panhandle_config: &PanhandleConfig,
     shell_config: &ShellConfig,
+    file_f_path_offset: u32,
 ) -> Result<LoadedEbpf> {
     let ebpf_bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/panhandle"));
 
     let mut loader = EbpfLoader::new();
+    loader.override_global("FILE_F_PATH_OFFSET", &file_f_path_offset, true);
 
     // Enable verifier logs in debug mode
     if debug {

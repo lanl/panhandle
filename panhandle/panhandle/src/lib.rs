@@ -1,6 +1,7 @@
 // This file exists to enable the library target.
 // Public modules for integration testing
 pub mod blocking;
+pub mod btf_offsets;
 pub mod config;
 pub mod ebpf_loader;
 pub mod error;

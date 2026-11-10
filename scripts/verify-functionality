@@ -349,6 +349,54 @@ test_cgroup_blocking_attaches() {
     grep -q "attached eBPF LSM cgroup hook 'block_execve_cgroup'" "$log" && ! grep -q "^Error:" "$log"
 }
 
+### --- open/openat/creat blocking: these load checks run regardless of the active LSM ###
+### stack. block_open reaches into struct file (whose layout varies by kernel) and all  ###
+### three syscalls share one program, so both "loads at all" and "listing several of   ###
+### them doesn't load it twice" have broken before.                                    ###
+
+test_syscalls_open_variants_load() {
+    local log="$WORKDIR/open_load.log"
+    timeout 3 sudo "$BIN" --syscalls open,openat,creat --comm-deny nonexistent_cmm --debug \
+        >"$log" 2>&1
+    grep -q "monitoring for events" "$log" && ! grep -q "failed to load/attach\|^Error:" "$log"
+}
+
+test_cgroup_open_variants_load() {
+    local log="$WORKDIR/cgroup_open_load.log"
+    timeout 3 sudo "$BIN" --syscalls open,openat,creat --comm-deny nonexistent_cmm \
+        --cgroup /sys/fs/cgroup --debug >"$log" 2>&1
+    grep -q "attached eBPF LSM cgroup hook 'block_open_cgroup'" "$log" \
+        && grep -q "monitoring for events" "$log" && ! grep -q "failed to load/attach\|^Error:" "$log"
+}
+
+# Enforcement (needs "bpf" in the active LSM stack): the denied comm can't open the
+# --block-paths file, but can still open other files, and other comms can open it.
+test_syscalls_block_open_path() {
+    local target="$WORKDIR/pnhandle_cat"
+    local secret="$WORKDIR/secret.txt"
+    local other="$WORKDIR/other.txt"
+    ln -sf /bin/cat "$target"
+    echo secret >"$secret"
+    echo other >"$other"
+    chmod 644 "$secret" "$other"
+
+    local log="$WORKDIR/open_block.log"
+    timeout 4 sudo "$BIN" --syscalls openat --comm-deny "$(basename "$target")" \
+        --block-paths "$secret" --debug >"$log" 2>&1 &
+    local ph_pid=$!
+    sleep 1.5 # let the LSM hook attach
+
+    local blocked_rc=0 other_rc=0 control_rc=0
+    "$target" "$secret" >/dev/null 2>&1 || blocked_rc=$?
+    "$target" "$other" >/dev/null 2>&1 || other_rc=$?
+    /bin/cat "$secret" >/dev/null 2>&1 || control_rc=$?
+
+    kill "$ph_pid" 2>/dev/null
+    wait "$ph_pid" 2>/dev/null
+
+    [ "$blocked_rc" -ne 0 ] && [ "$other_rc" -eq 0 ] && [ "$control_rc" -eq 0 ]
+}
+
 echo
 echo "=== Input validation ==="
 check "poll=0 rejected" test_validate_poll_zero
@@ -402,11 +450,15 @@ echo
 echo "=== Syscall blocking (LSM) ==="
 if grep -q "bpf" /sys/kernel/security/lsm 2>/dev/null; then
     check "--syscalls execve --comm-deny blocks only the targeted comm" test_syscalls_block_execve
+    check "--syscalls openat --block-paths blocks only that path for the targeted comm" test_syscalls_block_open_path
 else
     skip "--syscalls execve blocking" "kernel's active LSM stack has no 'bpf' entry (/sys/kernel/security/lsm)"
+    skip "--syscalls openat path blocking" "kernel's active LSM stack has no 'bpf' entry (/sys/kernel/security/lsm)"
     check "--syscalls warns that blocking is a silent no-op on this kernel" test_syscalls_warns_when_lsm_inactive
 fi
 check "--cgroup scoped LSM hook attaches without error" test_cgroup_blocking_attaches
+check "--syscalls open,openat,creat loads block_open once and runs" test_syscalls_open_variants_load
+check "--cgroup with open,openat,creat loads block_open_cgroup and runs" test_cgroup_open_variants_load
 
 echo
 echo "=== Summary: $PASS passed, $FAIL failed, $SKIP skipped ==="

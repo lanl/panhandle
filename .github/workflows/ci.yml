@@ -29,14 +29,6 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - os_image: 'almalinux:8'
-            shortname: 'el8'
-            runs_on: 'ubuntu-latest'
-            architecture: 'x86_64'
-          - os_image: 'almalinux:8'
-            shortname: 'el8'
-            runs_on: 'ubuntu-24.04-arm'
-            architecture: 'aarch64'
           - os_image: 'almalinux:9'
             shortname: 'el9'
             runs_on: 'ubuntu-latest'

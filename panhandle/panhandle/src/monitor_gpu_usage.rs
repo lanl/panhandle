@@ -228,13 +228,7 @@ pub async fn monitor_gpu_usage(
                 // Retrieve parent process info only if verbose flag is set
                 let (ppid, parent_comm) = if *verbose {
                     if let Ok(parent_pid) = get_parent_pid(process.pid) {
-                        let parent_name = parent_comm_cache
-                            .entry(parent_pid)
-                            .or_insert_with(|| {
-                                get_process_name(parent_pid)
-                                    .unwrap_or_else(|| "unknown".to_string())
-                            })
-                            .clone();
+                        let parent_name = cached_parent_comm(&mut parent_comm_cache, parent_pid);
                         (Some(parent_pid), Some(parent_name))
                     } else {
                         (Some(0), Some("unknown".to_string()))
@@ -289,19 +283,8 @@ pub async fn monitor_gpu_usage(
     });
 
     if *debug {
-        let elapsed_ms = scan_start.elapsed().as_millis();
-        match pid_list {
-            Some(pids) => {
-                let matched: usize = gpus.iter().map(|g| g.processes.len()).sum();
-                eprintln!(
-                    "gpu: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
-                    matched,
-                    pids.len(),
-                    elapsed_ms
-                );
-            }
-            None => eprintln!("gpu: scanned in {}ms", elapsed_ms),
-        }
+        let matched: usize = gpus.iter().map(|g| g.processes.len()).sum();
+        debug_scan_summary("gpu", pid_list, matched, "scanned", scan_start);
     }
 
     for gpu in gpus {

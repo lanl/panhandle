@@ -305,21 +305,15 @@ pub async fn monitor_cpu_usage(
             // the same parent (common: many children of one shell/container-init) cost
             // one /proc/<ppid>/stat read instead of N when --verbose is set.
             let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
-            let resolve_parent = |pid: u32,
-                                  cache: &mut HashMap<u32, String>|
-             -> (Option<u32>, Option<String>) {
-                if let Ok(parent_pid) = get_parent_pid(pid) {
-                    let parent_name = cache
-                        .entry(parent_pid)
-                        .or_insert_with(|| {
-                            get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string())
-                        })
-                        .clone();
-                    (Some(parent_pid), Some(parent_name))
-                } else {
-                    (Some(0), Some("unknown".to_string()))
-                }
-            };
+            let resolve_parent =
+                |pid: u32, cache: &mut HashMap<u32, String>| -> (Option<u32>, Option<String>) {
+                    if let Ok(parent_pid) = get_parent_pid(pid) {
+                        let parent_name = cached_parent_comm(cache, parent_pid);
+                        (Some(parent_pid), Some(parent_name))
+                    } else {
+                        (Some(0), Some("unknown".to_string()))
+                    }
+                };
 
             // Cache of uid -> username, scoped to this single poll, so N processes owned
             // by the same user (the common case) cost one username lookup instead of N
@@ -454,23 +448,9 @@ pub async fn monitor_cpu_usage(
         });
 
     if *debug {
-        let elapsed_ms = scan_start.elapsed().as_millis();
-        match pid_filter {
-            Some(pids) => {
-                let found = entries.iter().filter(|e| e.found).count();
-                eprintln!(
-                    "cpu: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
-                    found,
-                    pids.len(),
-                    elapsed_ms
-                );
-            }
-            None => eprintln!(
-                "cpu: scanned {} processes in {}ms",
-                entries.len(),
-                elapsed_ms
-            ),
-        }
+        let found = entries.iter().filter(|e| e.found).count();
+        let summary = format!("scanned {} processes", entries.len());
+        debug_scan_summary("cpu", pid_filter, found, &summary, scan_start);
     }
 
     for entry in entries {

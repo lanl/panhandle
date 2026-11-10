@@ -4,8 +4,8 @@ use procfs::process::all_processes;
 use reqwest::Client;
 
 use crate::helpers::{
-    format_owner, format_state, format_state_prose, get_parent_pid, get_process_name,
-    get_process_uid, json_quoted, output_message, output_needs, resolve_username,
+    cached_parent_comm, debug_scan_summary, format_owner, format_state, format_state_prose,
+    get_parent_pid, get_process_uid, json_quoted, output_message, output_needs, resolve_username,
 };
 
 // Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
@@ -69,13 +69,8 @@ pub async fn get_major_faults(
                     // Retrieve parent process info only if verbose flag is set
                     let (ppid, parent_comm) = if *verbose {
                         if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
-                            let parent_name = parent_comm_cache
-                                .entry(parent_pid)
-                                .or_insert_with(|| {
-                                    get_process_name(parent_pid)
-                                        .unwrap_or_else(|| "unknown".to_string())
-                                })
-                                .clone();
+                            let parent_name =
+                                cached_parent_comm(&mut parent_comm_cache, parent_pid);
                             (Some(parent_pid), Some(parent_name))
                         } else {
                             (Some(0), Some("unknown".to_string()))
@@ -120,20 +115,14 @@ pub async fn get_major_faults(
     });
 
     if *debug {
-        let elapsed_ms = scan_start.elapsed().as_millis();
-        match pid_filter {
-            Some(pids) => eprintln!(
-                "memory-faults: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
-                entries.len(),
-                pids.len(),
-                elapsed_ms
-            ),
-            None => eprintln!(
-                "memory-faults: {} processes over threshold, scanned in {}ms",
-                entries.len(),
-                elapsed_ms
-            ),
-        }
+        let summary = format!("{} processes over threshold, scanned", entries.len());
+        debug_scan_summary(
+            "memory-faults",
+            pid_filter,
+            entries.len(),
+            &summary,
+            scan_start,
+        );
     }
 
     for entry in entries {
@@ -466,13 +455,8 @@ pub async fn get_all_memory_usage(
                     // Retrieve parent process info only if verbose flag is set
                     let (ppid, parent_comm) = if *verbose {
                         if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
-                            let parent_name = parent_comm_cache
-                                .entry(parent_pid)
-                                .or_insert_with(|| {
-                                    get_process_name(parent_pid)
-                                        .unwrap_or_else(|| "unknown".to_string())
-                                })
-                                .clone();
+                            let parent_name =
+                                cached_parent_comm(&mut parent_comm_cache, parent_pid);
                             (Some(parent_pid), Some(parent_name))
                         } else {
                             (Some(0), Some("unknown".to_string()))
@@ -521,20 +505,8 @@ pub async fn get_all_memory_usage(
     });
 
     if *debug {
-        let elapsed_ms = scan_start.elapsed().as_millis();
-        match pid_filter {
-            Some(pids) => eprintln!(
-                "memory: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
-                entries.len(),
-                pids.len(),
-                elapsed_ms
-            ),
-            None => eprintln!(
-                "memory: scanned {} processes in {}ms",
-                entries.len(),
-                elapsed_ms
-            ),
-        }
+        let summary = format!("scanned {} processes", entries.len());
+        debug_scan_summary("memory", pid_filter, entries.len(), &summary, scan_start);
     }
 
     for entry in entries {

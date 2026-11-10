@@ -2648,6 +2648,23 @@ mod tests {
         assert!(err.contains("open, openat, creat, execve"), "{err}");
     }
 
+    // test that parent names are looked up once per parent and then served from the
+    // per-poll cache, with "unknown" (also cached) for a pid that doesn't exist
+    #[test]
+    fn test_cached_parent_comm() {
+        let mut cache = std::collections::HashMap::new();
+        cache.insert(4242, "cached-shell".to_string());
+        assert_eq!(cached_parent_comm(&mut cache, 4242), "cached-shell");
+
+        assert_eq!(cached_parent_comm(&mut cache, u32::MAX), "unknown");
+        assert_eq!(cache.get(&u32::MAX).map(String::as_str), Some("unknown"));
+
+        let own_pid = std::process::id();
+        let own_name = cached_parent_comm(&mut cache, own_pid);
+        assert!(!own_name.is_empty() && own_name != "unknown");
+        assert_eq!(cache.len(), 3);
+    }
+
     #[test]
     fn test_panhandle_config_default() {
         let config = PanhandleConfig::default();

@@ -289,12 +289,7 @@ pub async fn monitor_network_usage(
             let (ppid, parent_comm) = if *verbose {
                 let ppid = stat.ppid as u32;
                 let parent_comm = if ppid > 0 {
-                    parent_comm_cache
-                        .entry(ppid)
-                        .or_insert_with(|| {
-                            get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
-                        })
-                        .clone()
+                    cached_parent_comm(&mut parent_comm_cache, ppid)
                 } else {
                     "unknown".to_string()
                 };
@@ -343,20 +338,8 @@ pub async fn monitor_network_usage(
     });
 
     if *debug {
-        let elapsed_ms = scan_start.elapsed().as_millis();
-        match pid_list {
-            Some(pids) => eprintln!(
-                "network: {} of {} requested --pid-list PIDs reported this cycle, scanned in {}ms",
-                entries.len(),
-                pids.len(),
-                elapsed_ms
-            ),
-            None => eprintln!(
-                "network: scanned {} active entries in {}ms",
-                entries.len(),
-                elapsed_ms
-            ),
-        }
+        let summary = format!("scanned {} active entries", entries.len());
+        debug_scan_summary("network", pid_list, entries.len(), &summary, scan_start);
     }
 
     for entry in entries {

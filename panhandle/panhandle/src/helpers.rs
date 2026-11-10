@@ -855,6 +855,36 @@ pub async fn output_message(
     }
 }
 
+/// Parent process name for `--verbose` output, looked up once per parent per poll:
+/// many processes commonly share one parent (a shell, a container init), so `cache`
+/// (scoped to a single poll) turns N `/proc/<ppid>/stat` reads into one.
+pub fn cached_parent_comm(cache: &mut std::collections::HashMap<u32, String>, ppid: u32) -> String {
+    cache
+        .entry(ppid)
+        .or_insert_with(|| get_process_name(ppid).unwrap_or_else(|| "unknown".to_string()))
+        .clone()
+}
+
+/// `--debug` summary of one monitor's poll: with `--pid-list`, how many of the
+/// requested PIDs were reported; otherwise `unfiltered_summary` (e.g. "scanned 12
+/// processes"). Either way followed by how long the scan took.
+pub fn debug_scan_summary(
+    label: &str,
+    pid_filter: &Option<Vec<u32>>,
+    reported: usize,
+    unfiltered_summary: &str,
+    scan_start: std::time::Instant,
+) {
+    let elapsed_ms = scan_start.elapsed().as_millis();
+    match pid_filter {
+        Some(pids) => eprintln!(
+            "{label}: {reported} of {} requested --pid-list PIDs reported this cycle, scanned in {elapsed_ms}ms",
+            pids.len()
+        ),
+        None => eprintln!("{label}: {unfiltered_summary} in {elapsed_ms}ms"),
+    }
+}
+
 /// Get process name from PID
 pub fn get_process_name(pid: u32) -> Option<String> {
     Process::new(pid as i32)

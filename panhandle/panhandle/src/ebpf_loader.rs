@@ -1,7 +1,8 @@
+use crate::btf_offsets::{KERNEL_BTF_PATH, struct_member_offset};
 use crate::config::PanhandleConfig;
 use crate::error::{PanhandleError, Result};
 use aya::{
-    Btf, EbpfLoader, VerifierLogLevel,
+    Btf, EbpfLoader, Endianness, VerifierLogLevel,
     maps::RingBuf,
     programs::{
         BtfTracePoint, FEntry, FExit, RawTracePoint, TracePoint, UProbe, uprobe::UProbeScope,
@@ -13,6 +14,16 @@ use panhandle_common::{
 };
 use tokio::io::{Interest, unix::AsyncFd};
 
+/// What the requested features need from the kernel's BTF (several MB to read and
+/// parse); nothing is read unless something needs it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BtfNeeds {
+    /// BTF-based programs will be attached: --socket, --bound, --syscalls
+    pub programs: bool,
+    /// open/openat/creat blocking needs struct file's f_path offset
+    pub file_f_path_offset: bool,
+}
+
 /// Loaded eBPF programs and maps
 pub struct LoadedEbpf {
     pub ebpf: aya::Ebpf,
@@ -23,26 +34,60 @@ pub struct LoadedEbpf {
 /// readline, and zlentry programs from `uid_config`. These are runtime-configurable
 /// maps rather than load-time GlobalData so they can still be adjusted after load.
 ///
-/// `file_f_path_offset` is the running kernel's offset of `f_path` in `struct file`
-/// (from `btf_offsets`), injected as a load-time global for the open-blocking LSM
-/// programs. Pass 0 when open/openat/creat blocking isn't requested - those programs
-/// are then never loaded, so the value is never used.
+/// Kernel BTF is only read if `btf_needs` asks for it, and then only once: the same
+/// bytes give the parsed `Btf` returned for attaching BTF-based programs and, for
+/// open/openat/creat blocking, `struct file`'s `f_path` offset - injected as the
+/// `FILE_F_PATH_OFFSET` load-time global (left at 0 otherwise; the open-blocking
+/// programs are then never loaded, so it's never used).
 pub fn load_ebpf(
     debug: bool,
     uid_config: &PanhandleConfig,
-    file_f_path_offset: u32,
+    btf_needs: BtfNeeds,
 ) -> Result<LoadedEbpf> {
     let ebpf_bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/panhandle"));
 
-    let mut loader = EbpfLoader::new();
-    loader.override_global("FILE_F_PATH_OFFSET", &file_f_path_offset, true);
+    let btf_bytes = if btf_needs.programs || btf_needs.file_f_path_offset {
+        std::fs::read(KERNEL_BTF_PATH).ok()
+    } else {
+        None
+    };
+    let file_f_path_offset = if btf_needs.file_f_path_offset {
+        btf_bytes
+            .as_deref()
+            .ok_or_else(|| format!("could not read kernel BTF at {KERNEL_BTF_PATH}"))
+            .and_then(|bytes| struct_member_offset(bytes, "file", "f_path"))
+            .map_err(|e| {
+                log::error!(
+                    "--syscalls open/openat/creat needs kernel BTF to locate struct file's f_path: {e}"
+                );
+                PanhandleError::BtfUnavailable(e)
+            })?
+    } else {
+        0
+    };
+    let btf = if btf_needs.programs {
+        btf_bytes
+            .as_deref()
+            .and_then(|bytes| Btf::parse(bytes, Endianness::default()).ok())
+    } else {
+        None
+    };
+    drop(btf_bytes);
 
-    // Enable verifier logs in debug mode
-    if debug {
-        loader.verifier_log_level(VerifierLogLevel::DEBUG);
-    }
-
-    let mut ebpf = loader.load(ebpf_bytes).map_err(PanhandleError::EbpfLoad)?;
+    let mut ebpf = {
+        let mut loader = EbpfLoader::new();
+        loader.override_global("FILE_F_PATH_OFFSET", &file_f_path_offset, true);
+        // aya only parses target BTF itself for objects with CO-RE relocations; hand it
+        // ours so that never means a second parse
+        if let Some(btf) = &btf {
+            loader.btf(btf);
+        }
+        // Enable verifier logs in debug mode
+        if debug {
+            loader.verifier_log_level(VerifierLogLevel::DEBUG);
+        }
+        loader.load(ebpf_bytes).map_err(PanhandleError::EbpfLoad)?
+    };
 
     // Populate the execve, readline, and zlentry programs' UID filtering maps
     for (options_map, include_list_map) in [
@@ -73,9 +118,6 @@ pub fn load_ebpf(
             Err(e) => eprintln!("failed to initialize eBPF logger: {e}"),
         }
     }
-
-    // Load BTF for BTF tracepoints
-    let btf = Btf::from_sys_fs().ok();
 
     Ok(LoadedEbpf { ebpf, btf })
 }

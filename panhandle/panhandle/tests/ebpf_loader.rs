@@ -4,9 +4,9 @@ mod common {
     pub use aya::{Btf, EbpfLoader, VerifierLogLevel};
     pub use panhandle::config::{PanhandleConfig, PanhandleConfig as ConfigPanhandleConfig};
     pub use panhandle::ebpf_loader::{
-        LoadedEbpf, attach_btf_tracepoint, attach_kprobe, attach_lsm_hook, attach_raw_tracepoint,
-        attach_tracepoint, attach_uprobe, create_ring_buffer_async_fd, get_hash_map,
-        get_hash_map_mut, load_ebpf,
+        BtfNeeds, LoadedEbpf, attach_btf_tracepoint, attach_kprobe, attach_lsm_hook,
+        attach_raw_tracepoint, attach_tracepoint, attach_uprobe, create_ring_buffer_async_fd,
+        get_hash_map, get_hash_map_mut, load_ebpf,
     };
     pub use panhandle::error::PanhandleError;
 }
@@ -345,7 +345,7 @@ fn test_load_ebpf_integration() {
 
     // Note: In a real test environment with the eBPF bytecode available,
     // we would test:
-    // let result = common::load_ebpf(false, &common::PanhandleConfig::default(), 0);
+    // let result = common::load_ebpf(false, &common::PanhandleConfig::default(), common::BtfNeeds::default());
     // assert!(result.is_ok());
 
     // For unit tests without the bytecode, we just verify the function exists
@@ -353,7 +353,7 @@ fn test_load_ebpf_integration() {
     let _load_fn: fn(
         bool,
         &common::PanhandleConfig,
-        u32,
+        common::BtfNeeds,
     ) -> Result<common::LoadedEbpf, common::PanhandleError> = common::load_ebpf;
 }
 

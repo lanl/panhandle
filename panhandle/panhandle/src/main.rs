@@ -361,22 +361,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .any(|s| matches!(s.as_str(), "open" | "openat" | "creat"))
     });
-    let file_f_path_offset = if blocks_opens {
-        match panhandle::btf_offsets::kernel_struct_member_offset("file", "f_path") {
-            Ok(offset) => offset,
-            Err(e) => {
-                error!(
-                    "--syscalls open/openat/creat needs kernel BTF to locate struct file's f_path: {e}"
-                );
-                process::exit(1);
-            }
-        }
-    } else {
-        0
+    let btf_needs = ebpf_loader::BtfNeeds {
+        programs: args.socket || args.bound || args.syscalls.is_some(),
+        file_f_path_offset: blocks_opens,
     };
 
-    let loaded_ebpf =
-        ebpf_loader::load_ebpf(args.debug, &panhandle_uid_config, file_f_path_offset)?;
+    let loaded_ebpf = ebpf_loader::load_ebpf(args.debug, &panhandle_uid_config, btf_needs)?;
     let mut ebpf = loaded_ebpf.ebpf;
     let shared_btf = loaded_ebpf.btf;
 
@@ -960,6 +950,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await;
         });
     }
+    // every BTF-based program is attached by now; free the parsed kernel BTF instead of
+    // holding it for the daemon's lifetime
+    drop(shared_btf);
+
     debug!("monitoring for events in ebpf-land...");
     // await the escape signal - this may need to change based on the method of running the program
     signal::ctrl_c().await?;

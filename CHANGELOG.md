@@ -2,26 +2,17 @@
 
 ## v1.0.25
 
-- **Fixed: `--syscalls open/openat/creat` failed to load on newer kernels**
+- Fixed: `--syscalls open/openat/creat` failed to load on newer kernels
   (roughly 6.12+, including RHEL 10). `block_open` reached `f_path` at an
   offset compiled in from a bundled `vmlinux.rs`, but `struct file`'s layout
   differs between kernels. The offset is now read from the running kernel's
   BTF at startup and injected as a load-time global; `vmlinux.rs` is gone.
-- **Fixed: listing more than one of `open`/`openat`/`creat` exited at
-  startup** - they share one program, which was loaded once per name.
-- A panic in one monitor no longer silently kills the whole daemon
-  (workspace `panic = "abort"` removed; the non-debug panic hook now logs).
+- Fixed: listing more than one of `open`/`openat`/`creat` exited at
+  startup - they share one program, which was loaded once per name.
 - Attach failures now name the failing eBPF program in the log.
 - `--socket` documented as needing kernel 5.17+ (`bpf_get_func_ret`).
 - Dropped RHEL 8 (4.18 kernel) builds.
-- **Fixed: `--bound`'s `NET_WAIT` accumulator had the same cross-CPU
-  lost-update race `socket.rs` was already redesigned around** - two threads
-  of the same process finishing a network wait on different CPUs at the same
-  time could race and lose an update. Fixed the same way: eBPF streams a
-  `NetWaitEvent` delta per completed wait over a new `net_wait_events` ring
-  buffer, and `monitor_process_bounds.rs` accumulates them in its own
-  userspace-owned map instead.
-- **Added `--cgroup <PATH>`**: scopes `--syscalls` blocking to a single cgroup v2
+- Added `--cgroup <PATH>`: scopes `--syscalls` blocking to a single cgroup v2
   directory (e.g. `/sys/fs/cgroup/myjob.slice`) instead of system-wide. Uses aya's
   `LsmCgroup` program type (separate `block_open_cgroup`/`block_execve_cgroup`
   eBPF programs alongside the existing system-wide `block_open`/`block_execve` -
@@ -31,7 +22,7 @@
   "bpf" in the kernel's active LSM list to actually enforce anything (same
   startup warning as plain `--syscalls` applies). Works through `--config` (YAML
   and JSON) with the usual CLI-overrides-config precedence.
-- **`--bound`/`--socket`'s kprobes replaced with fentry/fexit** (aya 0.16
+- `--bound`/`--socket`'s kprobes replaced with fentry/fexit (aya 0.16
   exposes `FEntry`/`FExit` program types): `tcp_recvmsg`/`udp_recvmsg` (wait
   timing), `tcp_sendmsg`/`tcp_cleanup_rbuf`/`udp_sendmsg`/`udp_recvmsg` (byte
   counting). fentry/fexit attach via a BTF trampoline instead of a kprobe's

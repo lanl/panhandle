@@ -164,9 +164,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     validate_args_or_exit(&args);
 
-    // remove standard backtrace message if not debug
+    // replace the standard backtrace message with a one-line logged error if not debug,
+    // so a panicking monitor task still shows up in the configured log outputs
     if !args.debug {
-        panic::set_hook(Box::new(|_| {}));
+        panic::set_hook(Box::new(|info| {
+            error!("internal error, a monitor stopped: {}", info);
+        }));
     }
 
     // check for if running as root, exit if not

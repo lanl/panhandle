@@ -89,16 +89,7 @@ pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Bt
 
     // Attach LSM hooks based on syscalls - scoped to config.cgroup_path via the
     // *_cgroup program variants if given (--cgroup), system-wide otherwise.
-    for syscall in &config.syscalls {
-        let (hook_name, program_name, cgroup_program_name) = match syscall.as_str() {
-            "open" | "openat" | "creat" => ("file_open", "block_open", "block_open_cgroup"),
-            "execve" => ("bprm_check_security", "block_execve", "block_execve_cgroup"),
-            _ => {
-                eprintln!("Warning: Unknown syscall for blocking: {}", syscall);
-                continue;
-            }
-        };
-
+    for (hook_name, program_name, cgroup_program_name) in hooks_for_syscalls(&config.syscalls) {
         match &config.cgroup_path {
             Some(cgroup_path) => {
                 attach_lsm_cgroup_hook(ebpf, hook_name, cgroup_program_name, btf, cgroup_path)?;
@@ -116,6 +107,27 @@ pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Bt
     }
 
     Ok(())
+}
+
+/// Map requested syscalls to the (hook, program, cgroup program) triples to attach,
+/// once each: open/openat/creat all share the file_open hook, and aya refuses to load
+/// the same program twice, so listing more than one of them must not attach twice.
+fn hooks_for_syscalls(syscalls: &[String]) -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut hooks = Vec::new();
+    for syscall in syscalls {
+        let hook = match syscall.as_str() {
+            "open" | "openat" | "creat" => ("file_open", "block_open", "block_open_cgroup"),
+            "execve" => ("bprm_check_security", "block_execve", "block_execve_cgroup"),
+            _ => {
+                eprintln!("Warning: Unknown syscall for blocking: {}", syscall);
+                continue;
+            }
+        };
+        if !hooks.contains(&hook) {
+            hooks.push(hook);
+        }
+    }
+    hooks
 }
 
 /// Resolve comm list mode (allow vs deny)
@@ -140,7 +152,26 @@ fn resolve_comm_list_mode(
 
 #[cfg(test)]
 mod tests {
-    use super::lsm_list_contains_bpf;
+    use super::{hooks_for_syscalls, lsm_list_contains_bpf};
+
+    #[test]
+    fn open_variants_attach_file_open_once() {
+        let syscalls = ["open", "creat", "openat", "execve", "execve"].map(String::from);
+        let hooks = hooks_for_syscalls(&syscalls);
+        assert_eq!(
+            hooks,
+            vec![
+                ("file_open", "block_open", "block_open_cgroup"),
+                ("bprm_check_security", "block_execve", "block_execve_cgroup"),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_syscalls_are_skipped() {
+        let syscalls = ["bogus", "execve"].map(String::from);
+        assert_eq!(hooks_for_syscalls(&syscalls).len(), 1);
+    }
 
     #[test]
     fn detects_bpf_present() {

@@ -35,12 +35,11 @@ static COMMS: HashMap<[u8; 16], u8> = HashMap::with_max_entries(64, 0);
 static BLOCKED_PATHS: HashMap<[u8; 256], u8> = HashMap::with_max_entries(64, 0);
 
 // System-wide (BPF_LSM_MAC) LSM programs return 0 to allow or a negative errno (-EPERM
-// here) to deny. Cgroup-scoped (BPF_LSM_CGROUP) programs use a different kernel-enforced
-// convention: the verifier rejects anything outside 0 (allow) / 1 (deny) - confirmed via
-// the verifier log when this was first wired up: "At program exit the register R0 ...
-// should have been in [0, 1]". should_block_open/should_block_execve below return that
-// shared deny decision as a plain bool; each #[lsm]/#[lsm_cgroup] wrapper translates it
-// into whichever convention its attach type requires.
+// here) to deny. Cgroup-scoped (BPF_LSM_CGROUP) programs use the cgroup-BPF convention
+// instead: 1 allows and 0 denies (the kernel turns 0 into -EPERM), and the verifier
+// rejects any other value. Note this is the reverse of the system-wide 0 = allow.
+// should_block_open/should_block_execve return the shared deny decision as a plain bool;
+// each #[lsm]/#[lsm_cgroup] wrapper translates it into its attach type's convention.
 #[lsm(hook = "file_open")]
 pub fn block_open(ctx: LsmContext) -> i32 {
     if should_block_open(ctx) { EPERM } else { 0 }
@@ -49,11 +48,11 @@ pub fn block_open(ctx: LsmContext) -> i32 {
 // Cgroup-scoped equivalent of block_open above, for --cgroup: identical logic (and the
 // same COMMS/BLOCKED_PATHS maps), but a separate program because the eBPF-side
 // attachment mechanism (BPF_LSM_CGROUP vs BPF_LSM_MAC) requires its own macro/section,
-// even though the two only ever differ in how userspace attaches them (and, as of this
-// comment, their return-value convention - see above).
+// even though the two only ever differ in how userspace attaches them and in their
+// return-value convention (see above).
 #[lsm_cgroup(hook = "file_open")]
 pub fn block_open_cgroup(ctx: LsmContext) -> i32 {
-    if should_block_open(ctx) { 1 } else { 0 }
+    if should_block_open(ctx) { 0 } else { 1 }
 }
 
 // Blocking a comm here can be narrowed to specific paths via BLOCKED_PATHS: if that
@@ -117,7 +116,7 @@ pub fn block_execve(ctx: LsmContext) -> i32 {
 // Cgroup-scoped equivalent of block_execve above, for --cgroup. See block_open_cgroup.
 #[lsm_cgroup(hook = "bprm_check_security")]
 pub fn block_execve_cgroup(ctx: LsmContext) -> i32 {
-    if should_block_execve(ctx) { 1 } else { 0 }
+    if should_block_execve(ctx) { 0 } else { 1 }
 }
 
 fn should_block_execve(_ctx: LsmContext) -> bool {

@@ -12,8 +12,3 @@ aya-log-ebpf = { version = "0.3.0", default-features = false }
 tokio = { version = "1.52.2", default-features = false }
 which = { version = "8.0.2", features = [ "real-sys" ]}
 
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"

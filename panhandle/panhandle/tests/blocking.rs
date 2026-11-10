@@ -5,7 +5,7 @@ use std::collections::HashMap;
 mod common {
     pub use aya::Btf;
     pub use panhandle::blocking::setup_syscall_blocking;
-    pub use panhandle::config::AppConfig;
+    pub use panhandle::config::BlockingConfig;
     pub use panhandle::error::PanhandleError;
     pub use panhandle::helpers::resolve_comm_list_mode;
     pub use panhandle_common::{
@@ -61,8 +61,9 @@ fn test_resolve_comm_list_mode_empty_deny() {
     let result = common::resolve_comm_list_mode(&comm_deny, &comm_allow);
     assert!(result.is_ok());
 
+    // an empty list counts as not provided
     let (mode, comms) = result.unwrap();
-    assert_eq!(mode, common::DENY_LIST);
+    assert_eq!(mode, common::NO_LIST);
     assert_eq!(comms, Vec::<String>::new());
 }
 
@@ -74,9 +75,20 @@ fn test_resolve_comm_list_mode_empty_allow() {
     let result = common::resolve_comm_list_mode(&comm_deny, &comm_allow);
     assert!(result.is_ok());
 
+    // an empty allow list must not mean "block every process"
     let (mode, comms) = result.unwrap();
-    assert_eq!(mode, common::ALLOW_LIST);
+    assert_eq!(mode, common::NO_LIST);
     assert_eq!(comms, Vec::<String>::new());
+}
+
+#[test]
+fn test_resolve_comm_list_mode_empty_list_not_a_conflict() {
+    let comm_deny = Some(vec!["bash".to_string()]);
+    let comm_allow = Some(Vec::new());
+    assert_eq!(
+        common::resolve_comm_list_mode(&comm_deny, &comm_allow),
+        Ok((common::DENY_LIST, vec!["bash".to_string()]))
+    );
 }
 
 #[test]
@@ -103,10 +115,8 @@ fn test_setup_syscall_blocking_no_syscalls() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec![],
-        comm_allow: vec![],
-        comm_deny: vec![],
         block_paths: vec![],
         ..Default::default()
     };
@@ -123,10 +133,10 @@ fn test_setup_syscall_blocking_with_comm_deny() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["open".to_string()],
-        comm_deny: vec!["bash".to_string(), "zsh".to_string()],
-        comm_allow: vec![],
+        list_type: common::DENY_LIST,
+        comms: vec!["bash".to_string(), "zsh".to_string()],
         block_paths: vec![],
         ..Default::default()
     };
@@ -146,10 +156,10 @@ fn test_setup_syscall_blocking_with_comm_allow() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["execve".to_string()],
-        comm_allow: vec!["sshd".to_string()],
-        comm_deny: vec![],
+        list_type: common::ALLOW_LIST,
+        comms: vec!["sshd".to_string()],
         block_paths: vec![],
         ..Default::default()
     };
@@ -166,10 +176,8 @@ fn test_setup_syscall_blocking_with_block_paths() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["open".to_string(), "openat".to_string()],
-        comm_allow: vec![],
-        comm_deny: vec![],
         block_paths: vec!["/etc/shadow".to_string(), "/etc/passwd".to_string()],
         ..Default::default()
     };
@@ -186,10 +194,8 @@ fn test_setup_syscall_blocking_empty_block_paths() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["open".to_string()],
-        comm_allow: vec![],
-        comm_deny: vec![],
         block_paths: vec![],
         ..Default::default()
     };
@@ -206,15 +212,13 @@ fn test_setup_syscall_blocking_all_syscalls() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec![
             "open".to_string(),
             "openat".to_string(),
             "creat".to_string(),
             "execve".to_string(),
         ],
-        comm_allow: vec![],
-        comm_deny: vec![],
         block_paths: vec![],
         ..Default::default()
     };
@@ -231,10 +235,8 @@ fn test_setup_syscall_blocking_unknown_syscall() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["unknown_syscall".to_string()],
-        comm_allow: vec![],
-        comm_deny: vec![],
         block_paths: vec![],
         ..Default::default()
     };
@@ -404,26 +406,13 @@ fn test_blocked_paths_empty_placeholder() {
 }
 
 #[test]
-fn test_app_config_syscalls_default() {
-    let config = common::AppConfig::default();
+fn test_blocking_config_default() {
+    let config = common::BlockingConfig::default();
     assert!(config.syscalls.is_empty());
-    assert!(config.comm_allow.is_empty());
-    assert!(config.comm_deny.is_empty());
+    assert_eq!(config.list_type, common::NO_LIST);
+    assert!(config.comms.is_empty());
     assert!(config.block_paths.is_empty());
-}
-
-#[test]
-fn test_app_config_syscalls_with_values() {
-    let config = common::AppConfig {
-        syscalls: vec!["open".to_string(), "execve".to_string()],
-        comm_deny: vec!["bash".to_string()],
-        block_paths: vec!["/etc/shadow".to_string()],
-        ..Default::default()
-    };
-
-    assert_eq!(config.syscalls.len(), 2);
-    assert_eq!(config.comm_deny.len(), 1);
-    assert_eq!(config.block_paths.len(), 1);
+    assert!(config.cgroup_path.is_none());
 }
 
 #[test]
@@ -434,10 +423,10 @@ fn test_blocking_error_handling_missing_comms_map() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["open".to_string()],
-        comm_deny: vec!["bash".to_string()],
-        comm_allow: vec![],
+        list_type: common::DENY_LIST,
+        comms: vec!["bash".to_string()],
         block_paths: vec![],
         ..Default::default()
     };
@@ -466,10 +455,8 @@ fn test_blocking_error_handling_missing_blocked_paths_map() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["open".to_string()],
-        comm_deny: vec![],
-        comm_allow: vec![],
         block_paths: vec!["/etc/shadow".to_string()],
         ..Default::default()
     };
@@ -486,44 +473,14 @@ fn test_blocking_error_handling_missing_lsm_program() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["open".to_string()],
-        comm_deny: vec![],
-        comm_allow: vec![],
         block_paths: vec![],
         ..Default::default()
     };
 
     let result = common::setup_syscall_blocking(&mut ebpf, &config, &btf);
     assert!(result.is_err());
-}
-
-#[test]
-fn test_resolve_comm_list_mode_from_appconfig() {
-    // Test that AppConfig's comm_allow/comm_deny work with resolve_comm_list_mode
-    let config = common::AppConfig {
-        comm_deny: vec!["bash".to_string(), "zsh".to_string()],
-        comm_allow: vec![],
-        ..Default::default()
-    };
-
-    let comm_deny = if config.comm_deny.is_empty() {
-        None
-    } else {
-        Some(config.comm_deny.clone())
-    };
-    let comm_allow = if config.comm_allow.is_empty() {
-        None
-    } else {
-        Some(config.comm_allow.clone())
-    };
-
-    let result = common::resolve_comm_list_mode(&comm_deny, &comm_allow);
-    assert!(result.is_ok());
-
-    let (mode, comms) = result.unwrap();
-    assert_eq!(mode, common::DENY_LIST);
-    assert_eq!(comms.len(), 2);
 }
 
 #[test]
@@ -534,9 +491,10 @@ fn test_blocking_with_combined_syscalls() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["open".to_string(), "execve".to_string()],
-        comm_deny: vec!["bash".to_string()],
+        list_type: common::DENY_LIST,
+        comms: vec!["bash".to_string()],
         block_paths: vec!["/etc/shadow".to_string()],
         ..Default::default()
     };
@@ -613,10 +571,8 @@ fn test_setup_syscall_blocking_warning_on_empty_list() {
     };
     let btf = common::Btf::from_sys_fs().expect("BTF not available on this system");
 
-    let config = common::AppConfig {
+    let config = common::BlockingConfig {
         syscalls: vec!["open".to_string()],
-        comm_allow: vec![],
-        comm_deny: vec![],
         block_paths: vec![],
         ..Default::default()
     };

@@ -1030,16 +1030,17 @@ fn test_helpers_resolve_comm_list_mode() {
         Ok((common::ALLOW_LIST, vec!["sh".to_string()]))
     );
 
+    // empty lists count as not provided (an empty allow list would block everything)
     let empty_deny = Some(Vec::new());
     assert_eq!(
         common::resolve_comm_list_mode(&empty_deny, &None),
-        Ok((common::DENY_LIST, Vec::new()))
+        Ok((common::NO_LIST, Vec::new()))
     );
 
     let empty_allow = Some(Vec::new());
     assert_eq!(
         common::resolve_comm_list_mode(&None, &empty_allow),
-        Ok((common::ALLOW_LIST, Vec::new()))
+        Ok((common::NO_LIST, Vec::new()))
     );
 
     assert!(common::resolve_comm_list_mode(&deny, &allow).is_err());

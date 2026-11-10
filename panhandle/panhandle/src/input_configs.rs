@@ -630,3 +630,21 @@ pub fn validate_comm_length(s: &str) -> Result<String, String> {
         Ok(s.to_string())
     }
 }
+
+/// Syscalls `--syscalls` can block. Anything else is rejected at startup: silently
+/// ignoring a typo (e.g. `exec`) would leave the operator believing it's blocked.
+pub const SUPPORTED_BLOCK_SYSCALLS: [&str; 4] = ["open", "openat", "creat", "execve"];
+
+pub fn validate_syscalls(syscalls: &[String]) -> Result<(), String> {
+    match syscalls
+        .iter()
+        .find(|s| !SUPPORTED_BLOCK_SYSCALLS.contains(&s.as_str()))
+    {
+        Some(bad) => Err(format!(
+            "Unsupported --syscalls value '{}': supported values are {}",
+            bad,
+            SUPPORTED_BLOCK_SYSCALLS.join(", ")
+        )),
+        None => Ok(()),
+    }
+}

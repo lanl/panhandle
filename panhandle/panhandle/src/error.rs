@@ -24,12 +24,6 @@ pub enum PanhandleError {
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    #[error("YAML parsing error: {0}")]
-    YamlParsing(#[from] serde_saphyr::Error),
-
-    #[error("YAML serialization error: {0}")]
-    YamlSerialization(#[from] serde_saphyr::ser::Error),
-
     #[error("HTTP request failed: {0}")]
     HttpRequest(#[from] reqwest::Error),
 
@@ -103,8 +97,6 @@ impl PartialEq for PanhandleError {
             (Self::EbpfMap(_), Self::EbpfMap(_)) => true,
             (Self::Io(_), Self::Io(_)) => true,
             (Self::Serialization(_), Self::Serialization(_)) => true,
-            (Self::YamlParsing(_), Self::YamlParsing(_)) => true,
-            (Self::YamlSerialization(_), Self::YamlSerialization(_)) => true,
             (Self::HttpRequest(_), Self::HttpRequest(_)) => true,
             (Self::Syslog(_), Self::Syslog(_)) => true,
             (Self::Procfs(_), Self::Procfs(_)) => true,

@@ -1,4 +1,4 @@
-use crate::config::{PanhandleConfig, ShellConfig};
+use crate::config::PanhandleConfig;
 use crate::error::{PanhandleError, Result};
 use aya::{
     Btf, EbpfLoader, VerifierLogLevel,
@@ -19,10 +19,9 @@ pub struct LoadedEbpf {
     pub btf: Option<Btf>,
 }
 
-/// Load the eBPF program and populate the UID-filtering maps for the execve
-/// program (from `panhandle_config`) and for the readline/zlentry programs
-/// (from `shell_config`). These are runtime-configurable maps rather than
-/// load-time GlobalData so they can still be adjusted after load.
+/// Load the eBPF program and populate the UID-filtering maps of the execve,
+/// readline, and zlentry programs from `uid_config`. These are runtime-configurable
+/// maps rather than load-time GlobalData so they can still be adjusted after load.
 ///
 /// `file_f_path_offset` is the running kernel's offset of `f_path` in `struct file`
 /// (from `btf_offsets`), injected as a load-time global for the open-blocking LSM
@@ -30,8 +29,7 @@ pub struct LoadedEbpf {
 /// are then never loaded, so the value is never used.
 pub fn load_ebpf(
     debug: bool,
-    panhandle_config: &PanhandleConfig,
-    shell_config: &ShellConfig,
+    uid_config: &PanhandleConfig,
     file_f_path_offset: u32,
 ) -> Result<LoadedEbpf> {
     let ebpf_bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/panhandle"));
@@ -46,33 +44,13 @@ pub fn load_ebpf(
 
     let mut ebpf = loader.load(ebpf_bytes).map_err(PanhandleError::EbpfLoad)?;
 
-    // Populate the execve program's UID filtering maps
-    set_uid_options(
-        &mut ebpf,
-        "uid_options",
-        "uid_include_list",
-        panhandle_config.shells,
-        panhandle_config.exclude_min_uid,
-        panhandle_config.exclude_max_uid,
-        panhandle_config.include_enabled,
-        &panhandle_config.include_uids,
-    )?;
-
-    // Populate the readline/zlentry programs' UID filtering maps
+    // Populate the execve, readline, and zlentry programs' UID filtering maps
     for (options_map, include_list_map) in [
+        ("uid_options", "uid_include_list"),
         ("readline_uid_options", "readline_uid_include_list"),
         ("zlentry_uid_options", "zlentry_uid_include_list"),
     ] {
-        set_uid_options(
-            &mut ebpf,
-            options_map,
-            include_list_map,
-            shell_config.shells,
-            shell_config.exclude_min_uid,
-            shell_config.exclude_max_uid,
-            shell_config.include_enabled,
-            &shell_config.include_uids,
-        )?;
+        set_uid_options(&mut ebpf, options_map, include_list_map, uid_config)?;
     }
 
     // Initialize eBPF logger if debug enabled
@@ -102,37 +80,29 @@ pub fn load_ebpf(
     Ok(LoadedEbpf { ebpf, btf })
 }
 
-/// Populate a `uid_options`/`uid_include_list`-shaped pair of maps. `PanhandleConfig` and
-/// `ShellConfig` carry the same fields but are distinct types, so the caller unpacks them.
-#[allow(clippy::too_many_arguments)]
+/// Populate a `uid_options`/`uid_include_list`-shaped pair of maps.
 fn set_uid_options(
     ebpf: &mut aya::Ebpf,
     options_map: &str,
     include_list_map: &str,
-    shells: u32,
-    exclude_min_uid: u32,
-    exclude_max_uid: u32,
-    include_enabled: u32,
-    include_uids: &[u32; panhandle_common::UID_COUNT],
+    uid_config: &PanhandleConfig,
 ) -> Result<()> {
     let mut options: aya::maps::HashMap<_, u32, u32> = get_hash_map_mut(ebpf, options_map)?;
-    options
-        .insert(&UID_OPT_SHELLS, &shells, 0)
-        .map_err(PanhandleError::EbpfMap)?;
-    options
-        .insert(&UID_OPT_EXCLUDE_MIN, &exclude_min_uid, 0)
-        .map_err(PanhandleError::EbpfMap)?;
-    options
-        .insert(&UID_OPT_EXCLUDE_MAX, &exclude_max_uid, 0)
-        .map_err(PanhandleError::EbpfMap)?;
-    options
-        .insert(&UID_OPT_INCLUDE_ENABLED, &include_enabled, 0)
-        .map_err(PanhandleError::EbpfMap)?;
+    for (key, value) in [
+        (UID_OPT_SHELLS, uid_config.shells),
+        (UID_OPT_EXCLUDE_MIN, uid_config.exclude_min_uid),
+        (UID_OPT_EXCLUDE_MAX, uid_config.exclude_max_uid),
+        (UID_OPT_INCLUDE_ENABLED, uid_config.include_enabled),
+    ] {
+        options
+            .insert(&key, &value, 0)
+            .map_err(PanhandleError::EbpfMap)?;
+    }
 
     let mut include_list: aya::maps::HashMap<_, u32, [u32; panhandle_common::UID_COUNT]> =
         get_hash_map_mut(ebpf, include_list_map)?;
     include_list
-        .insert(&0, include_uids, 0)
+        .insert(&0, &uid_config.include_uids, 0)
         .map_err(PanhandleError::EbpfMap)?;
 
     Ok(())

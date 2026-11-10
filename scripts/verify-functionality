@@ -83,6 +83,13 @@ test_validate_poll_zero() {
     ! sudo "$BIN" --poll 0 >/dev/null 2>&1
 }
 
+test_validate_unsupported_syscall() {
+    local out
+    out=$(sudo "$BIN" --syscalls exec --comm-deny nonexistent_cmm 2>&1)
+    local rc=$?
+    [ "$rc" -ne 0 ] && grep -q "Unsupported --syscalls value 'exec'" <<<"$out"
+}
+
 test_validate_uid_range_inverted() {
     ! sudo "$BIN" --exclude-min-uid 1000 --exclude-max-uid 500 >/dev/null 2>&1
 }
@@ -400,6 +407,7 @@ test_syscalls_block_open_path() {
 echo
 echo "=== Input validation ==="
 check "poll=0 rejected" test_validate_poll_zero
+check "unsupported --syscalls value rejected" test_validate_unsupported_syscall
 check "inverted uid range rejected" test_validate_uid_range_inverted
 check "non-numeric include-uid rejected" test_validate_include_uid_nonnumeric
 check "comm-allow + comm-deny conflict rejected" test_validate_comm_allow_deny_conflict

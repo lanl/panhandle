@@ -271,6 +271,9 @@ mod tests {
             return;
         }
         let off = kernel_struct_member_offset("file", "f_path").expect("struct file.f_path");
-        assert!(off.is_multiple_of(8) && off < 512, "implausible f_path offset {off}");
+        assert!(
+            off.is_multiple_of(8) && off < 512,
+            "implausible f_path offset {off}"
+        );
     }
 }

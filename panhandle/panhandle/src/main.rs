@@ -10,7 +10,7 @@ use clap::Parser;
 use machine_info::Machine;
 use panhandle::{
     blocking,
-    config::{AppConfig, PanhandleConfig, ShellConfig},
+    config::{BlockingConfig, PanhandleConfig},
     ebpf_loader, helpers, input_configs, monitor_cpu_usage, monitor_gpu_usage, monitor_io_usage,
     monitor_network_usage, procfs_helpers,
 };
@@ -103,7 +103,11 @@ fn validate_args_or_exit(args: &RawArgs) {
         }
     }
 
-    if args.syscalls.is_some() {
+    if let Some(ref syscalls) = args.syscalls {
+        if let Err(e) = validate_syscalls(syscalls) {
+            eprintln!("{}", e);
+            process::exit(1);
+        }
         let (_, comms) = match resolve_comm_list_mode(&args.comm_deny, &args.comm_allow) {
             Ok(resolved) => resolved,
             Err(e) => {
@@ -346,13 +350,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_enabled: include_uid_bool as u32,
         include_uids: uid_include_array,
     };
-    let shell_uid_config = ShellConfig {
-        shells: panhandle_uid_config.shells,
-        exclude_min_uid: panhandle_uid_config.exclude_min_uid,
-        exclude_max_uid: panhandle_uid_config.exclude_max_uid,
-        include_enabled: panhandle_uid_config.include_enabled,
-        include_uids: panhandle_uid_config.include_uids,
-    };
 
     // load the built ebpf program and populate the uid_options/uid_include_list maps
     // for the execve, readline, and zlentry programs
@@ -378,12 +375,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         0
     };
 
-    let loaded_ebpf = ebpf_loader::load_ebpf(
-        args.debug,
-        &panhandle_uid_config,
-        &shell_uid_config,
-        file_f_path_offset,
-    )?;
+    let loaded_ebpf =
+        ebpf_loader::load_ebpf(args.debug, &panhandle_uid_config, file_f_path_offset)?;
     let mut ebpf = loaded_ebpf.ebpf;
     let shared_btf = loaded_ebpf.btf;
 
@@ -783,9 +776,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
     }
 
-    // process syscall blocking
+    // process syscall blocking (syscall names, list sizes and lengths were already
+    // validated on the merged CLI + config args by validate_args_or_exit)
     if let Some(syscalls) = &args.syscalls {
-        // Not allowing for providing both an allow list and deny list
         let (list_type, comms) = match resolve_comm_list_mode(&args.comm_deny, &args.comm_allow) {
             Ok(resolved) => resolved,
             Err(e) => {
@@ -793,57 +786,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 process::exit(1);
             }
         };
-        if list_type == NO_LIST && args.verbose {
-            info!(
+        if list_type == NO_LIST {
+            warn!(
                 "Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked."
             );
         }
 
-        // clap's num_args upper bound only limits raw CLI tokens, not the values a
-        // single comma-separated argument splits into, so it can't reject an over-limit
-        // list at parse time -- enforce the documented maximums here instead.
-        if let Err(e) = validate_count(
-            comms.len(),
-            MAX_BLOCKED_COMMS,
-            "comm-allow/comm-deny entries",
-        ) {
-            info!("{}", e);
-            process::exit(1);
-        }
-        // clap's value_parser only validates comm-allow/comm-deny supplied on the CLI,
-        // not ones coming from the config file -- enforce the same length limit here
-        // so an over-long config entry is rejected instead of silently truncated below.
-        for comm in &comms {
-            if let Err(e) = validate_comm_length(comm) {
-                info!("{}", e);
-                process::exit(1);
-            }
-        }
-        if let Some(ref paths) = args.block_paths
-            && let Err(e) = validate_count(paths.len(), MAX_BLOCKED_PATHS, "block-paths entries")
-        {
-            info!("{}", e);
-            process::exit(1);
-        }
-        // clap's value_parser only validates block-paths supplied on the CLI, not
-        // ones coming from the config file -- enforce the same length limit here so
-        // an over-long config entry can't overflow the fixed-size eBPF map key below.
-        if let Some(ref paths) = args.block_paths {
-            for path in paths {
-                if let Err(e) = validate_path_length(path) {
-                    info!("{}", e);
-                    process::exit(1);
-                }
-            }
-        }
-
-        let blocking_config = AppConfig {
-            comm_allow: args.comm_allow.clone().unwrap_or_default(),
-            comm_deny: args.comm_deny.clone().unwrap_or_default(),
-            block_paths: args.block_paths.clone().unwrap_or_default(),
+        let blocking_config = BlockingConfig {
             syscalls: syscalls.clone(),
+            list_type,
+            comms,
+            block_paths: args.block_paths.clone().unwrap_or_default(),
             cgroup_path: args.cgroup.clone(),
-            ..Default::default()
         };
 
         if blocking_config.block_paths.is_empty() && args.verbose {

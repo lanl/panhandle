@@ -2,10 +2,7 @@
 
 mod common {
     pub use aya::{Btf, EbpfLoader, VerifierLogLevel};
-    pub use panhandle::config::{
-        PanhandleConfig, PanhandleConfig as ConfigPanhandleConfig, ShellConfig,
-        ShellConfig as ConfigShellConfig,
-    };
+    pub use panhandle::config::{PanhandleConfig, PanhandleConfig as ConfigPanhandleConfig};
     pub use panhandle::ebpf_loader::{
         LoadedEbpf, attach_btf_tracepoint, attach_kprobe, attach_lsm_hook, attach_raw_tracepoint,
         attach_tracepoint, attach_uprobe, create_ring_buffer_async_fd, get_hash_map,
@@ -17,16 +14,6 @@ mod common {
 #[test]
 fn test_panhandle_config_default() {
     let config = common::ConfigPanhandleConfig::default();
-    assert_eq!(config.shells, 0);
-    assert_eq!(config.exclude_min_uid, 0);
-    assert_eq!(config.exclude_max_uid, 0);
-    assert_eq!(config.include_enabled, 0);
-    assert_eq!(config.include_uids, [0u32; panhandle_common::UID_COUNT]);
-}
-
-#[test]
-fn test_shell_config_default() {
-    let config = common::ConfigShellConfig::default();
     assert_eq!(config.shells, 0);
     assert_eq!(config.exclude_min_uid, 0);
     assert_eq!(config.exclude_max_uid, 0);
@@ -57,66 +44,9 @@ fn test_panhandle_config_creation() {
 }
 
 #[test]
-fn test_shell_config_creation() {
-    let config = common::ConfigShellConfig {
-        shells: 1,
-        exclude_min_uid: 100,
-        exclude_max_uid: 999,
-        include_enabled: 1,
-        include_uids: {
-            let mut arr = [0u32; panhandle_common::UID_COUNT];
-            arr[0] = 1000;
-            arr
-        },
-    };
-    assert_eq!(config.shells, 1);
-    assert_eq!(config.exclude_min_uid, 100);
-    assert_eq!(config.exclude_max_uid, 999);
-    assert_eq!(config.include_enabled, 1);
-    assert_eq!(config.include_uids[0], 1000);
-}
-
-#[test]
-fn test_ebpf_loader_override_global() {
-    // Test that we can create a loader and override globals
-    let mut loader = common::EbpfLoader::new();
-
-    let panhandle_config = common::ConfigPanhandleConfig {
-        shells: 1,
-        exclude_min_uid: 100,
-        exclude_max_uid: 999,
-        include_enabled: 1,
-        include_uids: [0u32; panhandle_common::UID_COUNT],
-    };
-
-    let shell_config = common::ConfigShellConfig {
-        shells: 1,
-        exclude_min_uid: 100,
-        exclude_max_uid: 999,
-        include_enabled: 1,
-        include_uids: [0u32; panhandle_common::UID_COUNT],
-    };
-
-    // These should not panic
-    loader.override_global("PANHANDLE_CONFIG", &panhandle_config, true);
-    loader.override_global("SHELL_CONFIG", &shell_config, true);
-
-    // Verify the loader was configured
-    // Note: We can't easily inspect the internal state, but the calls above
-    // verify the API works correctly
-}
-
-#[test]
 fn test_ebpf_loader_debug_mode() {
     let mut loader = common::EbpfLoader::new();
     loader.verifier_log_level(common::VerifierLogLevel::DEBUG);
-
-    let panhandle_config = common::ConfigPanhandleConfig::default();
-    let shell_config = common::ConfigShellConfig::default();
-
-    loader.override_global("PANHANDLE_CONFIG", &panhandle_config, true);
-    loader.override_global("SHELL_CONFIG", &shell_config, true);
-
     // Should not panic
 }
 
@@ -336,82 +266,12 @@ fn test_ebpf_loader_with_btf() {
 }
 
 #[test]
-fn test_global_data_pod_impl() {
-    // Test that PanhandleConfig and ShellConfig implement Pod
-    // This is a compile-time check, but we can verify at runtime
-    let panhandle_config = common::ConfigPanhandleConfig::default();
-    let shell_config = common::ConfigShellConfig::default();
-
-    // Verify they can be used as bytes (Pod requirement)
-    let panhandle_bytes = unsafe {
-        core::slice::from_raw_parts(
-            &panhandle_config as *const _ as *const u8,
-            core::mem::size_of::<common::ConfigPanhandleConfig>(),
-        )
-    };
-    let shell_bytes = unsafe {
-        core::slice::from_raw_parts(
-            &shell_config as *const _ as *const u8,
-            core::mem::size_of::<common::ConfigShellConfig>(),
-        )
-    };
-
-    assert_eq!(
-        panhandle_bytes.len(),
-        core::mem::size_of::<common::ConfigPanhandleConfig>()
-    );
-    assert_eq!(
-        shell_bytes.len(),
-        core::mem::size_of::<common::ConfigShellConfig>()
-    );
-}
-
-#[test]
 fn test_ebpf_load_with_empty_bytecode() {
     // Test loading with empty bytecode should fail gracefully
     let result = aya::Ebpf::load(&[]);
     // Empty bytecode may or may not fail depending on aya version
     // The important thing is it doesn't panic
     let _ = result;
-}
-
-#[test]
-fn test_override_global_with_different_configs() {
-    let mut loader = common::EbpfLoader::new();
-
-    // Test with various configurations
-    let configs = vec![
-        common::ConfigPanhandleConfig {
-            shells: 0,
-            exclude_min_uid: 0,
-            exclude_max_uid: 0,
-            include_enabled: 0,
-            include_uids: [0u32; panhandle_common::UID_COUNT],
-        },
-        common::ConfigPanhandleConfig {
-            shells: 1,
-            exclude_min_uid: 100,
-            exclude_max_uid: 999,
-            include_enabled: 1,
-            include_uids: {
-                let mut arr = [0u32; panhandle_common::UID_COUNT];
-                arr[0] = 1000;
-                arr
-            },
-        },
-        common::ConfigPanhandleConfig {
-            shells: 1,
-            exclude_min_uid: 0,
-            exclude_max_uid: u32::MAX,
-            include_enabled: 0,
-            include_uids: [0u32; panhandle_common::UID_COUNT],
-        },
-    ];
-
-    for config in &configs {
-        loader.override_global("PANHANDLE_CONFIG", config, true);
-        // Should not panic
-    }
 }
 
 #[test]
@@ -431,20 +291,6 @@ fn test_attach_raw_tracepoint_success_conditions() {
     // This will fail because we don't have the actual program loaded
     // but the error should be about missing program or attach failure
     assert!(result.is_err());
-}
-
-#[test]
-fn test_ebpf_loader_multiple_globals() {
-    let mut loader = common::EbpfLoader::new();
-
-    let panhandle_config = common::ConfigPanhandleConfig::default();
-    let shell_config = common::ConfigShellConfig::default();
-
-    // Override both globals
-    loader.override_global("PANHANDLE_CONFIG", &panhandle_config, true);
-    loader.override_global("SHELL_CONFIG", &shell_config, true);
-
-    // Should not panic
 }
 
 #[test]
@@ -499,7 +345,7 @@ fn test_load_ebpf_integration() {
 
     // Note: In a real test environment with the eBPF bytecode available,
     // we would test:
-    // let result = common::load_ebpf(false, &common::PanhandleConfig::default(), &common::ShellConfig::default(), 0);
+    // let result = common::load_ebpf(false, &common::PanhandleConfig::default(), 0);
     // assert!(result.is_ok());
 
     // For unit tests without the bytecode, we just verify the function exists
@@ -507,7 +353,6 @@ fn test_load_ebpf_integration() {
     let _load_fn: fn(
         bool,
         &common::PanhandleConfig,
-        &common::ShellConfig,
         u32,
     ) -> Result<common::LoadedEbpf, common::PanhandleError> = common::load_ebpf;
 }

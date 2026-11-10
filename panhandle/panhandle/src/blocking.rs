@@ -1,8 +1,8 @@
-use crate::config::AppConfig;
+use crate::config::BlockingConfig;
 use crate::ebpf_loader::{attach_lsm_cgroup_hook, attach_lsm_hook, get_hash_map_mut};
 use crate::error::{PanhandleError, Result};
 use aya::{Btf, maps::HashMap};
-use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
+use panhandle_common::{LIST_MODE, NO_LIST};
 
 /// Returns true if the "bpf" LSM is present in the kernel's active LSM list
 /// (`/sys/kernel/security/lsm`). A BPF_PROG_TYPE_LSM program can load and
@@ -21,7 +21,11 @@ fn lsm_list_contains_bpf(contents: &str) -> bool {
 }
 
 /// Setup syscall blocking (LSM hooks)
-pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Btf) -> Result<()> {
+pub fn setup_syscall_blocking(
+    ebpf: &mut aya::Ebpf,
+    config: &BlockingConfig,
+    btf: &Btf,
+) -> Result<()> {
     if config.syscalls.is_empty() {
         return Ok(());
     }
@@ -37,19 +41,12 @@ pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Bt
         );
     }
 
-    // Determine list mode (allow/deny)
-    let (list_type, comms) = resolve_comm_list_mode(&config.comm_deny, &config.comm_allow)?;
-
-    if list_type == 0 {
-        eprintln!(
-            "Syscall blocking enabled but no deny/allow comm list specified. No processes will be blocked."
-        );
-    }
+    let list_type = config.list_type;
 
     // Populate COMMS map
     let mut comm_map: HashMap<_, [u8; 16], u8> = get_hash_map_mut(ebpf, "COMMS")?;
 
-    for comm_str in &comms {
+    for comm_str in &config.comms {
         let mut comm = [0u8; 16];
         let bytes = comm_str.as_bytes();
         let len = bytes.len().min(15);
@@ -60,7 +57,7 @@ pub fn setup_syscall_blocking(ebpf: &mut aya::Ebpf, config: &AppConfig, btf: &Bt
     }
 
     // Insert mode indicator
-    if list_type != 0 {
+    if list_type != NO_LIST {
         let mode_key = [LIST_MODE; 16];
         comm_map
             .insert(&mode_key, &list_type, 0)
@@ -128,26 +125,6 @@ fn hooks_for_syscalls(syscalls: &[String]) -> Vec<(&'static str, &'static str, &
         }
     }
     hooks
-}
-
-/// Resolve comm list mode (allow vs deny)
-fn resolve_comm_list_mode(
-    comm_deny: &[String],
-    comm_allow: &[String],
-) -> Result<(u8, Vec<String>)> {
-    if !comm_deny.is_empty() && !comm_allow.is_empty() {
-        return Err(PanhandleError::Config(
-            "Cannot specify both --comm-deny and --comm-allow".to_string(),
-        ));
-    }
-
-    if !comm_deny.is_empty() {
-        Ok((DENY_LIST, comm_deny.to_vec()))
-    } else if !comm_allow.is_empty() {
-        Ok((ALLOW_LIST, comm_allow.to_vec()))
-    } else {
-        Ok((0, Vec::new()))
-    }
 }
 
 #[cfg(test)]

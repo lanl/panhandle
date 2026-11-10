@@ -677,10 +677,15 @@ pub async fn validate_syslog(addr: &str) -> Result<&str, String> {
 /// Determine which comm allow/deny list mode is active from the CLI args, and which comm
 /// list to populate the eBPF map with. Returns an error if both --comm-deny and
 /// --comm-allow were provided, since only one list mode can be active at a time.
+///
+/// An empty list (e.g. `comm_allow: []` in a config file) counts as not provided: an
+/// empty *allow* list would otherwise block every process on the host.
 pub fn resolve_comm_list_mode(
     comm_deny: &Option<Vec<String>>,
     comm_allow: &Option<Vec<String>>,
 ) -> Result<(u8, Vec<String>), String> {
+    let comm_deny = comm_deny.as_ref().filter(|list| !list.is_empty());
+    let comm_allow = comm_allow.as_ref().filter(|list| !list.is_empty());
     match (comm_deny, comm_allow) {
         (Some(_), Some(_)) => {
             Err("Allow and deny list both provided, exiting with error.".to_string())

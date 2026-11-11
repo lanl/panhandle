@@ -309,11 +309,16 @@ test_bash_zsh_shells_combined() {
 ### a bug here can't block anything else on the host. Skipped if the kernel's active ###
 ### LSM stack doesn't include "bpf".                                                 ###
 
+# --comm-deny blocks a process with that comm from *calling* execve: the
+# bprm_check_security hook runs before the kernel switches comm to the new program's
+# name, so the comm it sees is the caller's. So the deny-listed name here is a shell,
+# and the check is that it can't exec anything, while an identical shell under another
+# name can.
 test_syscalls_block_execve() {
     local target="$WORKDIR/pnhandle_vrfy" # <=15 chars: the kernel truncates comm there anyway
     local control="$WORKDIR/pnhandle_ctrl"
-    ln -sf /bin/sleep "$target"
-    ln -sf /bin/sleep "$control"
+    ln -sf /bin/sh "$target"
+    ln -sf /bin/sh "$control"
 
     local log="$WORKDIR/syscalls.log"
     timeout 4 sudo "$BIN" --syscalls execve --comm-deny "$(basename "$target")" --debug \
@@ -322,13 +327,13 @@ test_syscalls_block_execve() {
     sleep 1.5 # let the LSM hook attach
 
     local blocked_rc=0 allowed_rc=0
-    "$target" 0.1 >/dev/null 2>&1 || blocked_rc=$?
-    "$control" 0.1 >/dev/null 2>&1 || allowed_rc=$?
+    "$target" -c /bin/true >/dev/null 2>&1 || blocked_rc=$?
+    "$control" -c /bin/true >/dev/null 2>&1 || allowed_rc=$?
 
     kill "$ph_pid" 2>/dev/null
     wait "$ph_pid" 2>/dev/null
 
-    # the denied comm must fail to exec; the unrelated comm must succeed normally
+    # the deny-listed shell must fail to exec /bin/true; the other must succeed
     [ "$blocked_rc" -ne 0 ] && [ "$allowed_rc" -eq 0 ]
 }
 
@@ -457,7 +462,7 @@ check "--bash --zsh --syscall-execve --shells simultaneously" test_bash_zsh_shel
 echo
 echo "=== Syscall blocking (LSM) ==="
 if grep -q "bpf" /sys/kernel/security/lsm 2>/dev/null; then
-    check "--syscalls execve --comm-deny blocks only the targeted comm" test_syscalls_block_execve
+    check "--syscalls execve --comm-deny stops only that comm from exec'ing" test_syscalls_block_execve
     check "--syscalls openat --block-paths blocks only that path for the targeted comm" test_syscalls_block_open_path
 else
     skip "--syscalls execve blocking" "kernel's active LSM stack has no 'bpf' entry (/sys/kernel/security/lsm)"

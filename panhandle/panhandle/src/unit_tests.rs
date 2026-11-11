@@ -796,6 +796,44 @@ mod tests {
         }
     }
 
+    // test that a list option directly before the `output` subcommand doesn't swallow
+    // it: list options take one comma-separated value per occurrence, so `output` is
+    // never parsed as another list value (previously every one of these failed with
+    // "unexpected argument '--file'")
+    #[test]
+    fn test_raw_args_list_option_before_output_subcommand() {
+        for (flag, value) in [
+            ("--pid-list", "1,2"),
+            ("--executables", "/usr/bin/ls"),
+            ("--include-uid", "1000"),
+            ("--syscalls", "execve"),
+            ("--block-paths", "/etc/shadow"),
+            ("--comm-deny", "foo"),
+            ("--comm-allow", "foo"),
+        ] {
+            let args = RawArgs::try_parse_from([
+                "panhandle",
+                flag,
+                value,
+                "output",
+                "--file",
+                "/tmp/panhandle.log",
+            ])
+            .unwrap_or_else(|e| panic!("{flag} before output failed to parse: {e}"));
+            match args.output {
+                Some(OutputCommand::Output { file, .. }) => {
+                    assert_eq!(file, Some(PathBuf::from("/tmp/panhandle.log")), "{flag}")
+                }
+                None => panic!("{flag}: output subcommand was swallowed"),
+            }
+        }
+
+        // repeating a list option accumulates its values
+        let args =
+            RawArgs::try_parse_from(["panhandle", "--pid-list", "1,2", "--pid-list", "3"]).unwrap();
+        assert_eq!(args.pid_list, Some(vec![1, 2, 3]));
+    }
+
     // test that a comma-separated list option parses into the expected Vec
     #[test]
     fn test_raw_args_parse_comma_separated_list() {

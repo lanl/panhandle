@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-use panhandle_common::{MAX_BLOCKED_COMMS, MAX_BLOCKED_PATHS, MAX_COMM_LENGTH, MAX_PATH_LENGTH};
+use panhandle_common::{MAX_COMM_LENGTH, MAX_PATH_LENGTH};
 
 /// Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
 /// as well as the ability to monitor specific shells (bash and zsh) on a linux host.
@@ -48,7 +48,14 @@ pub struct RawArgs {
     pub exclude_max_uid: Option<u32>,
 
     /// Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 20.
-    #[arg(short, long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[arg(
+        short,
+        long,
+        value_parser,
+        num_args = 1,
+        value_delimiter = ',',
+        global = true
+    )]
     pub executables: Option<Vec<String>>,
 
     /// Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll.
@@ -68,7 +75,7 @@ pub struct RawArgs {
     /// Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10.
     /// Does not override --exclude-min-uid/--exclude-max-uid: a uid in the excluded range is
     /// still excluded even if it's listed here.
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[arg(long, value_parser, num_args = 1, value_delimiter = ',', global = true)]
     pub include_uid: Option<Vec<String>>,
 
     /// Output events as valid json strings separated by newlines.
@@ -128,7 +135,7 @@ pub struct RawArgs {
     pub bound: bool,
 
     /// Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[arg(long, value_parser, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub pid_list: Option<Vec<u32>>,
 
@@ -140,25 +147,25 @@ pub struct RawArgs {
     /// Requires "bpf" in the kernel's active LSM list (/sys/kernel/security/lsm) to actually
     /// enforce anything; otherwise the program loads and attaches without error but the kernel
     /// never invokes it, and panhandle prints a startup warning instead of blocking silently.
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[arg(long, value_parser, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub syscalls: Option<Vec<String>>,
 
     /// Specify a comma separated list of file paths to be blocked when blocking processes using -syscalls.
     /// Provide comm_allow or comm_deny to control which processes are blocked. Maximum paths defined by MAX_BLOCKED_PATHS.
-    #[arg(long, value_parser = validate_path_length, num_args = 1..=MAX_BLOCKED_PATHS, value_delimiter = ',', global = true)]
+    #[arg(long, value_parser = validate_path_length, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub block_paths: Option<Vec<String>>,
 
     /// Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls.
     /// Maximum 64 process names, 15 characters each.
-    #[arg(long, value_parser = validate_comm_length, num_args = 1..=MAX_BLOCKED_COMMS, value_delimiter = ',', global = true)]
+    #[arg(long, value_parser = validate_comm_length, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub comm_allow: Option<Vec<String>>,
 
     /// Specify a comma separated list of process names (comm) that will be denied from executing the syscalls specified in --syscalls.
     /// Maximum 64 process names, 15 characters each.
-    #[arg(long, value_parser = validate_comm_length, num_args = 1..=MAX_BLOCKED_COMMS, value_delimiter = ',', global = true)]
+    #[arg(long, value_parser = validate_comm_length, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub comm_deny: Option<Vec<String>>,
 

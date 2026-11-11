@@ -2,6 +2,10 @@
 
 ## v1.0.25
 
+- Fixed: `--syscalls open/openat/creat` was rejected by the verifier on RHEL 9
+  (5.14) kernels ("R0 has unknown scalar value should have been in
+  [-4095, 0]"): the compiler turned the deny verdict into a negation that
+  older verifiers can't track. A test now fails if any LSM program uses it.
 - Fixed: `--include-uid` never excluded root - the unused slots of the
   10-entry include list were padded with UID 0.
 - Fixed: list options (`--pid-list`, `--executables`, `--include-uid`,

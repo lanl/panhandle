@@ -22,6 +22,27 @@ static FILE_F_PATH_OFFSET: u32 = 0;
 // -EPERM: what we return to actually block the operation
 const EPERM: i32 = -1;
 
+/// -EPERM, kept in .rodata and read at runtime by `mac_verdict` (never overridden).
+#[unsafe(no_mangle)]
+static LSM_DENY: i32 = EPERM;
+
+/// System-wide (BPF_LSM_MAC) verdict: -EPERM to deny, 0 to allow. Written as a plain
+/// `if deny { -1 } else { 0 }`, LLVM folds it into a negation of the bool (BPF_NEG).
+/// Older verifiers - seen on a RHEL 9 5.14 kernel - lose track of a register's value
+/// through BPF_NEG and then reject the program, since an LSM return value must be
+/// provably within [-4095, 0]. A volatile read of LSM_DENY can't be folded, and the
+/// verifier reads frozen .rodata as a constant (the same mechanism as
+/// FILE_F_PATH_OFFSET), so every path returns a known constant without touching the
+/// stack.
+#[inline(always)]
+fn mac_verdict(deny: bool) -> i32 {
+    if deny {
+        unsafe { core::ptr::read_volatile(&LSM_DENY) }
+    } else {
+        0
+    }
+}
+
 #[repr(C)]
 pub struct PathBuf {
     pub buf: [u8; PATH_SIZE],
@@ -49,7 +70,7 @@ static BLOCKED_PATHS: HashMap<[u8; 256], u8> = HashMap::with_max_entries(64, 0);
 // each #[lsm]/#[lsm_cgroup] wrapper translates it into its attach type's convention.
 #[lsm(hook = "file_open")]
 pub fn block_open(ctx: LsmContext) -> i32 {
-    if should_block_open(ctx) { EPERM } else { 0 }
+    mac_verdict(should_block_open(ctx))
 }
 
 // Cgroup-scoped equivalent of block_open above, for --cgroup: identical logic (and the
@@ -116,7 +137,7 @@ fn should_block_open(ctx: LsmContext) -> bool {
 // always denied here with no path-based narrowing.
 #[lsm(hook = "bprm_check_security")]
 pub fn block_execve(ctx: LsmContext) -> i32 {
-    if should_block_execve(ctx) { EPERM } else { 0 }
+    mac_verdict(should_block_execve(ctx))
 }
 
 // Cgroup-scoped equivalent of block_execve above, for --cgroup. See block_open_cgroup.

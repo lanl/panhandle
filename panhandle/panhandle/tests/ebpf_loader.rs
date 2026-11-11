@@ -410,3 +410,54 @@ fn test_get_hash_map_signature() {
         common::PanhandleError,
     > = |ebpf, name| common::get_hash_map::<u32, u32>(ebpf, name);
 }
+
+/// The LSM programs must never compute their return value with BPF_NEG. LLVM folds
+/// `if deny { -1 } else { 0 }` into a negation of the bool, and older verifiers (seen on
+/// a RHEL 9 5.14 kernel) lose track of the value through BPF_NEG and then reject the
+/// program, since an LSM return value must provably be within range ("R0 has unknown
+/// scalar value should have been in [-4095, 0]"). Kernels that track BPF_NEG accept
+/// it, so only this check catches a regression on them. Scans the embedded eBPF object
+/// (ELF64) directly so it runs without root.
+#[test]
+fn test_lsm_programs_avoid_bpf_neg() {
+    let elf: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/panhandle"));
+    let u16_at = |o: usize| u16::from_le_bytes([elf[o], elf[o + 1]]) as usize;
+    let u32_at = |o: usize| u32::from_le_bytes(elf[o..o + 4].try_into().unwrap()) as usize;
+    let u64_at = |o: usize| u64::from_le_bytes(elf[o..o + 8].try_into().unwrap()) as usize;
+    assert_eq!(&elf[..4], b"\x7fELF", "embedded eBPF object isn't ELF");
+
+    let (shoff, shentsize, shnum, shstrndx) =
+        (u64_at(0x28), u16_at(0x3a), u16_at(0x3c), u16_at(0x3e));
+    let section = |i: usize| {
+        let h = shoff + i * shentsize;
+        (u32_at(h), u64_at(h + 0x18), u64_at(h + 0x20)) // name offset, file offset, size
+    };
+    let (_, strtab, _) = section(shstrndx);
+    let name_of = |off: usize| {
+        let start = strtab + off;
+        let end = start + elf[start..].iter().position(|&b| b == 0).unwrap();
+        std::str::from_utf8(&elf[start..end]).unwrap()
+    };
+
+    let mut checked = 0;
+    for i in 0..shnum {
+        let (name_off, offset, size) = section(i);
+        let name = name_of(name_off);
+        if !(name.starts_with("lsm/") || name.starts_with("lsm_cgroup/")) {
+            continue;
+        }
+        checked += 1;
+        let (insns, _) = elf[offset..offset + size].as_chunks::<8>();
+        for insn in insns {
+            // BPF_ALU64|BPF_NEG = 0x87, BPF_ALU|BPF_NEG = 0x84
+            assert!(
+                insn[0] != 0x87 && insn[0] != 0x84,
+                "{name} uses BPF_NEG, which older verifiers can't track for the LSM return value"
+            );
+        }
+    }
+    assert!(
+        checked >= 4,
+        "expected the 4 LSM program sections, found {checked}"
+    );
+}

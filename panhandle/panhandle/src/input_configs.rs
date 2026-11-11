@@ -134,12 +134,12 @@ pub struct RawArgs {
     #[serde(default)]
     pub bound: bool,
 
-    /// Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
+    /// Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io, bound. Leaving empty defaults to showing global (all PIDs) usage.
     #[arg(long, value_parser, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub pid_list: Option<Vec<u32>>,
 
-    /// Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to 30 seconds.
+    /// Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io, bound. Leaving empty defaults to 30 seconds.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..), global = true)]
     pub poll: Option<u32>,
 
@@ -164,6 +164,8 @@ pub struct RawArgs {
     pub comm_allow: Option<Vec<String>>,
 
     /// Specify a comma separated list of process names (comm) that will be denied from executing the syscalls specified in --syscalls.
+    /// The name matched is the process making the call: for execve, --comm-deny bash stops bash
+    /// from starting programs; it does not stop programs named bash from being started.
     /// Maximum 64 process names, 15 characters each.
     #[arg(long, value_parser = validate_comm_length, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
@@ -201,6 +203,30 @@ pub enum OutputCommand {
         )]
         syslog: Option<Option<String>>,
     },
+}
+
+/// Accept config-file UIDs as numbers or strings; both are normalized to strings and
+/// validated the same way as `--include-uid` (so e.g. `-5` gets the usual "must be a
+/// non-negative integer" error rather than a serde type error).
+fn deserialize_uid_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Uid {
+        Number(i64),
+        Text(String),
+    }
+    let list: Option<Vec<Uid>> = Option::deserialize(deserializer)?;
+    Ok(list.map(|uids| {
+        uids.into_iter()
+            .map(|uid| match uid {
+                Uid::Number(n) => n.to_string(),
+                Uid::Text(s) => s,
+            })
+            .collect()
+    }))
 }
 
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
@@ -257,6 +283,8 @@ pub struct ConfigArgs {
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
+    // UIDs may be written as numbers (`[1000]`) or strings (`["1000"]`) in a config file
+    #[serde(default, deserialize_with = "deserialize_uid_list")]
     pub include_uid: Option<Vec<String>>,
 
     pub pid_list: Option<Vec<u32>>,

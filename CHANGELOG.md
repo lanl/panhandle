@@ -2,6 +2,20 @@
 
 ## v1.0.25
 
+- Fixed: `--include-uid` never excluded root - the unused slots of the
+  10-entry include list were padded with UID 0.
+- Fixed: list options (`--pid-list`, `--executables`, `--include-uid`,
+  `--syscalls`, `--block-paths`, `--comm-allow`, `--comm-deny`) swallowed a
+  following `output` subcommand. Each now takes one comma-separated value per
+  use; repeat the flag to add more.
+- Unknown `--syscalls` values are rejected at startup instead of blocking
+  nothing; an empty `comm_allow`/`comm_deny` list in a config file counts as
+  no list.
+- Config files accept `include_uid` as numbers or strings.
+- `--bound` honors `--pid-list`.
+- `scripts/verify-functionality` runs a new option matrix
+  (`tests/functional_integration.rs`): every CLI and config-file option,
+  alone, pairwise, and with each output channel, plus every rejected input.
 - Fixed: `--syscalls open/openat/creat` failed to load on newer kernels
   (roughly 6.12+, including RHEL 10). `block_open` reached `f_path` at an
   offset compiled in from a bundled `vmlinux.rs`, but `struct file`'s layout

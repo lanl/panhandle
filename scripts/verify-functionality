@@ -15,6 +15,12 @@
 #
 #   scripts/verify-functionality
 #
+# It then runs the option matrix (panhandle/tests/functional_integration.rs): every CLI
+# option and every config-file option, from the CLI and from YAML and JSON config files,
+# alone, in pairwise combinations, with each output channel (file/http/syslog), plus every
+# input that must be rejected - each case triggering the activity it checks for. That
+# adds about 20 minutes; VERIFY_SKIP_MATRIX=1 skips it.
+#
 # The --syscalls (LSM-based process blocking) check additionally needs "bpf" in the
 # kernel's active LSM stack (/sys/kernel/security/lsm) and is skipped with a clear
 # message, not failed, if that's absent - true in some sandboxes/containers.
@@ -75,6 +81,22 @@ echo "=== Building panhandle (debug) ==="
 if ! (cd "$PANHANDLE_DIR" && cargo build -p panhandle); then
     echo "Build failed, aborting." >&2
     exit 1
+fi
+
+# The option matrix (panhandle/tests/functional_integration.rs) runs every CLI option and
+# every config-file option alone, in pairwise combinations, with each output channel,
+# plus every input that must be rejected - about 20 minutes. Built here as your user;
+# each group runs under sudo below. VERIFY_SKIP_MATRIX=1 skips it for a quick run.
+MATRIX_BIN=""
+if [ "${VERIFY_SKIP_MATRIX:-0}" != "1" ]; then
+    echo "=== Building the option matrix ==="
+    matrix_rel=$(cd "$PANHANDLE_DIR" && cargo test -p panhandle --test functional_integration --no-run 2>&1 |
+        grep -o 'target/debug/deps/functional_integration-[0-9a-f]*' | tail -1)
+    if [ -z "$matrix_rel" ]; then
+        echo "Option matrix build failed, aborting." >&2
+        exit 1
+    fi
+    MATRIX_BIN="$PANHANDLE_DIR/$matrix_rel"
 fi
 
 ### --- Input validation (no eBPF involved, but exercised here for completeness) --- ###
@@ -472,6 +494,41 @@ fi
 check "--cgroup scoped LSM hook attaches without error" test_cgroup_blocking_attaches
 check "--syscalls open,openat,creat loads block_open once and runs" test_syscalls_open_variants_load
 check "--cgroup with open,openat,creat loads block_open_cgroup and runs" test_cgroup_open_variants_load
+
+### --- Option matrix: one check per group; each group's case count and any failing --- ###
+### cases are echoed (every case runs from the CLI and from YAML and JSON config).    ###
+
+run_matrix() {
+    local group="$1"
+    local log="$WORKDIR/matrix_${group}.log"
+    # the log is ours (WORKDIR); only the test binary needs root
+    # shellcheck disable=SC2024
+    sudo "$MATRIX_BIN" --include-ignored --test-threads=1 --exact "$group" --nocapture >"$log" 2>&1
+    local rc=$?
+    # cargo prints the first case on the same line as its "test <name> ... " header
+    echo "      $(grep -oE '(^|\.\.\. )PASS ' "$log" | wc -l) cases passed, $(grep -oE '(^|\.\.\. )FAIL ' "$log" | wc -l) failed"
+    grep -oE '(^|\.\.\. )FAIL .*' "$log" | sed -E 's/^(\.\.\. )?/      /'
+    return $rc
+}
+
+echo
+echo "=== Option matrix ==="
+if [ -n "$MATRIX_BIN" ]; then
+    check "matrix: every monitor alone (CLI/YAML/JSON)" run_matrix matrix_each_monitor_every_mode
+    check "matrix: default execve monitor (CLI/YAML/JSON)" run_matrix matrix_default_execve_monitor
+    check "matrix: every pair of monitors, and all at once" run_matrix matrix_monitor_pairs
+    check "matrix: every monitor with --json/--verbose/--debug" run_matrix matrix_monitor_modifiers
+    check "matrix: --json/--verbose/--debug/--quiet behavior" run_matrix matrix_output_modifiers
+    check "matrix: --shells/--executables/--include-uid/exclude range" run_matrix matrix_execve_filters
+    check "matrix: --pid-list with every resource monitor" run_matrix matrix_pid_list_filters_each_resource_monitor
+    check "matrix: --poll cadence" run_matrix matrix_poll_cadence
+    check "matrix: file/http/syslog outputs, alone and together" run_matrix matrix_output_channels
+    check "matrix: CLI overrides config" run_matrix matrix_cli_overrides_config
+    check "matrix: every --syscalls/list/cgroup combination loads" run_matrix matrix_blocking_loads
+    check "matrix: every invalid input is rejected" run_matrix matrix_rejected_inputs
+else
+    skip "option matrix" "VERIFY_SKIP_MATRIX=1"
+fi
 
 echo
 echo "=== Summary: $PASS passed, $FAIL failed, $SKIP skipped ==="

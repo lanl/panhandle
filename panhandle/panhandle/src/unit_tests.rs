@@ -2874,6 +2874,33 @@ mod tests {
         );
     }
 
+    // config files accept include_uid as numbers, strings, or a mix (normalized to
+    // strings for the shared validation); negatives pass through so validation can
+    // reject them with its usual message
+    #[tokio::test]
+    async fn test_load_config_args_include_uid_numbers_or_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("uids.json", r#"{"include_uid": [1000, "1001", -5]}"#),
+            ("uids.yaml", "include_uid: [1000, \"1001\", -5]\n"),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, body).unwrap();
+            let config = load_config_args(path.to_string_lossy().to_string())
+                .await
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(
+                config.include_uid,
+                Some(vec![
+                    "1000".to_string(),
+                    "1001".to_string(),
+                    "-5".to_string()
+                ]),
+                "{name}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_merge_args_cgroup_cli_overrides_config() {
         let config = ConfigArgs {

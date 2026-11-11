@@ -218,6 +218,7 @@ pub async fn monitor_process_bounds(
     client: &reqwest_Client,
     debug: &bool,
     net_wait: &SharedNetWaitMap,
+    pid_filter: &Option<Vec<u32>>,
 ) {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *use_json, *debug);
     let scan_start = std::time::Instant::now();
@@ -226,6 +227,7 @@ pub async fn monitor_process_bounds(
     // entries for pids that have exited - otherwise the map grows unboundedly,
     // just like the SharedNetStats accumulator in network.rs.
     let mut live_pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut reported = 0;
 
     // Open once per polling cycle rather than once per process: Client::open() does a
     // full netlink round-trip to resolve the taskstats generic-netlink family id, so
@@ -234,12 +236,18 @@ pub async fn monitor_process_bounds(
     // per cycle.
     if let (Ok(procs), Ok(bound_client)) = (all_processes(), linux_taskstats::Client::open()) {
         for proc_res in procs.flatten() {
-            if let Ok(stat) = proc_res.stat()
-                && let Ok(bound_stats) = bound_client.pid_stats(stat.pid as u32)
-            {
-                let pid = stat.pid as u32;
+            let Ok(stat) = proc_res.stat() else {
+                continue;
+            };
+            let pid = stat.pid as u32;
+            live_pids.insert(pid);
+            // apply the --pid-list filter before the per-process taskstats netlink query
+            if pid_filter.as_ref().is_some_and(|pids| !pids.contains(&pid)) {
+                continue;
+            }
+            if let Ok(bound_stats) = bound_client.pid_stats(pid) {
+                reported += 1;
                 let comm = stat.comm.clone();
-                live_pids.insert(pid);
 
                 // Retrieve parent process info only if verbose flag is set
                 let (ppid, parent_comm) = if *verbose {
@@ -360,10 +368,7 @@ pub async fn monitor_process_bounds(
     }
 
     if *debug {
-        eprintln!(
-            "bound: scanned {} processes in {}ms",
-            live_pids.len(),
-            scan_start.elapsed().as_millis()
-        );
+        let summary = format!("scanned {} processes", live_pids.len());
+        debug_scan_summary("bound", pid_filter, reported, &summary, scan_start);
     }
 }

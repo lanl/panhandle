@@ -332,7 +332,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         process::exit(1);
     }
 
-    let mut uid_include_array: [u32; UID_COUNT] = [0; UID_COUNT];
+    // Unused slots must not match any real uid: the eBPF side checks every slot, so
+    // padding with 0 made every include list silently include root. u32::MAX is
+    // (uid_t)-1, which the kernel reserves as an invalid uid.
+    let mut uid_include_array: [u32; UID_COUNT] = [u32::MAX; UID_COUNT];
     if include_uid_bool {
         for (i, value) in only_these_uids_vec.iter().enumerate() {
             uid_include_array[i] = *value;
@@ -759,6 +762,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &client,
                     &args.debug,
                     &net_wait_for_task,
+                    &args.pid_list,
                 )
                 .await;
                 let _ = sleep(Duration::from_secs(polling_freq_seconds.into())).await;
@@ -958,26 +962,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // await the escape signal - this may need to change based on the method of running the program
     signal::ctrl_c().await?;
     debug!("cleanly exiting program as requested");
-    if let Some(handle_ref) = memory_fault_handle {
-        handle_ref.abort();
-    };
-    if let Some(handle_ref) = memory_usage_handle {
-        handle_ref.abort();
-    };
-    if let Some(handle_ref) = socket_handle {
-        handle_ref.abort();
+    // Abort the monitors, then wait for each to actually stop before returning: one
+    // that's mid-scan inside block_in_place can't be interrupted, and if main returned
+    // first it would reach its next sleep() on a runtime that's shutting down, which
+    // panics. Bounded so a stuck scan can't hang shutdown.
+    let monitors: Vec<JoinHandle<()>> = [
+        memory_fault_handle,
+        memory_usage_handle,
+        socket_handle,
+        io_handle,
+        cpu_handle,
+        gpu_handle,
+        bound_handle,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    for monitor in &monitors {
+        monitor.abort();
     }
-    if let Some(handle_ref) = io_handle {
-        handle_ref.abort();
-    }
-    if let Some(handle_ref) = cpu_handle {
-        handle_ref.abort();
-    }
-    if let Some(handle_ref) = gpu_handle {
-        handle_ref.abort();
-    }
-    if let Some(handle_ref) = bound_handle {
-        handle_ref.abort();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    for monitor in monitors {
+        let _ = tokio::time::timeout_at(deadline, monitor).await;
     }
     Ok(())
 }

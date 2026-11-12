@@ -111,7 +111,7 @@ extract-version:
     reports:
       dotenv: version.env 
 
-uild-rpm-el8_x86_64:
+build-rpm-el8_x86_64:
   stage: build-rpm
   image: docker.io/almalinux:8
   before_script:

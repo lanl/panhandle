@@ -1,24 +1,24 @@
-use aya::Btf;
-use aya::programs::{KProbe, Lsm};
 use aya::maps::{MapData, RingBuf};
-use procfs::process::Process;
-use tokio::{io::unix::AsyncFd, net::lookup_host, time::Duration};
+use chrono::prelude::*;
 use port_check::*;
-use std::{fs::canonicalize, sync::Arc};
-use url::Url;
+use procfs::process::Process;
 use reqwest::{Client, Error, Response, header::CONTENT_TYPE};
 use simplelog::{debug, error, info};
+use std::{fs::canonicalize, sync::Arc};
 use syslog::{Error as SyslogError, Facility, Formatter3164};
+use tokio::{io::unix::AsyncFd, net::lookup_host, time::Duration};
+use url::Url;
 use uzers::get_user_by_uid;
-use chrono::prelude::*;
 
 /// Reconstruct an owned, `#[repr(C)]`/`Copy` event struct from a ring buffer item. Ring buffer
 /// reservations are always contiguous (unlike perf array samples), so no head/tail
 /// reconstruction is needed here.
 ///
-/// SAFETY: `T` must be exactly the plain-old-data struct written by the corresponding
+/// # Safety
+///
+/// `T` must be exactly the plain-old-data struct written by the corresponding
 /// `RingBuf::submit` call on the eBPF side, with `bytes.len() >= size_of::<T>()`.
-pub(crate) unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
+pub unsafe fn read_ring_item<T: Copy>(bytes: &[u8]) -> T {
     unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const T) }
 }
 
@@ -64,7 +64,7 @@ pub async fn consume_shell_ebpf_map(
         let ring_buf = guard.get_inner_mut();
         while let Some(item) = ring_buf.next() {
             if item.len() >= core::mem::size_of::<Readline>() {
-                // SAFETY: this is implemented by a shared struct and zero'd on the ebpf side for consistency
+                // SAFETY: this is implemented by a shared struct and zero'd on the eBPF side for consistency
                 events.push(unsafe { read_ring_item::<Readline>(&item) });
             }
         }
@@ -137,20 +137,14 @@ pub async fn consume_shell_ebpf_map(
                     }
                 }
 
-                if debug {
-                    // this is an invalid json string, overriden by the debug
-                    info!("\\{:#?}\\", json_string);
-                } else {
-                    // this is a valid json string
-                    info!("{}", json_string);
-                }
+                // --debug doesn't change the format here (only the `[DEBUG]`-level log
+                // lines elsewhere do); log it as-is rather than mangling it with a
+                // backslash-wrapped Debug-formatted re-escape of the already-valid JSON.
+                info!("{}", json_string);
             } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
-                    hostname,
-                    user,
-                    data,
-                    formatted_utc
+                    hostname, user, data, formatted_utc
                 );
                 if http {
                     let http_string = Arc::new(string.clone());
@@ -210,7 +204,7 @@ pub async fn consume_execve_ebpf_map(
         let ring_buf = guard.get_inner_mut();
         while let Some(item) = ring_buf.next() {
             if item.len() >= core::mem::size_of::<ExecveEvent>() {
-                // SAFETY: this is implemented by a shared struct and zero'd on the ebpf side for consistency
+                // SAFETY: this is implemented by a shared struct and zero'd on the eBPF side for consistency
                 events.push(unsafe { read_ring_item::<ExecveEvent>(&item) });
             }
         }
@@ -296,7 +290,7 @@ pub async fn consume_execve_ebpf_map(
                             error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                } 
+                }
                 if syslog {
                     let syslog_string: Arc<String> = Arc::new(json_string.clone());
                     let result: Result<(), SyslogError> =
@@ -309,18 +303,14 @@ pub async fn consume_execve_ebpf_map(
                         }
                     }
                 }
-                if debug {
-                    info!("\\{:#?}\\", json_string);
-                } else {
-                    info!("{}", json_string);
-                }
+                // --debug doesn't change the format here (only the `[DEBUG]`-level log
+                // lines elsewhere do); log it as-is rather than mangling it with a
+                // backslash-wrapped Debug-formatted re-escape of the already-valid JSON.
+                info!("{}", json_string);
             } else {
                 let string = format!(
                     "application: panhandle, hostname: {}, moniker: {}, {}, ts_utc: '{}'",
-                    hostname,
-                    user,
-                    data,
-                    formatted_utc
+                    hostname, user, data, formatted_utc
                 );
                 if http {
                     let http_string: Arc<String> = Arc::new(string.clone());
@@ -332,7 +322,7 @@ pub async fn consume_execve_ebpf_map(
                             error!("HTTP POST Failed: {:?}", result);
                         }
                     }
-                } 
+                }
                 if syslog {
                     let syslog_string: Arc<String> = Arc::new(string.clone());
                     let result: Result<(), SyslogError> =
@@ -344,7 +334,7 @@ pub async fn consume_execve_ebpf_map(
                             error!("SYSLOG SEND Failed: {:?}", result);
                         }
                     }
-                } 
+                }
                 // this is the human readable output
                 info!("{}", string);
             }
@@ -384,10 +374,12 @@ pub async fn consume_socket_stats_ebpf_map(
     }
 }
 
-/// JSON rendering of a shell (bash/zsh) readline event. All free-form string fields
-/// (hostname, moniker, entry, command, ts) are escaped so the document stays valid
-/// even if a command or entry contains quotes, backslashes, or control characters.
-/// The uid/pid/gid/tgid render as quoted strings, matching the established schema.
+/// JSON rendering of a shell (bash/zsh) readline event. Built via `serde_json::json!`
+/// rather than hand-templated `format!`, so every field - including any future one -
+/// gets correct escaping/typing for free instead of relying on each call site to
+/// remember e.g. `json_quoted`. uid/pid/gid/tgid serialize as JSON numbers (not
+/// quoted strings - quoting them was inconsistent with every other event type in this
+/// codebase, e.g. `format_cpu_json`, and forces consumers to parse them as strings).
 pub fn format_shell_event_json(
     hostname: &str,
     moniker: &str,
@@ -399,23 +391,25 @@ pub fn format_shell_event_json(
     tgid: u32,
     ts_utc: &str,
 ) -> String {
-    format!(
-        "{{\"application\": \"panhandle\", \"hostname\": {}, \"moniker\": {}, \"entry\": {}, \"command\": {}, \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"ts_utc\": {}}}",
-        json_quoted(hostname),
-        json_quoted(moniker),
-        json_quoted(entry),
-        json_quoted(command),
-        uid,
-        pid,
-        gid,
-        tgid,
-        json_quoted(ts_utc)
-    )
+    serde_json::json!({
+        "application": "panhandle",
+        "hostname": hostname,
+        "moniker": moniker,
+        "entry": entry,
+        "command": command,
+        "uid": uid,
+        "pid": pid,
+        "gid": gid,
+        "tgid": tgid,
+        "ts_utc": ts_utc,
+    })
+    .to_string()
 }
 
-/// JSON rendering of an execve event. Args and envs serialize as proper JSON arrays
-/// (the previous `{:?}` debug formatting produced Rust-style escapes like `\u{1b}`
-/// that are not valid JSON), and all free-form strings are escaped the same way.
+/// JSON rendering of an execve event, built via `serde_json::json!` for the same
+/// reasons as `format_shell_event_json` above. Args and envs serialize as proper JSON
+/// arrays (the previous `{:?}` debug formatting produced Rust-style escapes like
+/// `\u{1b}` that are not valid JSON).
 pub fn format_execve_event_json(
     hostname: &str,
     moniker: &str,
@@ -429,20 +423,21 @@ pub fn format_execve_event_json(
     envs: &[&str],
     ts_utc: &str,
 ) -> String {
-    format!(
-        "{{\"application\": \"panhandle\", \"hostname\": {}, \"moniker\": {}, \"filename\": {}, \"command\": {}, \"uid\": \"{}\", \"pid\": \"{}\", \"gid\": \"{}\", \"tgid\": \"{}\", \"args\": {}, \"envs\": {}, \"ts_utc\": {}}}",
-        json_quoted(hostname),
-        json_quoted(moniker),
-        json_quoted(filename),
-        json_quoted(command),
-        uid,
-        pid,
-        gid,
-        tgid,
-        serde_json::to_string(args).unwrap_or_else(|_| "[]".to_string()),
-        serde_json::to_string(envs).unwrap_or_else(|_| "[]".to_string()),
-        json_quoted(ts_utc)
-    )
+    serde_json::json!({
+        "application": "panhandle",
+        "hostname": hostname,
+        "moniker": moniker,
+        "filename": filename,
+        "command": command,
+        "uid": uid,
+        "pid": pid,
+        "gid": gid,
+        "tgid": tgid,
+        "args": args,
+        "envs": envs,
+        "ts_utc": ts_utc,
+    })
+    .to_string()
 }
 
 /// send to specified syslog address.
@@ -459,7 +454,9 @@ pub async fn send_syslog(
     // execve/shell event processing for every process on the host) for as long as the
     // OS connect timeout takes. block_in_place tells tokio this closure may block, so
     // it moves other tasks off this worker thread instead of getting stuck behind it.
-    tokio::task::block_in_place(|| send_syslog_blocking(hostname, arc_string, syslog_address, json, debug))
+    tokio::task::block_in_place(|| {
+        send_syslog_blocking(hostname, arc_string, syslog_address, json, debug)
+    })
 }
 
 fn send_syslog_blocking(
@@ -680,10 +677,15 @@ pub async fn validate_syslog(addr: &str) -> Result<&str, String> {
 /// Determine which comm allow/deny list mode is active from the CLI args, and which comm
 /// list to populate the eBPF map with. Returns an error if both --comm-deny and
 /// --comm-allow were provided, since only one list mode can be active at a time.
+///
+/// An empty list (e.g. `comm_allow: []` in a config file) counts as not provided: an
+/// empty *allow* list would otherwise block every process on the host.
 pub fn resolve_comm_list_mode(
     comm_deny: &Option<Vec<String>>,
     comm_allow: &Option<Vec<String>>,
 ) -> Result<(u8, Vec<String>), String> {
+    let comm_deny = comm_deny.as_ref().filter(|list| !list.is_empty());
+    let comm_allow = comm_allow.as_ref().filter(|list| !list.is_empty());
     match (comm_deny, comm_allow) {
         (Some(_), Some(_)) => {
             Err("Allow and deny list both provided, exiting with error.".to_string())
@@ -788,22 +790,21 @@ pub fn calc_delta(current: u64, last: Option<u64>) -> u64 {
 
 /// wrapper method to handle output formatting to syslog or http
 pub async fn output_message(
-    http: &bool, 
-    syslog: &bool, 
+    http: &bool,
+    syslog: &bool,
     hostname: &Arc<String>,
     syslog_address: &Arc<String>,
     global_url: &Arc<String>,
-    use_json: &bool, 
-    plain_string: &String, 
-    json_string: &String, 
-    client: &Client, 
-    debug: &bool
+    use_json: &bool,
+    plain_string: &String,
+    json_string: &String,
+    client: &Client,
+    debug: &bool,
 ) {
     if *http {
         if *use_json {
-            let arc_string = Arc::new(json_string.clone().to_string());
-            let result =
-                send_http_post(client, global_url, &arc_string, use_json, debug).await;
+            let arc_string = Arc::new(json_string.clone());
+            let result = send_http_post(client, global_url, &arc_string, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -811,9 +812,8 @@ pub async fn output_message(
                 }
             }
         } else {
-            let arc_string = Arc::new(plain_string.clone().to_string());
-            let result =
-                send_http_post(client, global_url, &arc_string, use_json, debug).await;
+            let arc_string = Arc::new(plain_string.clone());
+            let result = send_http_post(client, global_url, &arc_string, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -824,10 +824,8 @@ pub async fn output_message(
     }
     if *syslog {
         if *use_json {
-            let arc_string = Arc::new(json_string.clone().to_string());
-            let result =
-                send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
-                    .await;
+            let arc_string = Arc::new(json_string.clone());
+            let result = send_syslog(hostname, &arc_string, syslog_address, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -835,10 +833,8 @@ pub async fn output_message(
                 }
             }
         } else {
-            let arc_string = Arc::new(plain_string.clone().to_string());
-            let result =
-                send_syslog(hostname, &arc_string, syslog_address, use_json, debug)
-                    .await;
+            let arc_string = Arc::new(plain_string.clone());
+            let result = send_syslog(hostname, &arc_string, syslog_address, use_json, debug).await;
             match result {
                 Ok(()) => {}
                 Err(result) => {
@@ -847,74 +843,46 @@ pub async fn output_message(
             }
         }
     }
-    if *debug {
-        info!("\\{:#?}\\", json_string);
-    } else if *use_json {
+    if *debug || *use_json {
+        // json_string is always populated here when either flag is set (see
+        // output_needs's needs_json = json_output || debug), unlike plain_string, which
+        // output_needs intentionally skips computing for debug-only/no-other-channel
+        // callers. Log it as-is rather than mangling it with a backslash-wrapped
+        // Debug-formatted re-escape of the already-valid JSON.
         info!("{}", json_string);
     } else {
         info!("{}", plain_string);
     }
 }
 
-/// Helper function to attach a single kprobe
-pub fn attach_kprobe(ebpf: &mut aya::Ebpf, program_name: &str) -> Result<(), anyhow::Error> {
-    let program: &mut KProbe = ebpf
-        .program_mut(program_name)
-        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
-        .try_into()
-        .inspect_err(|e| {
-            error!("failed to load eBPF program '{}': {}", program_name, e);
-        })?;
-
-    program
-        .load()
-        .inspect_err(|e| {
-            error!("failed to load kprobe '{}': {}", program_name, e);
-        })?;
-    program
-        .attach(program_name, 0)
-        .inspect_err(|e| {
-            error!("failed to attach kprobe '{}': {}", program_name, e);
-        })?;
-
-    debug!("attached eBPF kprobe '{}'", program_name);
-    Ok(())
+/// Parent process name for `--verbose` output, looked up once per parent per poll:
+/// many processes commonly share one parent (a shell, a container init), so `cache`
+/// (scoped to a single poll) turns N `/proc/<ppid>/stat` reads into one.
+pub fn cached_parent_comm(cache: &mut std::collections::HashMap<u32, String>, ppid: u32) -> String {
+    cache
+        .entry(ppid)
+        .or_insert_with(|| get_process_name(ppid).unwrap_or_else(|| "unknown".to_string()))
+        .clone()
 }
 
-/// Helper function to attach a single LSM hook
-pub fn attach_lsm_hook(
-    ebpf: &mut aya::Ebpf,
-    hook_name: &str,
-    program_name: &str,
-) -> Result<(), anyhow::Error> {
-    let program: &mut Lsm = ebpf
-        .program_mut(program_name)
-        .ok_or_else(|| anyhow::anyhow!("Program '{}' not found", program_name))?
-        .try_into()
-        .inspect_err(|e| {
-            error!("failed to load eBPF program '{}': {}", program_name, e);
-        })?;
-    let btf = Btf::from_sys_fs().inspect_err(|e| {
-        error!("failed to read BTF from sysfs for '{}': {}", hook_name, e);
-    })?;
-    program.load(hook_name, &btf).inspect_err(|e| {
-        error!(
-            "failed to load LSM hook '{}' ({}): {}",
-            hook_name, program_name, e
-        );
-    })?;
-    program.attach().inspect_err(|e| {
-        error!(
-            "failed to attach LSM hook '{}' ({}): {}",
-            hook_name, program_name, e
-        );
-    })?;
-
-    debug!(
-        "attached eBPF LSM hook '{}' (program '{}')",
-        hook_name, program_name
-    );
-    Ok(())
+/// `--debug` summary of one monitor's poll: with `--pid-list`, how many of the
+/// requested PIDs were reported; otherwise `unfiltered_summary` (e.g. "scanned 12
+/// processes"). Either way followed by how long the scan took.
+pub fn debug_scan_summary(
+    label: &str,
+    pid_filter: &Option<Vec<u32>>,
+    reported: usize,
+    unfiltered_summary: &str,
+    scan_start: std::time::Instant,
+) {
+    let elapsed_ms = scan_start.elapsed().as_millis();
+    match pid_filter {
+        Some(pids) => eprintln!(
+            "{label}: {reported} of {} requested --pid-list PIDs reported this cycle, scanned in {elapsed_ms}ms",
+            pids.len()
+        ),
+        None => eprintln!("{label}: {unfiltered_summary} in {elapsed_ms}ms"),
+    }
 }
 
 /// Get process name from PID
@@ -932,7 +900,7 @@ pub fn get_parent_pid(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
     Ok(stat.ppid as u32)
 }
 
-/// Get the real UID that owns a process, from /proc/<pid>/status.
+/// Get the real UID that owns a process, from `/proc/<pid>/status`.
 pub fn get_process_uid(pid: u32) -> Option<u32> {
     Some(Process::new(pid as i32).ok()?.status().ok()?.ruid)
 }

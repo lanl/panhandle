@@ -3,11 +3,7 @@ use std::{fs, path::Path};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-// process blocking
-pub(crate) const MAX_PATH_LENGTH: usize = 255;
-pub(crate) const MAX_COMM_LENGTH: usize = 15;
-pub(crate) const MAX_BLOCKED_PATHS: usize = 64;
-pub(crate) const MAX_BLOCKED_COMMS: usize = 64;
+use panhandle_common::{MAX_COMM_LENGTH, MAX_PATH_LENGTH};
 
 /// Panhandle provides the ability to monitor execve syscalls to identify specific interesting user behavior,
 /// as well as the ability to monitor specific shells (bash and zsh) on a linux host.
@@ -40,18 +36,30 @@ pub struct RawArgs {
     pub config: Option<String>,
 
     /// Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 0.
+    /// Checked before --include-uid, so a uid inside this range is still excluded even if it's
+    /// also listed in --include-uid.
     #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
     pub exclude_min_uid: Option<u32>,
 
     /// Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. Defaults to 999.
+    /// Checked before --include-uid, so a uid inside this range is still excluded even if it's
+    /// also listed in --include-uid.
     #[arg(long, value_parser(clap::value_parser!(u32)), global = true)]
     pub exclude_max_uid: Option<u32>,
 
     /// Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 20.
-    #[arg(short, long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    #[arg(
+        short,
+        long,
+        value_parser,
+        num_args = 1,
+        value_delimiter = ',',
+        global = true
+    )]
     pub executables: Option<Vec<String>>,
 
     /// Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll.
+    /// Requires kernel 5.17+ (or a distro kernel with the bpf_get_func_ret helper backported) and kernel BTF.
     #[arg(long, global = true)]
     #[serde(default)]
     pub socket: bool,
@@ -65,7 +73,9 @@ pub struct RawArgs {
     pub output: Option<OutputCommand>,
 
     /// Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10.
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    /// Does not override --exclude-min-uid/--exclude-max-uid: a uid in the excluded range is
+    /// still excluded even if it's listed here.
+    #[arg(long, value_parser, num_args = 1, value_delimiter = ',', global = true)]
     pub include_uid: Option<Vec<String>>,
 
     /// Output events as valid json strings separated by newlines.
@@ -99,22 +109,22 @@ pub struct RawArgs {
     #[serde(default)]
     pub zsh: bool,
 
-    /// Receive a report of CPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    /// Receive a report of CPU usage over time. Filter by pid using --pid-list. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub cpu: bool,
 
-    /// Receive a report of GPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    /// Receive a report of GPU usage over time. Filter by pid using --pid-list. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub gpu: bool,
 
-    /// Receive a report of per-PID memory usage over time, such as RSS and stack usage. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    /// Receive a report of per-PID memory usage over time, such as RSS and stack usage. Filter by pid using --pid-list. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub memory: bool,
 
-    /// Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+    /// Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list. Specify information polling interval with --poll.
     #[arg(long, global = true)]
     #[serde(default)]
     pub io: bool,
@@ -124,37 +134,49 @@ pub struct RawArgs {
     #[serde(default)]
     pub bound: bool,
 
-    /// Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    /// Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io, bound. Leaving empty defaults to showing global (all PIDs) usage.
+    #[arg(long, value_parser, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub pid_list: Option<Vec<u32>>,
 
-    /// Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to 30 seconds.
+    /// Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io, bound. Leaving empty defaults to 30 seconds.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..), global = true)]
     pub poll: Option<u32>,
 
     /// Specify a comma separated list of syscalls to be blocked. Provide comm_allow or comm_deny to control which processes are blocked when executing these syscalls.
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = ',', global = true)]
+    /// Requires "bpf" in the kernel's active LSM list (/sys/kernel/security/lsm) to actually
+    /// enforce anything; otherwise the program loads and attaches without error but the kernel
+    /// never invokes it, and panhandle prints a startup warning instead of blocking silently.
+    #[arg(long, value_parser, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub syscalls: Option<Vec<String>>,
 
     /// Specify a comma separated list of file paths to be blocked when blocking processes using -syscalls.
     /// Provide comm_allow or comm_deny to control which processes are blocked. Maximum paths defined by MAX_BLOCKED_PATHS.
-    #[arg(long, value_parser = validate_path_length, num_args = 1..=MAX_BLOCKED_PATHS, value_delimiter = ',', global = true)]
+    #[arg(long, value_parser = validate_path_length, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub block_paths: Option<Vec<String>>,
 
     /// Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls.
     /// Maximum 64 process names, 15 characters each.
-    #[arg(long, value_parser = validate_comm_length, num_args = 1..=MAX_BLOCKED_COMMS, value_delimiter = ',', global = true)]
+    #[arg(long, value_parser = validate_comm_length, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub comm_allow: Option<Vec<String>>,
 
     /// Specify a comma separated list of process names (comm) that will be denied from executing the syscalls specified in --syscalls.
+    /// The name matched is the process making the call: for execve, --comm-deny bash stops bash
+    /// from starting programs; it does not stop programs named bash from being started.
     /// Maximum 64 process names, 15 characters each.
-    #[arg(long, value_parser = validate_comm_length, num_args = 1..=MAX_BLOCKED_COMMS, value_delimiter = ',', global = true)]
+    #[arg(long, value_parser = validate_comm_length, num_args = 1, value_delimiter = ',', global = true)]
     #[serde(default)]
     pub comm_deny: Option<Vec<String>>,
+
+    /// Scope --syscalls blocking to a single cgroup v2 directory (e.g.
+    /// /sys/fs/cgroup/myjob.slice) instead of blocking system-wide. Requires a kernel with
+    /// LsmCgroup support (6.0+) and, like --syscalls generally, "bpf" in the kernel's active
+    /// LSM list to actually enforce anything.
+    #[arg(long, value_name = "PATH", global = true)]
+    pub cgroup: Option<std::path::PathBuf>,
 }
 
 // output parent command with syslog, http, and file subcommands
@@ -181,6 +203,30 @@ pub enum OutputCommand {
         )]
         syslog: Option<Option<String>>,
     },
+}
+
+/// Accept config-file UIDs as numbers or strings; both are normalized to strings and
+/// validated the same way as `--include-uid` (so e.g. `-5` gets the usual "must be a
+/// non-negative integer" error rather than a serde type error).
+fn deserialize_uid_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Uid {
+        Number(i64),
+        Text(String),
+    }
+    let list: Option<Vec<Uid>> = Option::deserialize(deserializer)?;
+    Ok(list.map(|uids| {
+        uids.into_iter()
+            .map(|uid| match uid {
+                Uid::Number(n) => n.to_string(),
+                Uid::Text(s) => s,
+            })
+            .collect()
+    }))
 }
 
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
@@ -237,6 +283,8 @@ pub struct ConfigArgs {
     // list-based output format to promote hyphen key:value pair syntax in config files
     pub output: Option<Vec<OutputConfig>>,
 
+    // UIDs may be written as numbers (`[1000]`) or strings (`["1000"]`) in a config file
+    #[serde(default, deserialize_with = "deserialize_uid_list")]
     pub include_uid: Option<Vec<String>>,
 
     pub pid_list: Option<Vec<u32>>,
@@ -250,6 +298,8 @@ pub struct ConfigArgs {
     pub comm_allow: Option<Vec<String>>,
 
     pub comm_deny: Option<Vec<String>>,
+
+    pub cgroup: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -307,6 +357,7 @@ impl From<ConfigArgs> for RawArgs {
             block_paths: cfg.block_paths,
             comm_allow: cfg.comm_allow,
             comm_deny: cfg.comm_deny,
+            cgroup: cfg.cgroup,
             // output subcommand
             output,
             config: None,
@@ -343,6 +394,100 @@ pub fn should_run_default_execve_monitor(
             && !io
             && !bound
             && !syscalls_set)
+}
+
+/// For each Option-typed field `merge_args` overrides, report which side (CLI or
+/// config file) actually supplied the effective value - CLI always wins when both
+/// provide one, matching `merge_args`'s own `if cli_args.X.is_some() { ... }` checks.
+/// Fields neither side set are omitted entirely. Bool fields are excluded: they're
+/// always OR'd together, so "which side won" isn't a meaningful question for them
+/// the way it is for a value that's either present or absent.
+pub fn merge_provenance(cli_args: &RawArgs, config_args: &ConfigArgs) -> Vec<String> {
+    let source = |cli_has: bool, config_has: bool| -> Option<&'static str> {
+        match (cli_has, config_has) {
+            (true, _) => Some("cli"),
+            (false, true) => Some("config"),
+            (false, false) => None,
+        }
+    };
+    let fields: [(&str, Option<&'static str>); 12] = [
+        (
+            "exclude_min_uid",
+            source(
+                cli_args.exclude_min_uid.is_some(),
+                config_args.exclude_min_uid.is_some(),
+            ),
+        ),
+        (
+            "exclude_max_uid",
+            source(
+                cli_args.exclude_max_uid.is_some(),
+                config_args.exclude_max_uid.is_some(),
+            ),
+        ),
+        (
+            "executables",
+            source(
+                cli_args.executables.is_some(),
+                config_args.executables.is_some(),
+            ),
+        ),
+        (
+            "include_uid",
+            source(
+                cli_args.include_uid.is_some(),
+                config_args.include_uid.is_some(),
+            ),
+        ),
+        (
+            "memory_faults",
+            source(
+                cli_args.memory_faults.is_some(),
+                config_args.memory_faults.is_some(),
+            ),
+        ),
+        (
+            "poll",
+            source(cli_args.poll.is_some(), config_args.poll.is_some()),
+        ),
+        (
+            "pid_list",
+            source(cli_args.pid_list.is_some(), config_args.pid_list.is_some()),
+        ),
+        (
+            "syscalls",
+            source(cli_args.syscalls.is_some(), config_args.syscalls.is_some()),
+        ),
+        (
+            "block_paths",
+            source(
+                cli_args.block_paths.is_some(),
+                config_args.block_paths.is_some(),
+            ),
+        ),
+        (
+            "comm_allow",
+            source(
+                cli_args.comm_allow.is_some(),
+                config_args.comm_allow.is_some(),
+            ),
+        ),
+        (
+            "comm_deny",
+            source(
+                cli_args.comm_deny.is_some(),
+                config_args.comm_deny.is_some(),
+            ),
+        ),
+        (
+            "cgroup",
+            source(cli_args.cgroup.is_some(), config_args.cgroup.is_some()),
+        ),
+    ];
+    fields
+        .into_iter()
+        .filter_map(|(name, src)| src.map(|s| format!("{}={}", name, s)))
+        .collect()
 }
 
 // function to load all args given. Merges config and cli args with cli args overwriting those given in the config file.
@@ -398,6 +543,19 @@ pub async fn merge_args(cli_args: RawArgs, config_args: ConfigArgs) -> RawArgs {
     }
     if cli_args.comm_deny.is_some() {
         final_args.comm_deny = cli_args.comm_deny.clone();
+    }
+    if cli_args.cgroup.is_some() {
+        final_args.cgroup = cli_args.cgroup.clone();
+    }
+
+    // Under --debug, show which side (CLI or config file) each overridable value
+    // actually came from, so "why is --poll not taking effect" doesn't require
+    // reading merge_args's source - the CLI always wins when both provide a value.
+    if final_args.debug {
+        let provenance = merge_provenance(&cli_args, &config_args);
+        if !provenance.is_empty() {
+            eprintln!("config merge: {}", provenance.join(", "));
+        }
     }
 
     // Merge CLI output into config output, or create it if missing.
@@ -482,7 +640,7 @@ pub async fn load_config_args(config_path: String) -> Result<ConfigArgs, String>
 
 // Clap validation functions for comm and path lengths for process blocking feature.
 // Also reused directly on config-file-sourced values, which don't go through clap.
-pub(crate) fn validate_path_length(s: &str) -> Result<String, String> {
+pub fn validate_path_length(s: &str) -> Result<String, String> {
     if s.len() > MAX_PATH_LENGTH {
         Err(format!(
             "Path exceeds maximum length of {} bytes (got {} bytes): {}",
@@ -495,7 +653,7 @@ pub(crate) fn validate_path_length(s: &str) -> Result<String, String> {
     }
 }
 
-pub(crate) fn validate_comm_length(s: &str) -> Result<String, String> {
+pub fn validate_comm_length(s: &str) -> Result<String, String> {
     if s.len() > MAX_COMM_LENGTH {
         Err(format!(
             "Process name (comm) exceeds maximum length of {} bytes (got {} bytes): {}",
@@ -505,5 +663,23 @@ pub(crate) fn validate_comm_length(s: &str) -> Result<String, String> {
         ))
     } else {
         Ok(s.to_string())
+    }
+}
+
+/// Syscalls `--syscalls` can block. Anything else is rejected at startup: silently
+/// ignoring a typo (e.g. `exec`) would leave the operator believing it's blocked.
+pub const SUPPORTED_BLOCK_SYSCALLS: [&str; 4] = ["open", "openat", "creat", "execve"];
+
+pub fn validate_syscalls(syscalls: &[String]) -> Result<(), String> {
+    match syscalls
+        .iter()
+        .find(|s| !SUPPORTED_BLOCK_SYSCALLS.contains(&s.as_str()))
+    {
+        Some(bad) => Err(format!(
+            "Unsupported --syscalls value '{}': supported values are {}",
+            bad,
+            SUPPORTED_BLOCK_SYSCALLS.join(", ")
+        )),
+        None => Ok(()),
     }
 }

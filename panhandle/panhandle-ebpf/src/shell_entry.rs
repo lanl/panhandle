@@ -11,9 +11,9 @@ use aya_ebpf::{
     programs::RetProbeContext,
 };
 use aya_log_ebpf::{debug, warn};
-use panhandle_common::Readline;
+use panhandle_common::{Readline, UID_COUNT, UID_OPT_INCLUDE_ENABLED};
 
-use crate::*;
+use crate::{check_uid_in_uidarray, exclude_uid, get_bool};
 /// Shared implementation for capturing shell command-line entries via libreadline's
 /// (bash) or zle's (zsh) teardown hooks. Both shells need their own top-level
 /// `#[uretprobe]` function (each is attached to a different target binary/symbol), but

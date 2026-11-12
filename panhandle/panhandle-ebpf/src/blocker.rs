@@ -2,18 +2,46 @@
 use aya_ebpf::{
     cty::c_long,
     helpers::{bpf_d_path, bpf_get_current_comm},
-    macros::{lsm, map},
+    macros::{lsm, lsm_cgroup, map},
     maps::{HashMap, PerCpuArray},
     programs::LsmContext,
 };
 use panhandle_common::{ALLOW_LIST, DENY_LIST, LIST_MODE};
 
-use crate::vmlinux::file;
-
 const PATH_SIZE: usize = 256;
+
+/// Byte offset of `f_path` within `struct file` on the running kernel, written by
+/// userspace at load time from kernel BTF (see panhandle's btf_offsets.rs). Rust eBPF
+/// code has no CO-RE field relocations, and `struct file`'s layout differs between
+/// kernels (f_path moved around 6.12), so a compiled-in offset only works on some of
+/// them. This lives in frozen .rodata, so the verifier sees it as a constant and still
+/// accepts the resulting pointer as a `struct path *` for bpf_d_path.
+#[unsafe(no_mangle)]
+static FILE_F_PATH_OFFSET: u32 = 0;
 
 // -EPERM: what we return to actually block the operation
 const EPERM: i32 = -1;
+
+/// -EPERM, kept in .rodata and read at runtime by `mac_verdict` (never overridden).
+#[unsafe(no_mangle)]
+static LSM_DENY: i32 = EPERM;
+
+/// System-wide (BPF_LSM_MAC) verdict: -EPERM to deny, 0 to allow. Written as a plain
+/// `if deny { -1 } else { 0 }`, LLVM folds it into a negation of the bool (BPF_NEG).
+/// Older verifiers - seen on a RHEL 9 5.14 kernel - lose track of a register's value
+/// through BPF_NEG and then reject the program, since an LSM return value must be
+/// provably within [-4095, 0]. A volatile read of LSM_DENY can't be folded, and the
+/// verifier reads frozen .rodata as a constant (the same mechanism as
+/// FILE_F_PATH_OFFSET), so every path returns a known constant without touching the
+/// stack.
+#[inline(always)]
+fn mac_verdict(deny: bool) -> i32 {
+    if deny {
+        unsafe { core::ptr::read_volatile(&LSM_DENY) }
+    } else {
+        0
+    }
+}
 
 #[repr(C)]
 pub struct PathBuf {
@@ -34,12 +62,25 @@ static COMMS: HashMap<[u8; 16], u8> = HashMap::with_max_entries(64, 0);
 #[map(name = "BLOCKED_PATHS")]
 static BLOCKED_PATHS: HashMap<[u8; 256], u8> = HashMap::with_max_entries(64, 0);
 
+// System-wide (BPF_LSM_MAC) LSM programs return 0 to allow or a negative errno (-EPERM
+// here) to deny. Cgroup-scoped (BPF_LSM_CGROUP) programs use the cgroup-BPF convention
+// instead: 1 allows and 0 denies (the kernel turns 0 into -EPERM), and the verifier
+// rejects any other value. Note this is the reverse of the system-wide 0 = allow.
+// should_block_open/should_block_execve return the shared deny decision as a plain bool;
+// each #[lsm]/#[lsm_cgroup] wrapper translates it into its attach type's convention.
 #[lsm(hook = "file_open")]
 pub fn block_open(ctx: LsmContext) -> i32 {
-    match try_block_open(ctx) {
-        Ok(ret) => ret,
-        Err(ret) => ret,
-    }
+    mac_verdict(should_block_open(ctx))
+}
+
+// Cgroup-scoped equivalent of block_open above, for --cgroup: identical logic (and the
+// same COMMS/BLOCKED_PATHS maps), but a separate program because the eBPF-side
+// attachment mechanism (BPF_LSM_CGROUP vs BPF_LSM_MAC) requires its own macro/section,
+// even though the two only ever differ in how userspace attaches them and in their
+// return-value convention (see above).
+#[lsm_cgroup(hook = "file_open")]
+pub fn block_open_cgroup(ctx: LsmContext) -> i32 {
+    if should_block_open(ctx) { 0 } else { 1 }
 }
 
 // Blocking a comm here can be narrowed to specific paths via BLOCKED_PATHS: if that
@@ -50,18 +91,28 @@ pub fn block_open(ctx: LsmContext) -> i32 {
 // open. This is deliberately different from block_execve below, which has no such
 // narrowing: a blocked comm can never execute at all, full stop - blocking specific
 // paths doesn't apply to "should this binary be allowed to run".
-fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
+fn should_block_open(ctx: LsmContext) -> bool {
     // Check if this comm should be blocked based on allow/deny lists
     if !comm_is_blocked() {
-        return Ok(0);
+        return false;
     }
 
-    let f: *const file = ctx.arg(0);
+    let f: *const u8 = ctx.arg(0);
 
-    let ptr = PATH_SCRATCH.get_ptr_mut(0).ok_or(0i32)?;
+    let Some(ptr) = PATH_SCRATCH.get_ptr_mut(0) else {
+        return true; // couldn't get scratch space, deny by default
+    };
     let scratch = unsafe { &mut *ptr };
+    // Zero first: bpf_d_path writes the path plus a NUL and leaves the rest of the
+    // buffer untouched, so after this the buffer is exactly the zero-padded key format
+    // userspace uses for BLOCKED_PATHS and can be looked up directly. (Copying a
+    // variable-length path into a separate stack key is rejected by the verifier as an
+    // unbounded variable-offset stack write.)
+    scratch.buf = [0u8; PATH_SIZE];
 
-    let path_ptr = unsafe { &(*f).f_path } as *const _ as *mut core::ffi::c_void;
+    // read_volatile so the compiler can't fold in the placeholder 0 at build time
+    let f_path_offset = unsafe { core::ptr::read_volatile(&FILE_F_PATH_OFFSET) } as usize;
+    let path_ptr = unsafe { f.add(f_path_offset) } as *mut core::ffi::c_void;
 
     #[cfg(bpf_target_arch = "aarch64")]
     let buf_ptr = scratch.buf.as_mut_ptr() as *mut u8;
@@ -72,40 +123,31 @@ fn try_block_open(ctx: LsmContext) -> Result<i32, i32> {
     let ret: c_long = unsafe { bpf_d_path(path_ptr as *mut _, buf_ptr, PATH_SIZE as u32) };
 
     if ret > 0 {
-        // bpf_d_path's return value includes the trailing NUL and, in the worst
-        // case, could equal PATH_SIZE -- clamp (don't wrap) so a full-length path
-        // is never mistaken for an empty one and slicing stays in-bounds.
-        let len = (ret as usize).min(PATH_SIZE);
-        // Linux paths are arbitrary bytes, not guaranteed valid UTF-8, so compare
-        // raw bytes rather than constructing a &str (which path_is_blocked would
-        // just call .as_bytes() on anyway).
-        let path_bytes = &scratch.buf[..len];
-
         // If path map has real entries (not just placeholder) and this path isn't blocked, allow it
-        if !is_path_map_empty() && !path_is_blocked(path_bytes) {
-            return Ok(0); // comm is blocked but the path isn't, return ok
+        if !is_path_map_empty() && !path_is_blocked(&scratch.buf) {
+            return false; // comm is blocked but the path isn't, allow it
         }
     }
 
     // if we couldn't get the path, or path checking indicates block, deny by default
-    Ok(EPERM)
+    true
 }
 
-// Hook for strictly blocking execve: unlike try_block_open above, a blocked comm is
+// Hook for strictly blocking execve: unlike should_block_open above, a blocked comm is
 // always denied here with no path-based narrowing.
 #[lsm(hook = "bprm_check_security")]
 pub fn block_execve(ctx: LsmContext) -> i32 {
-    match unsafe { try_block_execve(ctx) } {
-        Ok(ret) => ret,
-        Err(ret) => ret,
-    }
+    mac_verdict(should_block_execve(ctx))
 }
 
-unsafe fn try_block_execve(_ctx: LsmContext) -> Result<i32, i32> {
-    if !comm_is_blocked() {
-        return Ok(0);
-    }
-    Ok(EPERM)
+// Cgroup-scoped equivalent of block_execve above, for --cgroup. See block_open_cgroup.
+#[lsm_cgroup(hook = "bprm_check_security")]
+pub fn block_execve_cgroup(ctx: LsmContext) -> i32 {
+    if should_block_execve(ctx) { 0 } else { 1 }
+}
+
+fn should_block_execve(_ctx: LsmContext) -> bool {
+    comm_is_blocked()
 }
 
 // Returns true if the current task's comm should be blocked.
@@ -160,11 +202,10 @@ fn get_list_mode() -> u8 {
 }
 
 // Returns true if the provided file path is in the forbidden file list
-fn path_is_blocked(path_bytes: &[u8]) -> bool {
-    let mut key: [u8; 256] = [0u8; 256];
-    let len = path_bytes.len().min(256);
-    key[..len].copy_from_slice(&path_bytes[..len]);
-    unsafe { BLOCKED_PATHS.get(&key).is_some() }
+// `path` is a NUL-terminated, zero-padded path buffer - the same layout userspace uses
+// for BLOCKED_PATHS keys. Linux paths are arbitrary bytes, so this compares raw bytes.
+fn path_is_blocked(path: &[u8; PATH_SIZE]) -> bool {
+    unsafe { BLOCKED_PATHS.get(path).is_some() }
 }
 
 // Returns true if the path map only contains the placeholder (meaning it's effectively empty)

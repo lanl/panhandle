@@ -13,5 +13,4 @@
     "output": [
         { "syslog": "hpcsyslog.lanl.gov:514/tcp" }
     ]
-
 }

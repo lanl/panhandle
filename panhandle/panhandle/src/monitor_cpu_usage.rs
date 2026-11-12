@@ -25,7 +25,7 @@ pub struct PidStats {
 /// (previously inline, duplicated at both call sites) eviction logic can be unit
 /// tested directly - see CHANGELOG v1.0.18's memory-growth-leak fix, which this
 /// protects against regressing.
-pub(crate) fn evict_stale_pids(
+pub fn evict_stale_pids(
     last_pid_times: &mut HashMap<u32, u64>,
     pid_stats: &mut HashMap<u32, PidStats>,
     live_pids: &HashSet<u32>,
@@ -35,7 +35,7 @@ pub(crate) fn evict_stale_pids(
 }
 
 /// Per-PID CPU%, 100% = fully using one core, 200% = fully using two cores, etc.
-pub(crate) fn calc_cpu_percent(delta_ns: u64, interval_ns: u64) -> f64 {
+pub fn calc_cpu_percent(delta_ns: u64, interval_ns: u64) -> f64 {
     if interval_ns > 0 {
         (delta_ns as f64 / interval_ns as f64) * 100.0
     } else {
@@ -45,11 +45,7 @@ pub(crate) fn calc_cpu_percent(delta_ns: u64, interval_ns: u64) -> f64 {
 
 /// System-wide CPU%, normalized to 0-100% (100% = every core fully busy), matching the
 /// convention used by tools like top/htop's summary line rather than the per-PID scale.
-pub(crate) fn calc_system_cpu_percent(
-    busy_delta_ns: u64,
-    interval_ns: u64,
-    num_cpus: usize,
-) -> f64 {
+pub fn calc_system_cpu_percent(busy_delta_ns: u64, interval_ns: u64, num_cpus: usize) -> f64 {
     if interval_ns > 0 && num_cpus > 0 {
         (busy_delta_ns as f64 / (interval_ns as f64 * num_cpus as f64) * 100.0).clamp(0.0, 100.0)
     } else {
@@ -59,20 +55,20 @@ pub(crate) fn calc_system_cpu_percent(
 
 // Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
 // loop afterward only needs to do async formatting/output work.
-pub(crate) struct CpuEntry {
-    pid: u32,
-    comm: String,
-    found: bool,
-    ppid: Option<u32>,
-    parent_comm: Option<String>,
-    uid: Option<u32>,
-    username: Option<String>,
-    state: Option<char>,
-    pub(crate) cpu_time: u64,
-    pub(crate) delta: u64,
-    pub(crate) cpu_percent: f64,
-    pub(crate) avg_cpu_percent: f64,
-    pub(crate) max_cpu_percent: f64,
+pub struct CpuEntry {
+    pub pid: u32,
+    pub comm: String,
+    pub found: bool,
+    pub ppid: Option<u32>,
+    pub parent_comm: Option<String>,
+    pub uid: Option<u32>,
+    pub username: Option<String>,
+    pub state: Option<char>,
+    pub cpu_time: u64,
+    pub delta: u64,
+    pub cpu_percent: f64,
+    pub avg_cpu_percent: f64,
+    pub max_cpu_percent: f64,
 }
 
 /// Plain-text rendering of a found CPU entry. `verbose` includes parent/owner/state and
@@ -278,6 +274,7 @@ pub async fn monitor_cpu_usage(
 
     // Convert poll interval to nanoseconds for CPU percentage calculation
     let interval_ns = (poll_interval as u64) * 1_000_000_000;
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs lookups up front (off the async executor) so the reporting loop
     // below only does formatting/output work.
@@ -308,21 +305,15 @@ pub async fn monitor_cpu_usage(
             // the same parent (common: many children of one shell/container-init) cost
             // one /proc/<ppid>/stat read instead of N when --verbose is set.
             let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
-            let resolve_parent = |pid: u32,
-                                  cache: &mut HashMap<u32, String>|
-             -> (Option<u32>, Option<String>) {
-                if let Ok(parent_pid) = get_parent_pid(pid) {
-                    let parent_name = cache
-                        .entry(parent_pid)
-                        .or_insert_with(|| {
-                            get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string())
-                        })
-                        .clone();
-                    (Some(parent_pid), Some(parent_name))
-                } else {
-                    (Some(0), Some("unknown".to_string()))
-                }
-            };
+            let resolve_parent =
+                |pid: u32, cache: &mut HashMap<u32, String>| -> (Option<u32>, Option<String>) {
+                    if let Ok(parent_pid) = get_parent_pid(pid) {
+                        let parent_name = cached_parent_comm(cache, parent_pid);
+                        (Some(parent_pid), Some(parent_name))
+                    } else {
+                        (Some(0), Some("unknown".to_string()))
+                    }
+                };
 
             // Cache of uid -> username, scoped to this single poll, so N processes owned
             // by the same user (the common case) cost one username lookup instead of N
@@ -455,6 +446,12 @@ pub async fn monitor_cpu_usage(
 
             (entries, total_busy, num_cpus)
         });
+
+    if *debug {
+        let found = entries.iter().filter(|e| e.found).count();
+        let summary = format!("scanned {} processes", entries.len());
+        debug_scan_summary("cpu", pid_filter, found, &summary, scan_start);
+    }
 
     for entry in entries {
         if entry.found {
@@ -607,7 +604,7 @@ pub async fn monitor_cpu_usage(
 /// Build a CpuEntry for a successfully-read PID, updating the per-PID delta/average/max
 /// tracking state as a side effect. Shared by both the --pid-list-filtered and
 /// all-processes gather paths so the accounting logic isn't duplicated between them.
-pub(crate) fn build_found_entry(
+pub fn build_found_entry(
     pid: u32,
     stat: Stat,
     ppid: Option<u32>,

@@ -194,6 +194,7 @@ pub async fn monitor_gpu_usage(
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather the NVML query and procfs lookups up front (off the async executor) so the
     // reporting loop below only does formatting/output work.
@@ -203,6 +204,10 @@ pub async fn monitor_gpu_usage(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
 
         for gpu in machine.graphics_status() {
             let mut processes = Vec::new();
@@ -223,8 +228,7 @@ pub async fn monitor_gpu_usage(
                 // Retrieve parent process info only if verbose flag is set
                 let (ppid, parent_comm) = if *verbose {
                     if let Ok(parent_pid) = get_parent_pid(process.pid) {
-                        let parent_name =
-                            get_process_name(parent_pid).unwrap_or_else(|| "unknown".to_string());
+                        let parent_name = cached_parent_comm(&mut parent_comm_cache, parent_pid);
                         (Some(parent_pid), Some(parent_name))
                     } else {
                         (Some(0), Some("unknown".to_string()))
@@ -277,6 +281,11 @@ pub async fn monitor_gpu_usage(
 
         gpus
     });
+
+    if *debug {
+        let matched: usize = gpus.iter().map(|g| g.processes.len()).sum();
+        debug_scan_summary("gpu", pid_list, matched, "scanned", scan_start);
+    }
 
     for gpu in gpus {
         for process in gpu.processes {

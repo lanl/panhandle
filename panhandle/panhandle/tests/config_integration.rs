@@ -9,6 +9,7 @@
 
 use std::{
     fs,
+    path::PathBuf,
     process::{Command, Stdio},
 };
 
@@ -20,14 +21,30 @@ fn panhandle_bin() -> Command {
     cmd
 }
 
+/// Returns a path in a project-local temp directory that works in sandboxed
+/// environments (e.g., tarpaulin) where /tmp may not be writable.
+fn temp_config_path(name: &str) -> PathBuf {
+    // Try CARGO_TARGET_DIR first, then current directory, then system temp.
+    let base = std::env::var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::current_dir().map(|c| c.join("target")))
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let path = base.join("test_tmp").join(name);
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    path
+}
+
 /// Test that invalid config files are rejected with clear errors
 #[test]
 fn test_invalid_config_rejected() {
-    let config_path = "/tmp/panhandle_invalid.yaml";
-    fs::write(config_path, "invalid: [unclosed").unwrap();
+    let config_path = temp_config_path("panhandle_invalid.yaml");
+    fs::write(&config_path, "invalid: [unclosed").unwrap();
 
     let output = panhandle_bin()
-        .args(["--config", config_path])
+        .args(["--config", config_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute panhandle");
 
@@ -50,11 +67,11 @@ fn test_invalid_config_rejected() {
 /// Test that unknown config fields are rejected (deny_unknown_fields)
 #[test]
 fn test_unknown_config_field_rejected() {
-    let config_path = "/tmp/panhandle_unknown.yaml";
-    fs::write(config_path, "unknown_field: true\n").unwrap();
+    let config_path = temp_config_path("panhandle_unknown.yaml");
+    fs::write(&config_path, "unknown_field: true\n").unwrap();
 
     let output = panhandle_bin()
-        .args(["--config", config_path])
+        .args(["--config", config_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute panhandle");
 
@@ -98,11 +115,11 @@ fn test_nonexistent_config_rejected() {
 /// Test that unsupported config extensions are rejected
 #[test]
 fn test_unsupported_config_extension_rejected() {
-    let config_path = "/tmp/panhandle_test.xml";
-    fs::write(config_path, "<config></config>").unwrap();
+    let config_path = temp_config_path("panhandle_test.xml");
+    fs::write(&config_path, "<config></config>").unwrap();
 
     let output = panhandle_bin()
-        .args(["--config", config_path])
+        .args(["--config", config_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute panhandle");
 
@@ -207,11 +224,11 @@ fn test_include_uid_non_numeric_rejected() {
 /// value_parser to catch this before it reaches the same runtime parse.
 #[test]
 fn test_config_include_uid_non_numeric_rejected() {
-    let config_path = "/tmp/panhandle_include_uid_non_numeric.yaml";
-    fs::write(config_path, "include_uid: [\"not_a_uid\"]\n").unwrap();
+    let config_path = temp_config_path("panhandle_include_uid_non_numeric.yaml");
+    fs::write(&config_path, "include_uid: [\"not_a_uid\"]\n").unwrap();
 
     let output = panhandle_bin()
-        .args(["--config", config_path])
+        .args(["--config", config_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute panhandle");
 
@@ -323,15 +340,15 @@ fn test_comm_allow_and_deny_both_rejected() {
 /// this specifically exercises the config-file path.
 #[test]
 fn test_config_comm_allow_length_exceeded_rejected() {
-    let config_path = "/tmp/panhandle_comm_allow_too_long.yaml";
+    let config_path = temp_config_path("panhandle_comm_allow_too_long.yaml");
     fs::write(
-        config_path,
+        &config_path,
         "syscalls: [\"execve\"]\ncomm_allow: [\"this_name_is_way_too_long_for_a_comm\"]\n",
     )
     .unwrap();
 
     let output = panhandle_bin()
-        .args(["--config", config_path])
+        .args(["--config", config_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute panhandle");
 
@@ -357,16 +374,16 @@ fn test_config_comm_allow_length_exceeded_rejected() {
 /// reached an unguarded fixed-size array copy.
 #[test]
 fn test_config_block_paths_length_exceeded_rejected() {
-    let config_path = "/tmp/panhandle_block_paths_too_long.yaml";
+    let config_path = temp_config_path("panhandle_block_paths_too_long.yaml");
     let long_path = "a".repeat(300);
     fs::write(
-        config_path,
+        &config_path,
         format!("syscalls: [\"open\"]\nblock_paths: [\"{long_path}\"]\n"),
     )
     .unwrap();
 
     let output = panhandle_bin()
-        .args(["--config", config_path])
+        .args(["--config", config_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute panhandle");
 
@@ -478,11 +495,11 @@ fn test_pid_list_negative_rejected() {
 /// delay at all.
 #[test]
 fn test_config_poll_zero_rejected() {
-    let config_path = "/tmp/panhandle_poll_zero.yaml";
-    fs::write(config_path, "cpu: true\npoll: 0\n").unwrap();
+    let config_path = temp_config_path("panhandle_poll_zero.yaml");
+    fs::write(&config_path, "cpu: true\npoll: 0\n").unwrap();
 
     let output = panhandle_bin()
-        .args(["--config", config_path])
+        .args(["--config", config_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute panhandle");
 
@@ -558,11 +575,11 @@ fn test_exclude_uid_min_above_default_max_rejected() {
 /// not just the CLI.
 #[test]
 fn test_config_exclude_uid_range_inverted_rejected() {
-    let config_path = "/tmp/panhandle_exclude_uid_inverted.yaml";
-    fs::write(config_path, "exclude_min_uid: 500\nexclude_max_uid: 100\n").unwrap();
+    let config_path = temp_config_path("panhandle_exclude_uid_inverted.yaml");
+    fs::write(&config_path, "exclude_min_uid: 500\nexclude_max_uid: 100\n").unwrap();
 
     let output = panhandle_bin()
-        .args(["--config", config_path])
+        .args(["--config", config_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute panhandle");
 

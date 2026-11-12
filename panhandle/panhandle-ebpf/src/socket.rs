@@ -12,9 +12,9 @@
 // and cleanup in its own per-pid HashMap.
 use aya_ebpf::{
     helpers::bpf_get_current_pid_tgid,
-    macros::{btf_tracepoint, kprobe, map},
+    macros::{btf_tracepoint, fentry, fexit, map},
     maps::RingBuf,
-    programs::{BtfTracePointContext, ProbeContext},
+    programs::{BtfTracePointContext, FEntryContext, FExitContext},
 };
 use aya_log_ebpf::warn;
 use panhandle_common::SocketStatsEvent;
@@ -113,24 +113,27 @@ fn try_inet_sock_set_state(ctx: BtfTracePointContext) -> Result<u32, u32> {
     Ok(0)
 }
 
-// TCP data sent - using kprobe
-#[kprobe(function = "tcp_sendmsg")]
-pub fn tcp_sendmsg(ctx: ProbeContext) -> u32 {
+// TCP data sent - using fexit so byte counts come from the real return value
+// (bytes actually queued, or a negative errno on failure) instead of the requested
+// size argument available at entry, which a short write or a failed call would make
+// wrong.
+#[fexit(function = "tcp_sendmsg")]
+pub fn tcp_sendmsg(ctx: FExitContext) -> u32 {
     match try_tcp_sendmsg(ctx) {
         Ok(ret) => ret,
         Err(ret) => ret,
     }
 }
 
-fn try_tcp_sendmsg(ctx: ProbeContext) -> Result<u32, u32> {
+fn try_tcp_sendmsg(ctx: FExitContext) -> Result<u32, u32> {
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
-    // tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
-    let size: usize = ctx.arg(2).ok_or(1u32)?;
+    // int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size) -> bytes sent, or -errno
+    let sent: i32 = ctx.ret().unwrap_or(-1);
 
-    if size > 0 {
+    if sent > 0 {
         let mut event = SocketStatsEvent::new(pid);
-        event.bytes_sent_delta = size as u64;
+        event.bytes_sent_delta = sent as u64;
         event.packets_sent_delta = 1;
 
         if !try_submit(event) {
@@ -144,20 +147,23 @@ fn try_tcp_sendmsg(ctx: ProbeContext) -> Result<u32, u32> {
     Ok(0)
 }
 
-// TCP data received - using kprobe
-#[kprobe(function = "tcp_cleanup_rbuf")]
-pub fn tcp_cleanup_rbuf(ctx: ProbeContext) -> u32 {
+// TCP data received - using fentry. tcp_cleanup_rbuf(sk, copied) is called after the
+// copy to userspace completes, so `copied` is already the real byte count here (unlike
+// the sendmsg/recvmsg cases above/below, there's no entry-vs-return distinction to get
+// wrong) - fentry is used purely for the lower per-call overhead vs a kprobe.
+#[fentry(function = "tcp_cleanup_rbuf")]
+pub fn tcp_cleanup_rbuf(ctx: FEntryContext) -> u32 {
     match try_tcp_cleanup_rbuf(ctx) {
         Ok(ret) => ret,
         Err(ret) => ret,
     }
 }
 
-fn try_tcp_cleanup_rbuf(ctx: ProbeContext) -> Result<u32, u32> {
+fn try_tcp_cleanup_rbuf(ctx: FEntryContext) -> Result<u32, u32> {
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
-    // tcp_cleanup_rbuf(struct sock *sk, int copied)
-    let copied: i32 = ctx.arg(1).ok_or(1u32)?;
+    // void tcp_cleanup_rbuf(struct sock *sk, int copied)
+    let copied: i32 = ctx.arg(1);
 
     if copied > 0 {
         let mut event = SocketStatsEvent::new(pid);
@@ -175,26 +181,27 @@ fn try_tcp_cleanup_rbuf(ctx: ProbeContext) -> Result<u32, u32> {
     Ok(0)
 }
 
-// UDP data sent - using kprobe
-#[kprobe(function = "udp_sendmsg")]
-pub fn udp_sendmsg(ctx: ProbeContext) -> u32 {
+// UDP data sent - using fexit so a failed send (negative return value) isn't counted as
+// bytes sent, which the entry-time requested-length argument alone can't tell us.
+#[fexit(function = "udp_sendmsg")]
+pub fn udp_sendmsg(ctx: FExitContext) -> u32 {
     match try_udp_sendmsg(ctx) {
         Ok(ret) => ret,
         Err(ret) => ret,
     }
 }
 
-fn try_udp_sendmsg(ctx: ProbeContext) -> Result<u32, u32> {
+fn try_udp_sendmsg(ctx: FExitContext) -> Result<u32, u32> {
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
-    // int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
-    let size: usize = ctx.arg(2).ok_or(1u32)?;
+    // int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len) -> bytes sent, or -errno
+    let sent: i32 = ctx.ret().unwrap_or(-1);
 
     let mut event = SocketStatsEvent::new(pid);
     event.udp_sockets_set = 1; // since we don't have the luxury of checking set state, udp_sockets is more like a flag
 
-    if size > 0 {
-        event.bytes_sent_delta = size as u64;
+    if sent > 0 {
+        event.bytes_sent_delta = sent as u64;
         event.packets_sent_delta = 1;
     }
 
@@ -208,24 +215,28 @@ fn try_udp_sendmsg(ctx: ProbeContext) -> Result<u32, u32> {
     Ok(0)
 }
 
-// UDP data received - using kprobe
-#[kprobe(function = "udp_recvmsg")]
-pub fn udp_recvmsg(ctx: ProbeContext) -> u32 {
+// UDP data received - using fexit. The entry-time `len` argument is the size of the
+// buffer the caller passed to recvfrom()/recvmsg(), not how much was actually received
+// (e.g. a 10-byte datagram read into a 64KB buffer would count as 64KB) - only the
+// return value (actual bytes copied, or -errno) is correct here.
+#[fexit(function = "udp_recvmsg")]
+pub fn udp_recvmsg(ctx: FExitContext) -> u32 {
     match try_udp_recvmsg(ctx) {
         Ok(ret) => ret,
         Err(ret) => ret,
     }
 }
 
-fn try_udp_recvmsg(ctx: ProbeContext) -> Result<u32, u32> {
+fn try_udp_recvmsg(ctx: FExitContext) -> Result<u32, u32> {
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
 
     // int udp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int flags, int *addr_len)
-    let size: i32 = ctx.arg(2).ok_or(1u32)?;
+    // -> bytes received, or -errno
+    let received: i32 = ctx.ret().unwrap_or(-1);
 
-    if size > 0 {
+    if received > 0 {
         let mut event = SocketStatsEvent::new(pid);
-        event.bytes_recv_delta = size as u64;
+        event.bytes_recv_delta = received as u64;
         event.packets_recv_delta = 1;
 
         if !try_submit(event) {

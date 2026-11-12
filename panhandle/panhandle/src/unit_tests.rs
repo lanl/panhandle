@@ -7,8 +7,10 @@ mod tests {
 
     use crate::{
         helpers::*, input_configs::*, monitor_cpu_usage::*, monitor_gpu_usage::*,
-        monitor_io_usage::*, monitor_network_usage::*, procfs_helpers::*,
+        monitor_io_usage::*, monitor_network_usage::*, monitor_process_bounds::*,
+        procfs_helpers::*,
     };
+    use panhandle::config::PanhandleConfig;
 
     // test that valid config files are being loaded correctly into the ConfigArgs struct
     #[tokio::test]
@@ -794,6 +796,44 @@ mod tests {
         }
     }
 
+    // test that a list option directly before the `output` subcommand doesn't swallow
+    // it: list options take one comma-separated value per occurrence, so `output` is
+    // never parsed as another list value (previously every one of these failed with
+    // "unexpected argument '--file'")
+    #[test]
+    fn test_raw_args_list_option_before_output_subcommand() {
+        for (flag, value) in [
+            ("--pid-list", "1,2"),
+            ("--executables", "/usr/bin/ls"),
+            ("--include-uid", "1000"),
+            ("--syscalls", "execve"),
+            ("--block-paths", "/etc/shadow"),
+            ("--comm-deny", "foo"),
+            ("--comm-allow", "foo"),
+        ] {
+            let args = RawArgs::try_parse_from([
+                "panhandle",
+                flag,
+                value,
+                "output",
+                "--file",
+                "/tmp/panhandle.log",
+            ])
+            .unwrap_or_else(|e| panic!("{flag} before output failed to parse: {e}"));
+            match args.output {
+                Some(OutputCommand::Output { file, .. }) => {
+                    assert_eq!(file, Some(PathBuf::from("/tmp/panhandle.log")), "{flag}")
+                }
+                None => panic!("{flag}: output subcommand was swallowed"),
+            }
+        }
+
+        // repeating a list option accumulates its values
+        let args =
+            RawArgs::try_parse_from(["panhandle", "--pid-list", "1,2", "--pid-list", "3"]).unwrap();
+        assert_eq!(args.pid_list, Some(vec![1, 2, 3]));
+    }
+
     // test that a comma-separated list option parses into the expected Vec
     #[test]
     fn test_raw_args_parse_comma_separated_list() {
@@ -872,17 +912,21 @@ mod tests {
             Ok((ALLOW_LIST, vec!["sh".to_string()]))
         );
 
-        // an explicitly-provided but empty list still selects its mode with an empty
-        // eBPF map payload: Some(vec![]) is not the same as None
+        // an empty list (e.g. `comm_allow: []` in a config file) counts as not
+        // provided - an empty allow list would otherwise block every process
         let empty_deny = Some(Vec::new());
         assert_eq!(
             resolve_comm_list_mode(&empty_deny, &None),
-            Ok((DENY_LIST, Vec::new()))
+            Ok((NO_LIST, Vec::new()))
         );
         let empty_allow = Some(Vec::new());
         assert_eq!(
             resolve_comm_list_mode(&None, &empty_allow),
-            Ok((ALLOW_LIST, Vec::new()))
+            Ok((NO_LIST, Vec::new()))
+        );
+        assert_eq!(
+            resolve_comm_list_mode(&deny, &empty_allow),
+            Ok((DENY_LIST, vec!["bash".to_string()]))
         );
 
         // both provided: must error rather than silently picking one
@@ -1371,6 +1415,50 @@ mod tests {
                 syslog: Some(Some("hpcsyslog.lanl.gov:514/tcp".to_string())),
             })
         );
+    }
+
+    // test that merge_provenance reports "cli" for a field only the CLI set, "config"
+    // for a field only the config file set, "cli" for a field both set (CLI always
+    // wins per merge_args), and omits a field neither side set entirely
+    #[test]
+    fn test_merge_provenance_reports_effective_source_per_field() {
+        let cli = RawArgs {
+            poll: Some(1),                           // cli-only
+            pid_list: Some(vec![1]),                 // both sides set -> cli should win
+            comm_allow: Some(vec!["x".to_string()]), // cli-only
+            ..Default::default()
+        };
+        let config = ConfigArgs {
+            pid_list: Some(vec![2]), // both sides set -> cli should win
+            syscalls: Some(vec!["execve".to_string()]), // config-only
+            // exclude_min_uid, exclude_max_uid, executables, include_uid,
+            // memory_faults, block_paths, comm_deny: neither side sets these
+            ..Default::default()
+        };
+
+        let provenance = merge_provenance(&cli, &config);
+
+        assert!(provenance.contains(&"poll=cli".to_string()));
+        assert!(provenance.contains(&"pid_list=cli".to_string()));
+        assert!(provenance.contains(&"comm_allow=cli".to_string()));
+        assert!(provenance.contains(&"syscalls=config".to_string()));
+        // exactly these 4 fields were set by either side; every other field is absent
+        assert_eq!(provenance.len(), 4);
+    }
+
+    // test that merge_provenance returns nothing when neither side set any of the
+    // Option-typed fields it tracks (e.g. a config file that only sets bool flags)
+    #[test]
+    fn test_merge_provenance_empty_when_nothing_set() {
+        let cli = RawArgs {
+            ..Default::default()
+        };
+        let config = ConfigArgs {
+            cpu: true, // a bool field - merge_provenance doesn't track these at all
+            ..Default::default()
+        };
+
+        assert!(merge_provenance(&cli, &config).is_empty());
     }
 
     // test that apply_socket_stats_event folds deltas from the socket_events ring
@@ -2504,10 +2592,10 @@ mod tests {
         assert_eq!(parsed["moniker"], "dmcgee");
         assert_eq!(parsed["entry"], hostile_entry);
         assert_eq!(parsed["command"], "bash -c 'x'");
-        assert_eq!(parsed["uid"], "1000");
-        assert_eq!(parsed["pid"], "42");
-        assert_eq!(parsed["gid"], "100");
-        assert_eq!(parsed["tgid"], "42");
+        assert_eq!(parsed["uid"], 1000);
+        assert_eq!(parsed["pid"], 42);
+        assert_eq!(parsed["gid"], 100);
+        assert_eq!(parsed["tgid"], 42);
         assert_eq!(parsed["ts_utc"], "2026-08-13_10:00:00");
 
         let execve = format_execve_event_json(
@@ -2531,10 +2619,10 @@ mod tests {
         assert_eq!(parsed["moniker"], "dmcgee");
         assert_eq!(parsed["filename"], "/bin/echo");
         assert_eq!(parsed["command"], "echo \"hi\"");
-        assert_eq!(parsed["uid"], "1000");
-        assert_eq!(parsed["pid"], "42");
-        assert_eq!(parsed["gid"], "100");
-        assert_eq!(parsed["tgid"], "42");
+        assert_eq!(parsed["uid"], 1000);
+        assert_eq!(parsed["pid"], 42);
+        assert_eq!(parsed["gid"], 100);
+        assert_eq!(parsed["tgid"], 42);
         assert_eq!(parsed["args"], serde_json::json!(["-c", "\"quoted\""]));
         assert_eq!(
             parsed["envs"],
@@ -2581,5 +2669,313 @@ mod tests {
             zeroed.to_string(),
             "entry: , command: , uid: 0, pid: 0, gid: 0, tgid: 0"
         );
+    }
+
+    // --- validate_syscalls: unknown --syscalls values are rejected at startup rather
+    // than silently blocking nothing ---
+
+    #[test]
+    fn test_validate_syscalls() {
+        let ok = ["open", "openat", "creat", "execve"].map(String::from);
+        assert!(validate_syscalls(&ok).is_ok());
+        assert!(validate_syscalls(&[]).is_ok());
+
+        let typo = ["execve", "exec"].map(String::from);
+        let err = validate_syscalls(&typo).unwrap_err();
+        assert!(err.contains("'exec'"), "{err}");
+        assert!(err.contains("open, openat, creat, execve"), "{err}");
+    }
+
+    // test that parent names are looked up once per parent and then served from the
+    // per-poll cache, with "unknown" (also cached) for a pid that doesn't exist
+    #[test]
+    fn test_cached_parent_comm() {
+        let mut cache = std::collections::HashMap::new();
+        cache.insert(4242, "cached-shell".to_string());
+        assert_eq!(cached_parent_comm(&mut cache, 4242), "cached-shell");
+
+        assert_eq!(cached_parent_comm(&mut cache, u32::MAX), "unknown");
+        assert_eq!(cache.get(&u32::MAX).map(String::as_str), Some("unknown"));
+
+        let own_pid = std::process::id();
+        let own_name = cached_parent_comm(&mut cache, own_pid);
+        assert!(!own_name.is_empty() && own_name != "unknown");
+        assert_eq!(cache.len(), 3);
+    }
+
+    #[test]
+    fn test_panhandle_config_default() {
+        let config = PanhandleConfig::default();
+        assert_eq!(config.shells, 0);
+        assert_eq!(config.exclude_min_uid, 0);
+        assert_eq!(config.exclude_max_uid, 0);
+        assert_eq!(config.include_enabled, 0);
+        assert_eq!(config.include_uids, [0u32; UID_COUNT]);
+    }
+
+    // --- ConfigArgs/RawArgs: every bool flag defaults to false, no accidental "always-on" field ---
+
+    #[test]
+    fn test_config_args_default_all_flags_false() {
+        let config = ConfigArgs::default();
+        assert!(!config.bash);
+        assert!(!config.debug);
+        assert!(!config.syscall_execve);
+        assert!(!config.json);
+        assert!(!config.verbose);
+        assert!(!config.zsh);
+        assert!(!config.quiet);
+        assert!(!config.shells);
+        assert!(!config.socket);
+        assert!(!config.io);
+        assert!(!config.cpu);
+        assert!(!config.gpu);
+        assert!(!config.memory);
+    }
+
+    #[test]
+    fn test_raw_args_default_all_flags_false() {
+        let args = RawArgs::default();
+        assert!(!args.bash);
+        assert!(!args.debug);
+        assert!(!args.syscall_execve);
+        assert!(!args.json);
+        assert!(!args.verbose);
+        assert!(!args.zsh);
+        assert!(!args.quiet);
+        assert!(!args.shells);
+        assert!(!args.socket);
+        assert!(!args.io);
+        assert!(!args.cpu);
+        assert!(!args.gpu);
+        assert!(!args.memory);
+        assert_eq!(args.poll, None);
+        assert_eq!(args.executables, None);
+        assert!(args.output.is_none());
+    }
+
+    // --- monitor_process_bounds::format_bound_{prose,json}: no prior coverage at all ---
+
+    #[test]
+    fn test_format_bound_prose() {
+        let verbose = format_bound_prose(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            10,
+            20,
+            30,
+            40,
+            50,
+            60,
+            70,
+            80,
+            90,
+            100,
+            110,
+            120,
+        );
+        assert_eq!(
+            verbose,
+            "Type: bound, PID: 42, Comm: bash, Parent PID: 1, Parent Comm: systemd, \
+            CPU Wait Count: 10, CPU Wait Time MS: 20, Voluntary Ctx Switches: 30, Nonvoluntary Ctx Switches: 40, \
+            BlkIO Wait Count: 50, BlkIO Wait Time MS: 60, \
+            Swapin Wait Count: 70, Swapin Wait Time MS: 80, \
+            Page Wait Count: 90, Page Wait Time MS: 100, \
+            Network Wait Count: 110, Network Wait Time MS: 120"
+        );
+
+        let compact = format_bound_prose(
+            false, 42, "bash", None, None, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+        );
+        assert_eq!(
+            compact,
+            "Type: bound, PID: 42, Comm: bash, \
+            CPU Wait Count: 10, CPU Wait Time MS: 20, Voluntary Ctx Switches: 30, Nonvoluntary Ctx Switches: 40, \
+            BlkIO Wait Count: 50, BlkIO Wait Time MS: 60, \
+            Swapin Wait Count: 70, Swapin Wait Time MS: 80, \
+            Page Wait Count: 90, Page Wait Time MS: 100, \
+            Network Wait Count: 110, Network Wait Time MS: 120"
+        );
+    }
+
+    #[test]
+    fn test_format_bound_json() {
+        let verbose = format_bound_json(
+            true,
+            42,
+            "bash",
+            Some(1),
+            Some("systemd"),
+            10,
+            20,
+            30,
+            40,
+            50,
+            60,
+            70,
+            80,
+            90,
+            100,
+            110,
+            120,
+        );
+        assert_eq!(
+            verbose,
+            "{\"Type\": \"bound\", \"PID\": 42, \"Comm\": \"bash\", \"PPID\": 1, \"Parent_Comm\": \"systemd\", \
+            \"CPU_Wait_Count\": 10, \"CPU_Wait_Time_MS\": 20, \"Voluntary_Ctx_Switches\": 30, \"Nonvoluntary_Ctx_Switches\": 40, \
+            \"BlkIO_Wait_Count\": 50, \"BlkIO_Wait_Time_MS\": 60, \
+            \"Swapin_Wait_Count\": 70, \"Swapin_Wait_Time_MS\": 80, \
+            \"Page_Wait_Count\": 90, \"Page_Wait_Time_MS\": 100, \
+            \"Network_Wait_Count\": 110, \"Network_Wait_Time_MS\": 120}"
+        );
+
+        let compact = format_bound_json(
+            false, 42, "bash", None, None, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+        );
+        assert_eq!(
+            compact,
+            "{\"Type\": \"bound\", \"PID\": 42, \"Comm\": \"bash\", \
+            \"CPU_Wait_Count\": 10, \"CPU_Wait_Time_MS\": 20, \"Voluntary_Ctx_Switches\": 30, \"Nonvoluntary_Ctx_Switches\": 40, \
+            \"BlkIO_Wait_Count\": 50, \"BlkIO_Wait_Time_MS\": 60, \
+            \"Swapin_Wait_Count\": 70, \"Swapin_Wait_Time_MS\": 80, \
+            \"Page_Wait_Count\": 90, \"Page_Wait_Time_MS\": 100, \
+            \"Network_Wait_Count\": 110, \"Network_Wait_Time_MS\": 120}"
+        );
+
+        // comm containing characters that need JSON escaping must come through json_quoted
+        let escaped = format_bound_json(
+            false, 7, "a\"b", None, None, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        );
+        assert!(escaped.contains("\"Comm\": \"a\\\"b\""));
+    }
+
+    // --- --cgroup: config-file parsing and CLI-vs-config merge precedence ---
+
+    #[tokio::test]
+    async fn test_load_config_args_cgroup_field() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().join("cgroup.yaml");
+        std::fs::write(
+            &temp_path,
+            "syscalls: [execve]\ncomm_deny: [sshd]\ncgroup: /sys/fs/cgroup/myjob.slice\n",
+        )
+        .unwrap();
+
+        let result = load_config_args(temp_path.to_string_lossy().to_string())
+            .await
+            .expect("valid config with a cgroup field should load");
+
+        assert_eq!(
+            result.cgroup,
+            Some(std::path::PathBuf::from("/sys/fs/cgroup/myjob.slice"))
+        );
+    }
+
+    // config files accept include_uid as numbers, strings, or a mix (normalized to
+    // strings for the shared validation); negatives pass through so validation can
+    // reject them with its usual message
+    #[tokio::test]
+    async fn test_load_config_args_include_uid_numbers_or_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("uids.json", r#"{"include_uid": [1000, "1001", -5]}"#),
+            ("uids.yaml", "include_uid: [1000, \"1001\", -5]\n"),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, body).unwrap();
+            let config = load_config_args(path.to_string_lossy().to_string())
+                .await
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(
+                config.include_uid,
+                Some(vec![
+                    "1000".to_string(),
+                    "1001".to_string(),
+                    "-5".to_string()
+                ]),
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_args_cgroup_cli_overrides_config() {
+        let config = ConfigArgs {
+            cgroup: Some(std::path::PathBuf::from("/sys/fs/cgroup/from-config")),
+            ..Default::default()
+        };
+        let cli = RawArgs {
+            cgroup: Some(std::path::PathBuf::from("/sys/fs/cgroup/from-cli")),
+            ..Default::default()
+        };
+
+        let merged = merge_args(cli, config).await;
+        assert_eq!(
+            merged.cgroup,
+            Some(std::path::PathBuf::from("/sys/fs/cgroup/from-cli"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_args_cgroup_preserved_from_config_when_cli_unset() {
+        let config = ConfigArgs {
+            cgroup: Some(std::path::PathBuf::from("/sys/fs/cgroup/from-config")),
+            ..Default::default()
+        };
+        let cli = RawArgs::default();
+
+        let merged = merge_args(cli, config).await;
+        assert_eq!(
+            merged.cgroup,
+            Some(std::path::PathBuf::from("/sys/fs/cgroup/from-config"))
+        );
+    }
+
+    #[test]
+    fn test_merge_provenance_cgroup() {
+        let cli = RawArgs {
+            cgroup: Some(std::path::PathBuf::from("/sys/fs/cgroup/x")),
+            ..Default::default()
+        };
+        let config = ConfigArgs::default();
+
+        let provenance = merge_provenance(&cli, &config);
+        assert!(provenance.contains(&"cgroup=cli".to_string()));
+    }
+
+    // --- apply_net_wait_event: userspace accumulation of NetWaitEvent deltas, the
+    // fix for network_bound.rs's NET_WAIT cross-CPU lost-update race (see
+    // NetWaitEvent's doc comment) ---
+
+    #[test]
+    fn test_apply_net_wait_event_accumulates_per_pid() {
+        let net_wait: SharedNetWaitMap =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
+        apply_net_wait_event(&net_wait, &NetWaitEvent::new(42, 1_000_000));
+        apply_net_wait_event(&net_wait, &NetWaitEvent::new(42, 2_000_000));
+        apply_net_wait_event(&net_wait, &NetWaitEvent::new(7, 500_000));
+
+        let map = net_wait.lock().unwrap();
+        let stat42 = map.get(&42).expect("pid 42 should have an entry");
+        assert_eq!(stat42.count, 2);
+        assert_eq!(stat42.total_ns, 3_000_000);
+
+        let stat7 = map.get(&7).expect("pid 7 should have an entry");
+        assert_eq!(stat7.count, 1);
+        assert_eq!(stat7.total_ns, 500_000);
+    }
+
+    #[test]
+    fn test_apply_net_wait_event_unknown_pid_absent() {
+        let net_wait: SharedNetWaitMap =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        apply_net_wait_event(&net_wait, &NetWaitEvent::new(1, 100));
+
+        let map = net_wait.lock().unwrap();
+        assert!(map.get(&2).is_none());
     }
 }

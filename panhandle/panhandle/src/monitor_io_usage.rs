@@ -155,6 +155,7 @@ pub async fn monitor_io_usage(
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs data up front (off the async executor) so the reporting loop
     // below only does formatting/output work.
@@ -164,6 +165,10 @@ pub async fn monitor_io_usage(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
 
         let all_processes = match procfs::process::all_processes() {
             Ok(procs) => procs,
@@ -226,7 +231,7 @@ pub async fn monitor_io_usage(
             let (ppid, parent_comm) = if *verbose {
                 let ppid = stat.ppid as u32;
                 let parent_comm = if ppid > 0 {
-                    get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+                    cached_parent_comm(&mut parent_comm_cache, ppid)
                 } else {
                     "unknown".to_string()
                 };
@@ -271,6 +276,11 @@ pub async fn monitor_io_usage(
 
         entries
     });
+
+    if *debug {
+        let summary = format!("scanned {} processes", entries.len());
+        debug_scan_summary("io", pid_list, entries.len(), &summary, scan_start);
+    }
 
     for entry in entries {
         report_io_and_inode_stats(

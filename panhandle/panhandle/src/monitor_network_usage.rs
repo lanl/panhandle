@@ -207,7 +207,7 @@ pub fn format_socket_json(
 /// growing it unboundedly on a long-running host - extracted so this eviction step is
 /// independently testable without needing real procfs state to decide which pids are
 /// "dead" (that determination is the caller's job; this just does the removal).
-pub(crate) fn prune_dead_pids(net_stats: &SharedNetStats, dead_pids: Vec<u32>) {
+pub fn prune_dead_pids(net_stats: &SharedNetStats, dead_pids: Vec<u32>) {
     if dead_pids.is_empty() {
         return;
     }
@@ -232,6 +232,7 @@ pub async fn monitor_network_usage(
     pid_list: &Option<Vec<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *json_output, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs/netlink data up front (off the async executor) so the reporting
     // loop below only does formatting/output work, keeping blocking I/O off the shared
@@ -257,6 +258,10 @@ pub async fn monitor_network_usage(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
 
         for (pid, stats) in snapshot {
             // Skip entries with no activity
@@ -284,7 +289,7 @@ pub async fn monitor_network_usage(
             let (ppid, parent_comm) = if *verbose {
                 let ppid = stat.ppid as u32;
                 let parent_comm = if ppid > 0 {
-                    get_process_name(ppid).unwrap_or_else(|| "unknown".to_string())
+                    cached_parent_comm(&mut parent_comm_cache, ppid)
                 } else {
                     "unknown".to_string()
                 };
@@ -331,6 +336,11 @@ pub async fn monitor_network_usage(
 
         entries
     });
+
+    if *debug {
+        let summary = format!("scanned {} active entries", entries.len());
+        debug_scan_summary("network", pid_list, entries.len(), &summary, scan_start);
+    }
 
     for entry in entries {
         // send all info to print function
@@ -501,10 +511,7 @@ async fn report_network_stats(
 }
 
 // Get network info for a PID (interface, ip, mac)
-pub(crate) fn get_network_info(
-    pid: u32,
-    interfaces: &[NetworkInterface],
-) -> (String, String, String) {
+pub fn get_network_info(pid: u32, interfaces: &[NetworkInterface]) -> (String, String, String) {
     // Try to match process connection to interface
     if let Some((iface_name, ip)) = get_active_connection_info(pid, interfaces)
         && let Some(iface) = interfaces.iter().find(|i| i.name == iface_name)
@@ -584,10 +591,7 @@ pub(crate) fn get_active_connection_info(
 }
 
 // Match an IP address (from either address family) to the interface that owns it.
-pub(crate) fn ip_to_interface(
-    ip: IpAddr,
-    interfaces: &[NetworkInterface],
-) -> Option<(String, String)> {
+pub fn ip_to_interface(ip: IpAddr, interfaces: &[NetworkInterface]) -> Option<(String, String)> {
     for iface in interfaces {
         for addr in &iface.addr {
             if addr.ip() == ip {

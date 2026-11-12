@@ -1,0 +1,541 @@
+#!/bin/bash
+# Live functional verification of every CLI/config option against a real kernel.
+#
+# Unlike `cargo test`, this actually runs the compiled binary as root and checks it
+# loads/attaches/produces correct output - the kind of bug `cargo test`/clippy/CI can't
+# catch (e.g. a tracepoint name the kernel doesn't actually expose, or a map population
+# order that breaks a later program's relocation). Every check here was written to
+# catch a real regression found by hand during manual testing.
+#
+# NOT run as part of CI and not wired into scripts/lint or scripts/update: it needs
+# CAP_SYS_ADMIN/root and a kernel with working eBPF (tracepoints/kprobes/uprobes/BTF
+# tracepoints), which most CI runners don't have. Run it by hand, as your normal user
+# (it builds as you and only reaches for sudo on the individual eBPF-loading checks),
+# before a release:
+#
+#   scripts/verify-functionality
+#
+# It then runs the option matrix (panhandle/tests/functional_integration.rs): every CLI
+# option and every config-file option, from the CLI and from YAML and JSON config files,
+# alone, in pairwise combinations, with each output channel (file/http/syslog), plus every
+# input that must be rejected - each case triggering the activity it checks for. That
+# adds about 20 minutes; VERIFY_SKIP_MATRIX=1 skips it.
+#
+# The --syscalls (LSM-based process blocking) check additionally needs "bpf" in the
+# kernel's active LSM stack (/sys/kernel/security/lsm) and is skipped with a clear
+# message, not failed, if that's absent - true in some sandboxes/containers.
+set -uo pipefail # not -e: run every check and report failures, don't bail on the first
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PANHANDLE_DIR="$PROJECT_ROOT/panhandle"
+BIN="$PANHANDLE_DIR/target/debug/panhandle"
+
+if [ "$(id -u)" -eq 0 ]; then
+    echo "Run this as your normal user, not root - it builds as you and only uses" >&2
+    echo "sudo for the individual checks that need to load eBPF programs." >&2
+    exit 1
+fi
+
+if ! sudo -v; then
+    echo "This script needs sudo to load eBPF programs; couldn't acquire it." >&2
+    exit 1
+fi
+
+WORKDIR="$(mktemp -d /tmp/panhandle-verify.XXXXXX)"
+cleanup() {
+    jobs -p | xargs -r kill 2>/dev/null
+    wait 2>/dev/null
+    rm -rf "$WORKDIR"
+}
+trap cleanup EXIT
+
+PASS=0
+FAIL=0
+SKIP=0
+FAILED_NAMES=()
+
+# Run $2.. as a check named $1; prints PASS/FAIL and tracks totals. The check function
+# itself does the real work and returns a normal exit status.
+check() {
+    local name="$1"
+    shift
+    if "$@"; then
+        echo "PASS: $name"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL: $name"
+        FAIL=$((FAIL + 1))
+        FAILED_NAMES+=("$name")
+    fi
+}
+
+skip() {
+    local name="$1"
+    local reason="$2"
+    echo "SKIP: $name ($reason)"
+    SKIP=$((SKIP + 1))
+}
+
+echo "=== Building panhandle (debug) ==="
+if ! (cd "$PANHANDLE_DIR" && cargo build -p panhandle); then
+    echo "Build failed, aborting." >&2
+    exit 1
+fi
+
+# The option matrix (panhandle/tests/functional_integration.rs) runs every CLI option and
+# every config-file option alone, in pairwise combinations, with each output channel,
+# plus every input that must be rejected - about 20 minutes. Built here as your user;
+# each group runs under sudo below. VERIFY_SKIP_MATRIX=1 skips it for a quick run.
+MATRIX_BIN=""
+if [ "${VERIFY_SKIP_MATRIX:-0}" != "1" ]; then
+    echo "=== Building the option matrix ==="
+    matrix_rel=$(cd "$PANHANDLE_DIR" && cargo test -p panhandle --test functional_integration --no-run 2>&1 |
+        grep -o 'target/debug/deps/functional_integration-[0-9a-f]*' | tail -1)
+    if [ -z "$matrix_rel" ]; then
+        echo "Option matrix build failed, aborting." >&2
+        exit 1
+    fi
+    MATRIX_BIN="$PANHANDLE_DIR/$matrix_rel"
+fi
+
+### --- Input validation (no eBPF involved, but exercised here for completeness) --- ###
+
+test_validate_poll_zero() {
+    ! sudo "$BIN" --poll 0 >/dev/null 2>&1
+}
+
+test_validate_unsupported_syscall() {
+    local out
+    out=$(sudo "$BIN" --syscalls exec --comm-deny nonexistent_cmm 2>&1)
+    local rc=$?
+    [ "$rc" -ne 0 ] && grep -q "Unsupported --syscalls value 'exec'" <<<"$out"
+}
+
+test_validate_uid_range_inverted() {
+    ! sudo "$BIN" --exclude-min-uid 1000 --exclude-max-uid 500 >/dev/null 2>&1
+}
+
+test_validate_include_uid_nonnumeric() {
+    ! sudo "$BIN" --include-uid abc >/dev/null 2>&1
+}
+
+test_validate_comm_allow_deny_conflict() {
+    ! sudo "$BIN" --syscalls execve --comm-allow foo --comm-deny bar >/dev/null 2>&1
+}
+
+test_validate_comm_too_long() {
+    ! sudo "$BIN" --syscalls execve --comm-allow thisnameiswaytoolongforcomm >/dev/null 2>&1
+}
+
+test_validate_missing_config() {
+    ! sudo "$BIN" --config "$WORKDIR/does-not-exist.yaml" >/dev/null 2>&1
+}
+
+test_validate_config_unknown_field() {
+    echo "bogus_field: true" >"$WORKDIR/bad.yaml"
+    ! sudo "$BIN" --config "$WORKDIR/bad.yaml" >/dev/null 2>&1
+}
+
+test_validate_config_bad_extension() {
+    echo "cpu: true" >"$WORKDIR/test.txt"
+    ! sudo "$BIN" --config "$WORKDIR/test.txt" >/dev/null 2>&1
+}
+
+test_validate_invalid_http_url() {
+    local out
+    out=$(sudo "$BIN" output --http "not a url" 2>&1)
+    echo "$out" | grep -q "Invalid URL"
+}
+
+### --- Default execve monitor (no flags) --- ###
+
+test_default_execve_attaches() {
+    local log="$WORKDIR/execve.log"
+    timeout 3 sudo "$BIN" --debug >"$log" 2>&1
+    grep -q "attached eBPF tracepoint 'syscalls:sys_enter_execve'" "$log"
+}
+
+test_default_execve_captures_real_event() {
+    local log="$WORKDIR/execve_event.log"
+    timeout 3 sudo "$BIN" --json >"$log" 2>&1 &
+    local ph_pid=$!
+    sleep 0.5
+    /bin/true
+    wait "$ph_pid" 2>/dev/null
+    grep -q '"application":"panhandle"' "$log" && grep -q '"filename":"/bin/true"' "$log"
+}
+
+### --- bash/zsh readline/zle uprobes --- ###
+
+test_bash_attaches() {
+    local log="$WORKDIR/bash.log"
+    timeout 2 sudo "$BIN" --bash --debug >"$log" 2>&1
+    grep -q "attached eBPF uprobe 'readline'" "$log"
+}
+
+test_zsh_attaches() {
+    local log="$WORKDIR/zsh.log"
+    timeout 2 sudo "$BIN" --zsh --debug >"$log" 2>&1
+    grep -q "attached eBPF uprobe 'zlentry'" "$log"
+}
+
+### --- Resource/perf monitors: each attaches/runs and a --pid-list filter narrows it --- ###
+
+test_cpu_pid_filter() {
+    local log="$WORKDIR/cpu.log"
+    sleep 5 &
+    local target=$!
+    timeout 2 sudo "$BIN" --cpu --poll 1 --pid-list "$target" --json >"$log" 2>&1
+    kill "$target" 2>/dev/null
+    wait "$target" 2>/dev/null
+    # every per-PID line must be our target; the aggregate system-wide line has no PID field
+    ! grep -oE '"PID":[[:space:]]*[0-9]+' "$log" | grep -qvE ":[[:space:]]*${target}\$"
+}
+
+test_io_runs() {
+    local log="$WORKDIR/io.log"
+    timeout 2 sudo "$BIN" --io --poll 1 --json >"$log" 2>&1
+    [ -s "$log" ]
+}
+
+test_memory_runs() {
+    local log="$WORKDIR/memory.log"
+    timeout 2 sudo "$BIN" --memory --poll 1 --json >"$log" 2>&1
+    grep -qE '"Type":[[:space:]]*"mem"' "$log"
+}
+
+test_gpu_runs_without_error() {
+    local log="$WORKDIR/gpu.log"
+    timeout 2 sudo "$BIN" --gpu --poll 1 --debug >"$log" 2>&1
+    # no GPU in most CI/dev hosts, so there may be no output - just confirm it didn't error out
+    ! grep -qi "^Error:" "$log"
+}
+
+# Regression test for: --memory-faults never accepted a pid_filter, despite --pid-list's
+# own help text listing memory_faults as one of the options it filters.
+test_memory_faults_pid_filter() {
+    local log_all="$WORKDIR/mf_all.log"
+    local log_filtered="$WORKDIR/mf_filtered.log"
+    timeout 2 sudo "$BIN" --memory-faults 0 --json >"$log_all" 2>&1
+    timeout 2 sudo "$BIN" --memory-faults 0 --pid-list 1 --json >"$log_filtered" 2>&1
+    local all_count filtered_count
+    all_count=$(grep -cE '"Type":[[:space:]]*"fault"' "$log_all")
+    filtered_count=$(grep -cE '"Type":[[:space:]]*"fault"' "$log_filtered")
+    # the unfiltered run should see more than just init, and the filtered run only PID 1
+    [ "$all_count" -gt 1 ] && [ "$filtered_count" -eq 1 ] \
+        && grep -qE '"PID":[[:space:]]*1,' "$log_filtered"
+}
+
+### --- Socket monitoring: BTF tracepoint + 4 kprobes --- ###
+
+test_socket_attaches() {
+    local log="$WORKDIR/socket.log"
+    timeout 2 sudo "$BIN" --socket --poll 1 --debug >"$log" 2>&1
+    grep -q "attached eBPF BTF tracepoint 'inet_sock_set_state'" "$log"
+}
+
+### --- Process-bounds monitoring (--bound): regression test for the network_bound.rs ###
+### pid/tgid key mismatch fix (NET_WAIT keyed by thread id instead of process id)     ###
+
+test_bound_network_wait() {
+    local log="$WORKDIR/bound.log"
+    local netlog="$WORKDIR/bound_net.log"
+    python3 -u "$SCRIPT_DIR/bound_test.py" 0.3 6 >"$netlog" 2>&1 &
+    local net_pid=$!
+    local target_pid=""
+    for _ in $(seq 1 20); do
+        target_pid=$(grep -oE 'PID: [0-9]+' "$netlog" 2>/dev/null | head -1 | grep -oE '[0-9]+')
+        [ -n "$target_pid" ] && break
+        sleep 0.2
+    done
+    sleep 0.5 # let it get through its first blocking recv() call too
+    timeout 3 sudo "$BIN" --bound --poll 1 --json >"$log" 2>&1
+    kill "$net_pid" 2>/dev/null
+    wait "$net_pid" 2>/dev/null
+    [ -n "$target_pid" ] || return 1
+    local target_line count
+    # NET_WAIT accumulates cumulatively across poll cycles (never reset), so the last
+    # cycle this ran for has the highest count - take that one rather than the first,
+    # which may have fired before the target even made its first blocking recv() call.
+    target_line=$(grep -E "\"PID\":[[:space:]]*${target_pid}," "$log" | tail -1)
+    [ -n "$target_line" ] || return 1
+    count=$(echo "$target_line" | grep -oE '"Network_Wait_Count":[[:space:]]*[0-9]+' | grep -oE '[0-9]+$')
+    [ -n "$count" ] && [ "$count" -gt 0 ]
+}
+
+### --- Config file loading: YAML, merge precedence, output-type merge --- ###
+
+test_config_yaml_merge() {
+    cat >"$WORKDIR/merge.yaml" <<'EOF'
+io: true
+poll: 10
+pid_list: [1]
+EOF
+    local log="$WORKDIR/merge.log"
+    timeout 1 sudo "$BIN" --config "$WORKDIR/merge.yaml" --cpu --poll 1 --verbose >"$log" 2>&1
+    # CLI --poll should win over the config file's poll: 10, config's io/pid_list should carry through
+    grep -q "poll: Some(" "$log" && grep -A1 "poll: Some(" "$log" | grep -q "1," \
+        && grep -q "io: true" "$log" && grep -q "cpu: true" "$log"
+}
+
+test_config_json_format() {
+    echo '{"gpu": true, "exclude_min_uid": 10}' >"$WORKDIR/test.json"
+    local log="$WORKDIR/json_config.log"
+    timeout 1 sudo "$BIN" --config "$WORKDIR/test.json" --verbose >"$log" 2>&1
+    grep -q "gpu: true" "$log" && grep -q "exclude_min_uid: Some(" "$log"
+}
+
+### --- Output: file, http, syslog all active at once; one channel failing shouldn't ###
+### block the others                                                                 ###
+
+test_output_file_http_syslog_combined() {
+    local outlog="$WORKDIR/combined_out.log"
+    local stdout_log="$WORKDIR/combined_stdout.log"
+    # No --quiet here: with --quiet + --file, *all* logging (including this error)
+    # routes to the file only, not stdout - this test wants both so it can check each
+    # independently.
+    timeout 3 sudo "$BIN" output --file "$outlog" --http "http://127.0.0.1:1/x" --syslog unix \
+        >"$stdout_log" 2>&1 &
+    local ph_pid=$!
+    sleep 0.5
+    # Guarantee at least one qualifying execve event: root's own uid (0) falls inside
+    # the default --exclude-min/max-uid range (0-999), so relying on incidental
+    # background activity from some other uid is flaky - trigger one as this script's
+    # own (non-root) invoking user instead.
+    /bin/true
+    wait "$ph_pid" 2>/dev/null
+    [ -s "$outlog" ] && grep -qi "HTTP POST Failed" "$stdout_log"
+}
+
+### --- Meaningful combinations --- ###
+
+test_all_monitors_combined() {
+    local log="$WORKDIR/combo.log"
+    timeout 3 sudo "$BIN" --cpu --gpu --io --memory --socket --bound --poll 1 --pid-list 1,2 --debug \
+        >"$log" 2>&1
+    grep -q "attached eBPF BTF tracepoint" "$log" \
+        && grep -q "attached eBPF fentry 'tcp_recvmsg_entry'" "$log" \
+        && ! grep -q "sys_enter_execve" "$log" # default execve must NOT run alongside these
+}
+
+test_bash_zsh_shells_combined() {
+    local log="$WORKDIR/bzs.log"
+    timeout 2 sudo "$BIN" --bash --zsh --syscall-execve --shells --debug >"$log" 2>&1
+    grep -q "attached eBPF uprobe 'readline'" "$log" \
+        && grep -q "attached eBPF uprobe 'zlentry'" "$log" \
+        && grep -q "attached eBPF tracepoint 'syscalls:sys_enter_execve'" "$log"
+}
+
+### --- Syscall blocking (LSM): scoped to a disposable, uniquely-named test binary so ###
+### a bug here can't block anything else on the host. Skipped if the kernel's active ###
+### LSM stack doesn't include "bpf".                                                 ###
+
+# --comm-deny blocks a process with that comm from *calling* execve: the
+# bprm_check_security hook runs before the kernel switches comm to the new program's
+# name, so the comm it sees is the caller's. So the deny-listed name here is a shell,
+# and the check is that it can't exec anything, while an identical shell under another
+# name can.
+test_syscalls_block_execve() {
+    local target="$WORKDIR/pnhandle_vrfy" # <=15 chars: the kernel truncates comm there anyway
+    local control="$WORKDIR/pnhandle_ctrl"
+    ln -sf /bin/sh "$target"
+    ln -sf /bin/sh "$control"
+
+    local log="$WORKDIR/syscalls.log"
+    timeout 4 sudo "$BIN" --syscalls execve --comm-deny "$(basename "$target")" --debug \
+        >"$log" 2>&1 &
+    local ph_pid=$!
+    sleep 1.5 # let the LSM hook attach
+
+    local blocked_rc=0 allowed_rc=0
+    "$target" -c /bin/true >/dev/null 2>&1 || blocked_rc=$?
+    "$control" -c /bin/true >/dev/null 2>&1 || allowed_rc=$?
+
+    kill "$ph_pid" 2>/dev/null
+    wait "$ph_pid" 2>/dev/null
+
+    # the deny-listed shell must fail to exec /bin/true; the other must succeed
+    [ "$blocked_rc" -ne 0 ] && [ "$allowed_rc" -eq 0 ]
+}
+
+### --- On a kernel where "bpf" is absent from the active LSM list, the LSM program ###
+### still loads and attaches without error (BPF_RAW_TRACEPOINT_OPEN doesn't check   ###
+### LSM registration), but the kernel never invokes the hook, so --syscalls silently ###
+### blocks nothing. panhandle must warn loudly about this instead of running quiet. ###
+
+test_syscalls_warns_when_lsm_inactive() {
+    local log="$WORKDIR/syscalls_warn.log"
+    timeout 2 sudo "$BIN" --syscalls execve --comm-deny nonexistent_cmm --debug \
+        >"$log" 2>&1
+    grep -qi "WARNING.*bpf.*LSM.*not.*active\|WARNING.*never be invoked\|WARNING.*effectively disabled" "$log" \
+        || grep -qi "bpf.*is not in this kernel's active LSM list" "$log"
+}
+
+### --- --cgroup: only checks that the LsmCgroup attach itself succeeds without error -  ###
+### same "bpf" LSM-active limitation as plain --syscalls applies (see above), so this   ###
+### can't verify actual enforcement on a host without "bpf" active either.             ###
+
+test_cgroup_blocking_attaches() {
+    local log="$WORKDIR/cgroup.log"
+    timeout 2 sudo "$BIN" --syscalls execve --comm-deny nonexistent_cmm --cgroup /sys/fs/cgroup --debug \
+        >"$log" 2>&1
+    grep -q "attached eBPF LSM cgroup hook 'block_execve_cgroup'" "$log" && ! grep -q "^Error:" "$log"
+}
+
+### --- open/openat/creat blocking: these load checks run regardless of the active LSM ###
+### stack. block_open reaches into struct file (whose layout varies by kernel) and all  ###
+### three syscalls share one program, so both "loads at all" and "listing several of   ###
+### them doesn't load it twice" have broken before.                                    ###
+
+test_syscalls_open_variants_load() {
+    local log="$WORKDIR/open_load.log"
+    timeout 3 sudo "$BIN" --syscalls open,openat,creat --comm-deny nonexistent_cmm --debug \
+        >"$log" 2>&1
+    grep -q "monitoring for events" "$log" && ! grep -q "failed to load/attach\|^Error:" "$log"
+}
+
+test_cgroup_open_variants_load() {
+    local log="$WORKDIR/cgroup_open_load.log"
+    timeout 3 sudo "$BIN" --syscalls open,openat,creat --comm-deny nonexistent_cmm \
+        --cgroup /sys/fs/cgroup --debug >"$log" 2>&1
+    grep -q "attached eBPF LSM cgroup hook 'block_open_cgroup'" "$log" \
+        && grep -q "monitoring for events" "$log" && ! grep -q "failed to load/attach\|^Error:" "$log"
+}
+
+# Enforcement (needs "bpf" in the active LSM stack): the denied comm can't open the
+# --block-paths file, but can still open other files, and other comms can open it.
+test_syscalls_block_open_path() {
+    local target="$WORKDIR/pnhandle_cat"
+    local secret="$WORKDIR/secret.txt"
+    local other="$WORKDIR/other.txt"
+    ln -sf /bin/cat "$target"
+    echo secret >"$secret"
+    echo other >"$other"
+    chmod 644 "$secret" "$other"
+
+    local log="$WORKDIR/open_block.log"
+    timeout 4 sudo "$BIN" --syscalls openat --comm-deny "$(basename "$target")" \
+        --block-paths "$secret" --debug >"$log" 2>&1 &
+    local ph_pid=$!
+    sleep 1.5 # let the LSM hook attach
+
+    local blocked_rc=0 other_rc=0 control_rc=0
+    "$target" "$secret" >/dev/null 2>&1 || blocked_rc=$?
+    "$target" "$other" >/dev/null 2>&1 || other_rc=$?
+    /bin/cat "$secret" >/dev/null 2>&1 || control_rc=$?
+
+    kill "$ph_pid" 2>/dev/null
+    wait "$ph_pid" 2>/dev/null
+
+    [ "$blocked_rc" -ne 0 ] && [ "$other_rc" -eq 0 ] && [ "$control_rc" -eq 0 ]
+}
+
+echo
+echo "=== Input validation ==="
+check "poll=0 rejected" test_validate_poll_zero
+check "unsupported --syscalls value rejected" test_validate_unsupported_syscall
+check "inverted uid range rejected" test_validate_uid_range_inverted
+check "non-numeric include-uid rejected" test_validate_include_uid_nonnumeric
+check "comm-allow + comm-deny conflict rejected" test_validate_comm_allow_deny_conflict
+check "overlong comm rejected" test_validate_comm_too_long
+check "missing config file rejected" test_validate_missing_config
+check "unknown config field rejected" test_validate_config_unknown_field
+check "unsupported config extension rejected" test_validate_config_bad_extension
+check "invalid http url rejected" test_validate_invalid_http_url
+
+echo
+echo "=== Default execve monitor ==="
+check "default execve tracepoint attaches" test_default_execve_attaches
+check "default execve captures a real event" test_default_execve_captures_real_event
+
+echo
+echo "=== Shell monitors ==="
+check "--bash readline uprobe attaches" test_bash_attaches
+check "--zsh zlentry uprobe attaches" test_zsh_attaches
+
+echo
+echo "=== Resource monitors ==="
+check "--cpu + --pid-list filters correctly" test_cpu_pid_filter
+check "--io runs and produces output" test_io_runs
+check "--memory runs and produces output" test_memory_runs
+check "--gpu runs without erroring" test_gpu_runs_without_error
+check "--memory-faults + --pid-list filters correctly" test_memory_faults_pid_filter
+
+echo
+echo "=== Socket and process-bounds monitors ==="
+check "--socket BTF tracepoint attaches" test_socket_attaches
+check "--bound reports nonzero network wait" test_bound_network_wait
+
+echo
+echo "=== Config file loading ==="
+check "YAML config + CLI override merge correctly" test_config_yaml_merge
+check "JSON config format parses" test_config_json_format
+
+echo
+echo "=== Output channels ==="
+check "file+http+syslog combined, http failure doesn't block file" test_output_file_http_syslog_combined
+
+echo
+echo "=== Combinations ==="
+check "all resource/socket/bound monitors simultaneously" test_all_monitors_combined
+check "--bash --zsh --syscall-execve --shells simultaneously" test_bash_zsh_shells_combined
+
+echo
+echo "=== Syscall blocking (LSM) ==="
+if grep -q "bpf" /sys/kernel/security/lsm 2>/dev/null; then
+    check "--syscalls execve --comm-deny stops only that comm from exec'ing" test_syscalls_block_execve
+    check "--syscalls openat --block-paths blocks only that path for the targeted comm" test_syscalls_block_open_path
+else
+    skip "--syscalls execve blocking" "kernel's active LSM stack has no 'bpf' entry (/sys/kernel/security/lsm)"
+    skip "--syscalls openat path blocking" "kernel's active LSM stack has no 'bpf' entry (/sys/kernel/security/lsm)"
+    check "--syscalls warns that blocking is a silent no-op on this kernel" test_syscalls_warns_when_lsm_inactive
+fi
+check "--cgroup scoped LSM hook attaches without error" test_cgroup_blocking_attaches
+check "--syscalls open,openat,creat loads block_open once and runs" test_syscalls_open_variants_load
+check "--cgroup with open,openat,creat loads block_open_cgroup and runs" test_cgroup_open_variants_load
+
+### --- Option matrix: one check per group; each group's case count and any failing --- ###
+### cases are echoed (every case runs from the CLI and from YAML and JSON config).    ###
+
+run_matrix() {
+    local group="$1"
+    local log="$WORKDIR/matrix_${group}.log"
+    # the log is ours (WORKDIR); only the test binary needs root
+    # shellcheck disable=SC2024
+    sudo "$MATRIX_BIN" --include-ignored --test-threads=1 --exact "$group" --nocapture >"$log" 2>&1
+    local rc=$?
+    # cargo prints the first case on the same line as its "test <name> ... " header
+    echo "      $(grep -oE '(^|\.\.\. )PASS ' "$log" | wc -l) cases passed, $(grep -oE '(^|\.\.\. )FAIL ' "$log" | wc -l) failed"
+    grep -oE '(^|\.\.\. )FAIL .*' "$log" | sed -E 's/^(\.\.\. )?/      /'
+    return $rc
+}
+
+echo
+echo "=== Option matrix ==="
+if [ -n "$MATRIX_BIN" ]; then
+    check "matrix: every monitor alone (CLI/YAML/JSON)" run_matrix matrix_each_monitor_every_mode
+    check "matrix: default execve monitor (CLI/YAML/JSON)" run_matrix matrix_default_execve_monitor
+    check "matrix: every pair of monitors, and all at once" run_matrix matrix_monitor_pairs
+    check "matrix: every monitor with --json/--verbose/--debug" run_matrix matrix_monitor_modifiers
+    check "matrix: --json/--verbose/--debug/--quiet behavior" run_matrix matrix_output_modifiers
+    check "matrix: --shells/--executables/--include-uid/exclude range" run_matrix matrix_execve_filters
+    check "matrix: --pid-list with every resource monitor" run_matrix matrix_pid_list_filters_each_resource_monitor
+    check "matrix: --poll cadence" run_matrix matrix_poll_cadence
+    check "matrix: file/http/syslog outputs, alone and together" run_matrix matrix_output_channels
+    check "matrix: CLI overrides config" run_matrix matrix_cli_overrides_config
+    check "matrix: every --syscalls/list/cgroup combination loads" run_matrix matrix_blocking_loads
+    check "matrix: every invalid input is rejected" run_matrix matrix_rejected_inputs
+else
+    skip "option matrix" "VERIFY_SKIP_MATRIX=1"
+fi
+
+echo
+echo "=== Summary: $PASS passed, $FAIL failed, $SKIP skipped ==="
+if [ "$FAIL" -gt 0 ]; then
+    echo "Failed checks:"
+    for name in "${FAILED_NAMES[@]}"; do
+        echo "  - $name"
+    done
+    exit 1
+fi

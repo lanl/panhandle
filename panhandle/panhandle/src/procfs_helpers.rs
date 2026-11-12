@@ -4,8 +4,8 @@ use procfs::process::all_processes;
 use reqwest::Client;
 
 use crate::helpers::{
-    format_owner, format_state, format_state_prose, get_parent_pid, get_process_name,
-    get_process_uid, json_quoted, output_message, output_needs, resolve_username,
+    cached_parent_comm, debug_scan_summary, format_owner, format_state, format_state_prose,
+    get_parent_pid, get_process_uid, json_quoted, output_message, output_needs, resolve_username,
 };
 
 // Fully-owned per-PID data gathered during the blocking scan phase, so the reporting
@@ -37,8 +37,10 @@ pub async fn get_major_faults(
     syslog_address: &Arc<String>,
     client: &Client,
     debug: &bool,
+    pid_filter: &Option<Vec<u32>>,
 ) {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *use_json, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs data up front (off the async executor) so the reporting loop
     // below only does formatting/output work.
@@ -48,17 +50,27 @@ pub async fn get_major_faults(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
 
         if let Ok(procs) = all_processes() {
             for proc_res in procs.flatten() {
                 if let Ok(stat) = proc_res.stat()
                     && (stat.majflt > maj_fault_threshold || stat.cmajflt > maj_fault_threshold)
                 {
+                    if let Some(pids) = pid_filter
+                        && !pids.contains(&(stat.pid as u32))
+                    {
+                        continue;
+                    }
+
                     // Retrieve parent process info only if verbose flag is set
                     let (ppid, parent_comm) = if *verbose {
                         if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
-                            let parent_name = get_process_name(parent_pid)
-                                .unwrap_or_else(|| "unknown".to_string());
+                            let parent_name =
+                                cached_parent_comm(&mut parent_comm_cache, parent_pid);
                             (Some(parent_pid), Some(parent_name))
                         } else {
                             (Some(0), Some("unknown".to_string()))
@@ -101,6 +113,17 @@ pub async fn get_major_faults(
 
         entries
     });
+
+    if *debug {
+        let summary = format!("{} processes over threshold, scanned", entries.len());
+        debug_scan_summary(
+            "memory-faults",
+            pid_filter,
+            entries.len(),
+            &summary,
+            scan_start,
+        );
+    }
 
     for entry in entries {
         let plain_string = if needs_plain {
@@ -385,6 +408,7 @@ pub async fn get_all_memory_usage(
     pid_filter: &Option<Vec<u32>>,
 ) {
     let (needs_plain, needs_json) = output_needs(*http, *syslog, *use_json, *debug);
+    let scan_start = std::time::Instant::now();
 
     // Gather all procfs data up front (off the async executor) so the reporting loop
     // below only does formatting/output work.
@@ -394,6 +418,10 @@ pub async fn get_all_memory_usage(
         // the same user cost one username lookup instead of N when --verbose is set --
         // this can hit network-backed NSS (LDAP).
         let mut username_cache: HashMap<u32, String> = HashMap::new();
+        // Cache of ppid -> parent comm, scoped to this single poll, so N processes
+        // sharing the same parent (common: many children of one shell/container-init)
+        // cost one /proc/<ppid>/stat read instead of N when --verbose is set.
+        let mut parent_comm_cache: HashMap<u32, String> = HashMap::new();
         // statm reports shared/data in page counts, not bytes -- unlike vm_rss/vm_hwm
         // (already KB, from /proc/<pid>/status) and stat.vsize (already bytes), so this
         // is the one conversion that actually depends on the system's page size. Query
@@ -427,8 +455,8 @@ pub async fn get_all_memory_usage(
                     // Retrieve parent process info only if verbose flag is set
                     let (ppid, parent_comm) = if *verbose {
                         if let Ok(parent_pid) = get_parent_pid(stat.pid as u32) {
-                            let parent_name = get_process_name(parent_pid)
-                                .unwrap_or_else(|| "unknown".to_string());
+                            let parent_name =
+                                cached_parent_comm(&mut parent_comm_cache, parent_pid);
                             (Some(parent_pid), Some(parent_name))
                         } else {
                             (Some(0), Some("unknown".to_string()))
@@ -475,6 +503,11 @@ pub async fn get_all_memory_usage(
 
         entries
     });
+
+    if *debug {
+        let summary = format!("scanned {} processes", entries.len());
+        debug_scan_summary("memory", pid_filter, entries.len(), &summary, scan_start);
+    }
 
     for entry in entries {
         let plain_string = if needs_plain {

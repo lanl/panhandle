@@ -2,7 +2,7 @@
 .SH NAME
 panhandle - User activity monitoring
 .SH SYNOPSIS
-\fBpanhandle\fP [ \fIOPTIONS\fP ]
+\fBpanhandle\fP [ \fIOPTIONS\fP ] [ \fBoutput\fP [ \fIOUTPUT_OPTIONS\fP ] ]
 .SH DESCRIPTION
 \fBpanhandle\fP provides the ability to monitor execve syscalls to identify specific interesting user behavior, 
 as well as the ability to monitor specific shells (bash and zsh) on a linux host. Several optional filters 
@@ -21,19 +21,16 @@ Pass arguments from a config file in YAML or JSON, the default config file is lo
 Invalidates json option and returns output to help identify why the program might not pick up on desired events.
 .TP
 \fB-e, --executables\fI <EXECUTABLES>\fR
-Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 10.
+Specify a comma separated list of absolute executable paths to exclusively monitor. Maximum limit is 20.
 .TP
 \fB--pid-list\fI <PIDS>\fR
-Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to showing global (all PIDs) usage.
+Specify a list of PIDs to track when using the following metric collection options: CPU, GPU, memory, memory_faults, socket, io, bound. Leaving empty defaults to showing global (all PIDs) usage.
 .TP
 \fB--exclude-min-uid\fI <EXCLUDE_MIN_UID>\fR
-Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 0.
+Exclude a range of uids from monitoring, specify the MINIMUM uid of the range. Defaults to 0. Checked before --include-uid, so a uid inside this range is still excluded even if it's also listed in --include-uid.
 .TP
 \fB--exclude-max-uid\fI <EXCLUDE_MAX_UID>\fR
-Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. Defaults to 999.
-.TP
-\fB--file\fI <FILE>\fR
-Specify the absolute path to the desired log file.
+Exclude a range of uids from monitoring, specify the MAXIMUM uid of the range. Defaults to 999. Checked before --include-uid, so a uid inside this range is still excluded even if it's also listed in --include-uid.
 .TP
 \fB-m, --memory-faults <MEMORY_FAULTS>\fP
 Report the processes with memory faults greater than the specified threshold value. Specify information polling interval with --poll.
@@ -41,25 +38,11 @@ Report the processes with memory faults greater than the specified threshold val
 \fB-h, --help\fP
 Print help
 .TP
-\fBoutput\fP
-Output options: --file, --http, --syslog.
-.TP
-\fB--http\fP
-Output events to the specified HTTP endpoint.
-.TP
 \fB-q, --quiet\fP
 Omit logging stdout to the terminal.
 .TP
-\fB--syslog\fP
-Output events to syslog. Local or remote options are supported.
-.nf
-Local example: --syslog /dev/log or --syslog unix or --syslog
-Remote TCP example: --syslog hpcsyslog.lanl.gov:514/tcp
-Remote UDP example: --syslog hpcsyslog.lanl.gov:514/udp
-.fi
-.TP
 \fB--include-uid\fI <UID(s)>\fR
-Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10.
+Only include events from the specified uid(s), can be a comma separated list. Maximum limit is 10. Does not override --exclude-min-uid/--exclude-max-uid: a uid in the excluded range is still excluded even if it's listed here.
 .TP
 \fB-j, --json\fP
 Output events as valid json strings separated by newlines.
@@ -71,19 +54,19 @@ Monitor events from the execve syscall. This is the program default if no other 
 Output execve syscall events only from the shells: bash, tcsh, & zsh. This does not effect the output of the bash or zsh options.
 .TP
 \fB--socket\fP
-Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll.
+Report network and socket information, such as open TCP connections, states, and traffic. Specify information polling interval with --poll. Requires kernel 5.17+ (or a distro kernel with the bpf_get_func_ret helper backported) and kernel BTF.
 .TP
 \fB--cpu\fP
-Receive a report of CPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+Receive a report of CPU usage over time. Filter by pid using --pid-list. Specify information polling interval with --poll.
 .TP
 \fB--gpu\fP
-Receive a report of GPU usage over time. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+Receive a report of GPU usage over time. Filter by pid using --pid-list. Specify information polling interval with --poll.
 .TP
 \fB--memory\fP
-Receive a report of per-PID memory usage over time, such as RSS and stack usage. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+Receive a report of per-PID memory usage over time, such as RSS and stack usage. Filter by pid using --pid-list. Specify information polling interval with --poll.
 .TP
 \fB--io\fP
-Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list <PIDs>. Specify information polling interval with --poll.
+Receive a report of per-PID I/O usage over time, such as disk reads/writes and inode creation. Filter by pid using --pid-list. Specify information polling interval with --poll.
 .TP
 \fB--bound\fP
 Receive a report of what processes are bound by through per process delay counts and delay times. Includes memory, cpu, io, and network.
@@ -98,10 +81,13 @@ Print version
 Monitor events from the zsh shell using the zlentry function.
 .TP
 \fB--poll <POLLING_FREQUENCY_SECONDS>\fP
-Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io. Leaving empty defaults to 30 seconds.
+Polling interval in seconds that specifies the frequency of information returned by the following options: metric collection options: CPU, GPU, memory, memory_faults, socket, io, bound. Leaving empty defaults to 30 seconds.
 .TP
 \fB--syscalls\fI <SYSCALLS>\fR
 Specify a comma separated list of syscalls to be blocked. Provide comm_allow or comm_deny to control which processes are blocked when executing these syscalls.
+Requires "bpf" in the kernel's active LSM list (/sys/kernel/security/lsm) to actually enforce
+anything; otherwise the program loads and attaches without error but the kernel never invokes
+it, and panhandle prints a startup warning instead of blocking silently.
 .TP
 \fB--block-paths\fI <FILEPATHS>\fR
 Specify a comma separated list of file paths to be blocked when blocking processes using --syscalls. Provide comm_allow or comm_deny to control which processes are blocked.
@@ -110,7 +96,31 @@ Specify a comma separated list of file paths to be blocked when blocking process
 Specify a comma separated list of process names (comm) that will be allowed to execute the syscalls specified in --syscalls. Maximum 64 process names, 15 characters each.
 .TP
 \fB--comm-deny\fI <COMMS>\fR
-Specify a comma separated list of process names (comm) that will be denied from executing the syscalls specified in --syscalls. Maximum 64 process names, 15 characters each.
+Specify a comma separated list of process names (comm) that will be denied from executing the syscalls specified in --syscalls. Maximum 64 process names, 15 characters each. The name matched is the process making the call: for execve, --comm-deny bash stops bash from starting programs; it does not stop programs named bash from being started.
+.TP
+\fB--cgroup\fI <PATH>\fR
+Scope --syscalls blocking to a single cgroup v2 directory (e.g. /sys/fs/cgroup/myjob.slice)
+instead of blocking system-wide. Requires a kernel with LsmCgroup support (6.0+) and, like
+--syscalls generally, "bpf" in the kernel's active LSM list to actually enforce anything.
+.SS "output subcommand"
+Output destinations are only available via the \fBoutput\fP subcommand, placed after any
+other options on the command line (e.g. \fBpanhandle --bash output --file /var/log/panhandle.log\fP).
+With no \fBoutput\fP subcommand given, events are only written to stdout (unless \fB--quiet\fP
+is set). All three destinations below may be combined.
+.TP
+\fB--file\fI <FILE>\fR
+Specify the absolute path to the desired log file.
+.TP
+\fB--http\fI <URL>\fR
+Output events to the specified HTTP endpoint.
+.TP
+\fB--syslog\fI [<SYSLOG>]\fR
+Output events to syslog. Local or remote options are supported.
+.nf
+Local example: --syslog /dev/log or --syslog unix or --syslog
+Remote TCP example: --syslog hpcsyslog.lanl.gov:514/tcp
+Remote UDP example: --syslog hpcsyslog.lanl.gov:514/udp
+.fi
 .SH FILES
 .TP
 \fC/opt/panhandle/panhandle.yaml\fR

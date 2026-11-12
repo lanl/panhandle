@@ -18,8 +18,8 @@ while ! grep -q "Read_Count" tmp_metrics.txt; do
 done
 
 # stop panhandle before reading results
-sudo kill -INT $PANHANDLE_PID
-wait $PANHANDLE_PID 2>/dev/null
+sudo kill -INT "$PANHANDLE_PID"
+wait "$PANHANDLE_PID" 2>/dev/null
 
 # now display results
 echo "CPU Message:"

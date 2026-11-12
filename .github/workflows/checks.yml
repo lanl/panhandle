@@ -190,3 +190,32 @@ jobs:
         run: |
           cd panhandle
           cargo deny check
+
+  # Runs scripts/verify-functionality against a real kernel - the live CLI/config
+  # regression suite that's not safe or possible to run on the hosted ubuntu-latest
+  # runner above (it needs root and working eBPF: tracepoints/kprobes/uprobes/BTF
+  # tracepoints, none of which hosted GitHub runners' containers support).
+  #
+  # Disabled by default: skipped entirely (not failed, not queued-forever) unless both
+  #   1. a repository variable named EBPF_RUNNER_AVAILABLE is set to "true"
+  #      (Settings -> Secrets and variables -> Actions -> Variables), and
+  #   2. a self-hosted runner labeled "ebpf" is actually registered for this repo
+  #      (Settings -> Actions -> Runners), on a real Linux host/VM (not a container)
+  #      with CAP_SYS_ADMIN and a kernel new enough for BTF tracepoints.
+  # Until both are true this job is simply absent from the checks list, not red.
+  live-functional-verify:
+    if: ${{ vars.EBPF_RUNNER_AVAILABLE == 'true' }}
+    runs-on: [self-hosted, ebpf]
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: |
+          cd panhandle
+          cargo build -p panhandle
+      - name: Run scripts/verify-functionality
+        # Not `sudo scripts/verify-functionality`: the script refuses to run as root
+        # (it builds as the invoking user and only sudos the individual checks that
+        # need to load eBPF programs) - the runner user needs passwordless sudo.
+        run: scripts/verify-functionality

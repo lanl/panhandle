@@ -111,6 +111,76 @@ extract-version:
     reports:
       dotenv: version.env 
 
+uild-rpm-el8_x86_64:
+  stage: build-rpm
+  image: docker.io/almalinux:8
+  before_script:
+    - dnf install -y gcc binutils libgcc glibc-devel openssl-devel openssl pkgconf-pkg-config clang clang-devel kernel-headers llvm-devel llvm-toolset
+    - curl https://sh.rustup.rs -sSf | sh -s -- -y
+    - cd panhandle/
+    - source ~/.cargo/env
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib64 /usr/lib -type f \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) ! -name 'libclang-cpp*' 2>/dev/null | head -n1)")
+    - ~/.cargo/bin/rustup toolchain install stable
+    - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/cargo install cargo-generate-rpm
+    - ~/.cargo/bin/cargo update
+    - ~/.cargo/bin/cargo install cargo-binstall
+    - ~/.cargo/bin/cargo binstall bpf-linker
+  script:
+    # x86_64 build
+    - ~/.cargo/bin/rustup target add x86_64-unknown-linux-gnu
+    - ~/.cargo/bin/cargo build --config ../.runner-config.toml --target=x86_64-unknown-linux-gnu --bin panhandle --release --all-features
+    - export CARGO_TARGET_DIR="./target/x86_64-unknown-linux-gnu"
+    - strip -s target/x86_64-unknown-linux-gnu/release/panhandle
+    - ~/.cargo/bin/cargo generate-rpm --arch x86_64 --package panhandle --output $CI_PROJECT_DIR/rpmbuild/el8/
+    - mv $CI_PROJECT_DIR/rpmbuild/el8/panhandle-*.x86_64.rpm $CI_PROJECT_DIR/rpmbuild/el8/panhandle-$VERSION-$RELEASE.el8.x86_64.rpm
+    # clean
+    - ~/.cargo/bin/cargo clean
+  artifacts:
+    when: on_success
+    paths:
+    - "$CI_PROJECT_DIR/rpmbuild/el8/panhandle-*.x86_64.rpm"
+  only:
+    - schedules
+    - triggers
+
+build-rpm-el8_aarch64:
+  stage: build-rpm
+  image: docker.io/almalinux:8
+  before_script:
+    - dnf install -y gcc binutils libgcc glibc-devel openssl-devel openssl pkgconf-pkg-config clang clang-devel kernel-headers llvm-devel llvm-toolset
+    - curl https://sh.rustup.rs -sSf | sh -s -- -y
+    - cd panhandle/
+    - source ~/.cargo/env
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib64 /usr/lib -type f \( -name 'libclang.so*' -o -name 'libclang-*.so*' \) ! -name 'libclang-cpp*' 2>/dev/null | head -n1)")
+    - ~/.cargo/bin/rustup toolchain install stable
+    - ~/.cargo/bin/rustup toolchain install nightly --component rust-src
+    - ~/.cargo/bin/cargo install cargo-generate-rpm
+    - ~/.cargo/bin/cargo update
+    - ~/.cargo/bin/cargo install cargo-binstall
+    - ~/.cargo/bin/cargo binstall bpf-linker
+  script:
+    ## aarch64 build
+    - ~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu
+    - ~/.cargo/bin/cargo build --config ../.runner-config.toml --target=aarch64-unknown-linux-gnu --bin panhandle --release --all-features 
+    - export CARGO_TARGET_DIR="./target/aarch64-unknown-linux-gnu"
+    - strip -s $CARGO_TARGET_DIR/release/panhandle
+    - ~/.cargo/bin/cargo  generate-rpm --arch aarch64 --package panhandle --output $CI_PROJECT_DIR/rpmbuild/el8/
+    - mv $CI_PROJECT_DIR/rpmbuild/el8/panhandle-*.aarch64.rpm $CI_PROJECT_DIR/rpmbuild/el8/panhandle-$VERSION-$RELEASE.el8.aarch64.rpm
+    # clean
+    - ~/.cargo/bin/cargo clean
+  artifacts:
+    when: on_success
+    paths:
+    - "$CI_PROJECT_DIR/rpmbuild/el8/panhandle-*.aarch64.rpm"
+  only:
+    - schedules
+    - triggers
+  tags:
+    - aarch64
+    - openshift-arm
+    - kubernetes-arm
+
 build-rpm-el9_x86_64:
   stage: build-rpm
   image: docker.io/almalinux:9
